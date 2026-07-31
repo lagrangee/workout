@@ -17,9 +17,17 @@ Date: 2026-07-31
 
 The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql`, `migrations/0002_state_revision.sql`, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
 
+## Production-candidate evidence
+
+- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `5ea4ebdc-7cd9-45c1-9f76-fddb888a63e1`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
+- `GET /healthz` returned `200` and `{"ok":true,"service":"workout-tracker"}`. Public Coach schema returned `200` with `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, CSP, no-referrer, and noindex headers.
+- `GET /api/private/me` without an Access assertion returned `401` with the stable unauthorized envelope and the same private security headers.
+- Production D1 migration `0002_state_revision.sql` applied successfully. No production Athlete or seed data was written.
+- The repository is private at `lagrangee/workout`; `main` was pushed and `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN` are present by name in GitHub Secrets.
+
 ## Still blocked
 
-- Ticket 24 requires owner-controlled Cloudflare Zero Trust, Access audience/default-deny, custom-hostname bypass, quota, log/trace, and synthetic D1 Time Travel evidence; no live account mutation or production deployment was authorized in this task.
-- Ticket 25 still depends on ticket 26's private GitHub/Actions and default-branch auto-deploy evidence; the workflow is wired locally, but repository visibility, secrets, workflow success, and deploy route evidence are not available here.
+- Ticket 24 still requires Zero Trust onboarding, two exact real Athlete email identities, OTP, Access audience/default-deny, custom-hostname bypass, quota, log/trace, and synthetic D1 Time Travel evidence. `ACCESS_ISSUER` and `ACCESS_AUDIENCE` remain placeholders until those inputs exist.
+- Ticket 26's private repository and secrets are verified, but the default-branch Actions run [30615333331](https://github.com/lagrangee/workout/actions/runs/30615333331) failed before runner start because the GitHub account reports failed recent payments or an exceeded spending limit. Direct deploy succeeded separately.
 - Ticket 27's selected Athlete is fixture-only; no production Athlete or seed artifact was mutated. Production seed execution still requires the blocked 24/26 environment evidence.
 - Full browser execution/continuation smoke needs the production-candidate runtime or a browser-connected local API fixture; the local HTTP seam covers those behaviors, while the browser observation is limited to the available local page/navigation surface.
