@@ -5,7 +5,7 @@ Date: 2026-07-31
 ## Passed locally
 
 - `npm run typecheck`
-- `npm test` — 16 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, app shell, and the D1 session-date migration guard.
+- `npm test` — 19 HTTP/static integration tests passed for signed application login/logout, identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, app shell, and the D1 session-date migration guard.
 - `node --check src/worker.js`
 - `node --check public/app.js`
 - `npm run forbidden-scan`
@@ -21,16 +21,16 @@ The test suite uses a local MemoryStore fixture with the same HTTP handler as th
 
 ## Production-candidate evidence
 
-- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `a5674e17-9518-4ff1-962c-a79e08e7f627`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
+- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `c7dac9d2-94cc-4477-a2b5-19fcde247402`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
 - `GET /healthz` returned `200` and `{"ok":true,"service":"workout-tracker"}`. Public Coach schema returned `200` with `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, CSP, no-referrer, and noindex headers.
-- `GET /api/private/me` without an application session returned `401` with the stable unauthorized envelope and the same private security headers; local tests cover signed login, identity isolation, tampered sessions, and logout.
+- `GET /api/private/me` without an application session returned `401` with the stable unauthorized envelope and the same private security headers; `POST /api/auth/login` returns `503 service_not_configured` until the five production Worker Secrets are written, and `/app` redirects unauthenticated production requests to `/`.
 - Production D1 migrations through `0004_restore_session_date_guard.sql` applied successfully. A remote schema read confirmed `session_date_guard` exists; all application projection tables remain at zero rows, so no production Athlete, plan, Session, or seed data was written.
-- The repository is private at `lagrangee/workout`; `main` was pushed and `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN` are present by name in GitHub Secrets.
+- The repository is private at `lagrangee/workout`; `main` contains commit `b74705e` and `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN` are present by name in GitHub Secrets.
 
 ## Still blocked
 
 - Ticket 24 now requires five Cloudflare Worker Secrets for the two exact Athlete identities and signed sessions, plus custom-hostname bypass, quota, log/trace, and synthetic D1 Time Travel evidence. No Zero Trust onboarding or payment method is required.
-- Ticket 26's private repository and secrets are verified, but the implementation push's default-branch Actions run [30618359585](https://github.com/lagrangee/workout/actions/runs/30618359585) completed with a failed `Deploy Worker` job before any steps ran and without logs; this remains an account billing/spending blocker. Direct deploy succeeded separately.
+- Ticket 26's private repository and secrets are verified, but the implementation push's default-branch Actions run [30621663411](https://github.com/lagrangee/workout/actions/runs/30621663411) completed with a failed `Deploy production` job before any steps ran; this remains an account billing/spending blocker. Direct deploy succeeded separately.
 - Branch-protection verification returned `403`: GitHub reports that this private repository's current plan requires GitHub Pro or a public repository for branch protection. PR CI is configured, but merge-blocking is not verified.
-- Ticket 27's selected Athlete is fixture-only; no production Athlete or seed artifact was mutated. Production seed execution still requires the blocked 24/26 environment evidence.
+- Ticket 27's selected Athlete is fixture-only; no production Athlete or seed artifact was mutated. Production seed execution still requires the five production Worker Secrets, the blocked Actions account evidence, and the remaining recovery rehearsal.
 - Full browser execution/continuation smoke needs the production-candidate runtime or a browser-connected local API fixture; the local HTTP seam covers those behaviors, while the browser observation is limited to the available local page/navigation surface.
