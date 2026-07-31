@@ -17,6 +17,6 @@ Date: 2026-07-31
 
 - Cloudflare Zero Trust is not onboarded in the current account evidence; the two exact Athlete emails, OTP allowlist, Access issuer/audience, default-deny policy, and protected exact/wildcard paths remain unverified.
 - `wrangler.toml` still carries placeholder `ACCESS_ISSUER`, `ACCESS_AUDIENCE`, and `.invalid` Athlete emails. No production Athlete or seed data was written.
-- GitHub Actions run [30615936765](https://github.com/lagrangee/workout/actions/runs/30615936765) failed before a runner started because GitHub reported failed recent payments or a spending-limit condition. This is an account billing blocker, not a release-check failure.
+- GitHub Actions run [30618359585](https://github.com/lagrangee/workout/actions/runs/30618359585) completed with a failed `Deploy Worker` job before any steps ran and without logs. This is an account billing/spending blocker, not a release-check failure.
 - GitHub branch-protection verification returned `403`: this private repository's current plan requires GitHub Pro or a public repository for the branch-protection feature. PR CI is configured in `.github/workflows/ci.yml`, but merge blocking cannot be claimed from the current plan.
 - D1 Time Travel rehearsal, manual production-candidate Athlete Export verification, and ticket 27 production seed execution remain pending the identity and billing gates.

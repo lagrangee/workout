@@ -30,7 +30,7 @@ The test suite uses a local MemoryStore fixture with the same HTTP handler as th
 ## Still blocked
 
 - Ticket 24 still requires Zero Trust onboarding, two exact real Athlete email identities, OTP, Access audience/default-deny, custom-hostname bypass, quota, log/trace, and synthetic D1 Time Travel evidence. `ACCESS_ISSUER` and `ACCESS_AUDIENCE` remain placeholders until those inputs exist.
-- Ticket 26's private repository and secrets are verified, but the default-branch Actions run [30615936765](https://github.com/lagrangee/workout/actions/runs/30615936765) failed before runner start because the GitHub account reports failed recent payments or an exceeded spending limit. Direct deploy succeeded separately.
+- Ticket 26's private repository and secrets are verified, but the implementation push's default-branch Actions run [30618359585](https://github.com/lagrangee/workout/actions/runs/30618359585) completed with a failed `Deploy Worker` job before any steps ran and without logs; this remains an account billing/spending blocker. Direct deploy succeeded separately.
 - Branch-protection verification returned `403`: GitHub reports that this private repository's current plan requires GitHub Pro or a public repository for branch protection. PR CI is configured, but merge-blocking is not verified.
 - Ticket 27's selected Athlete is fixture-only; no production Athlete or seed artifact was mutated. Production seed execution still requires the blocked 24/26 environment evidence.
 - Full browser execution/continuation smoke needs the production-candidate runtime or a browser-connected local API fixture; the local HTTP seam covers those behaviors, while the browser observation is limited to the available local page/navigation surface.
