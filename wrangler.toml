@@ -18,9 +18,5 @@ migrations_dir = "migrations"
 
 [vars]
 ENVIRONMENT = "production"
-ATHLETE_A_EMAIL = "athlete-a@example.invalid"
-ATHLETE_B_EMAIL = "athlete-b@example.invalid"
 DEFAULT_TIMEZONE = "Asia/Shanghai"
-ACCESS_ISSUER = "https://replace-with-access-team.cloudflareaccess.com"
-ACCESS_AUDIENCE = "replace-with-access-application-audience"
 PRODUCTION_HOST = "workout.lagrangee.xyz"

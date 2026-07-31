@@ -156,8 +156,8 @@ class D1TransactionStore {
 export async function createStore(env, db) {
   if (env.STORE) return env.STORE;
   const defaultTimezone = env.DEFAULT_TIMEZONE ?? "Asia/Shanghai";
-  const emailA = normalizeEmail(env.ATHLETE_A_EMAIL ?? "athlete-a@example.invalid");
-  const emailB = normalizeEmail(env.ATHLETE_B_EMAIL ?? "athlete-b@example.invalid");
+  const emailA = env.ENVIRONMENT === "production" ? requiredProductionEmail(env.ATHLETE_A_EMAIL, "ATHLETE_A_EMAIL") : normalizeEmail(env.ATHLETE_A_EMAIL ?? "athlete-a@example.invalid");
+  const emailB = env.ENVIRONMENT === "production" ? requiredProductionEmail(env.ATHLETE_B_EMAIL, "ATHLETE_B_EMAIL") : normalizeEmail(env.ATHLETE_B_EMAIL ?? "athlete-b@example.invalid");
   if (emailA === emailB) throw new Error("Configured Athlete identities must be distinct after normalization");
   const displayA = env.ATHLETE_A_DISPLAY_NAME ?? emailA.split("@")[0];
   const displayB = env.ATHLETE_B_DISPLAY_NAME ?? emailB.split("@")[0];
@@ -166,4 +166,9 @@ export async function createStore(env, db) {
   return new MemoryStore([
     ...configured.map(emptyAthlete),
   ]);
+}
+
+function requiredProductionEmail(value, name) {
+  if (typeof value !== "string" || !value.includes("@")) throw new Error(`${name} must be configured as a production Secret`);
+  return normalizeEmail(value);
 }

@@ -13,7 +13,7 @@ data, without turning into a coaching, goal, route, watch, or social product.
 ## Solution
 
 Build an online-only, mobile-first Workout Tracker for exactly two isolated
-Athletes. Cloudflare Access handles identity, a Worker serves the app and API,
+Athletes. The Worker handles the two-user application session, a Worker serves the app and API,
 and D1 stores plans, snapshots, Sessions, corrections, metrics, Coach Shares,
 and Athlete Export data. The normal Plan is read-only; a ChatGPT Agent prepares
 strict weekly JSON that the Athlete pastes into a simple update flow. The
@@ -54,7 +54,7 @@ while the Agent-facing Coach API exposes the complete, privacy-filtered history.
 30. As a Coach Agent, I want a self-describing README and machine-readable schema catalog so that I can discover the API without undocumented assumptions.
 31. As a Coach Agent, I want full history through stable pagination and explicit data coverage so that I do not silently analyze only a recent window.
 32. As a Coach Agent, I want snapshot-scoped Completion Item references, safe source references, and metric evidence so that my explanations can point to precise records without exposing secrets.
-33. As an operator, I want Cloudflare Access, Worker routing, D1 indexes, cache bypass, and log redaction defined before deployment so that the two-Athlete app does not have an accidental bypass.
+33. As an operator, I want application sessions, Worker routing, D1 indexes, cache bypass, and log redaction defined before deployment so that the two-Athlete app does not have an accidental bypass.
 34. As an operator, I want D1 Time Travel and manual Athlete Export recovery documented so that a simple Free-plan deployment still has a rehearsed recovery path.
 35. As an operator, I want the source published in a private GitHub repository so that implementation history and deployment configuration remain restricted to the project owners.
 36. As an operator, I want pull-request checks and default-branch Cloudflare deployment automated with GitHub Actions so that only validated changes reach `workout.lagrangee.xyz`.
@@ -63,14 +63,15 @@ while the Agent-facing Coach API exposes the complete, privacy-filtered history.
 
 - **Domain model:** Use the domain vocabulary in `CONTEXT.md`: Athlete, Current Plan, Plan Revision, Weekly Template, Scheduled Workout, Training Plan Snapshot, Workout Session, Session Status, Training Interval, Prescribed Set, Completion Item, Actual Training Data, Exercise Feedback, Session RPE, and Athlete Export.
 - **Plan input:** Use a strict seven-slot Plan Update Package v1 with explicit `sets[]`, typed targets, structured Resistance, future-only `effective_from`, duplicate-key rejection, unknown-field rejection, no-op rejection, and atomic application.
+- **Initial seed:** Use [`seed/workout-tracker-weekly-seed.json`](../../seed/workout-tracker-weekly-seed.json) as the first weekly package, effective `2026-08-01` in `Asia/Shanghai`. It keeps the brief's App-managed strength/mobility/core work, leaves Thursday as no-plan and Sunday as Rest Day, and excludes running/endurance telemetry, route context, conditions, prose instructions, and symptom fields.
 - **Session lifecycle:** Enforce exactly one Session per Athlete/date, statuses `in_progress|completed|partial|skipped`, explicit start/skip/end/continue/restart transitions, server-derived terminal status, and immutable snapshot identity.
 - **Session record:** Use a full replacement Session Record v1. Ordinary auto-save does not close an interval; explicit end does. Terminal corrections can rederive status and duration without changing the snapshot. Every mutating POST uses a 24-hour Athlete-scoped idempotency key.
 - **Frontend:** Build a React + Vite mobile-first app shell with Today, Plan, Progress, and Settings surfaces. Use reusable execution-item, progress-navigation, end-session, correction, JSON-update bottom-sheet, Coach Share, and export components. Keep the approved prototype’s restrained warm-neutral visual direction and one-item focus interaction.
-- **Private API:** Derive Athlete identity only from a verified Cloudflare Access JWT. Private route responses use stable JSON envelopes, no-store headers, and Athlete-scoped queries; cross-Athlete resources are indistinguishable `404`s.
+- **Private API:** Derive Athlete identity only from a verified Worker-signed application session. Private route responses use stable JSON envelopes, no-store headers, and Athlete-scoped queries; cross-Athlete resources are indistinguishable `404`s.
 - **Coach API:** Provide permanent bearer README, manifest, overview, plan, schedule, sessions, progress, exercise, and token-free schema resources. Use the exact Coach Agent Wire Catalog v1, monotonic `training_version` for pagination restart detection, safe `source_ref`, and no token-bearing URLs in Agent-visible output.
 - **Coach Share security:** Generate 256-bit tokens with Web Crypto. Store only HMAC lookup digest plus AES-GCM ciphertext, nonce, key versions, and Athlete/share-bound AAD. Create/regenerate responses never store or return the plaintext token; only authenticated GET can return the copyable URL.
 - **Export:** Provide one full-history JSON download with an independent Athlete Export Wire Catalog v1, consistent `data_as_of`, no CSV or restore/import flow, and an explicit pre-download capacity error for the MVP delivery bound.
-- **Cloudflare topology:** Use one Worker with Static Assets and one D1 database at `workout.lagrangee.xyz`. Keep Coach routes public and protect `/app`, `/api/private`, and exact path variants with Access. Disable `workers.dev`, Preview URLs, caching, and token-bearing logs before production.
+- **Cloudflare topology:** Use one Worker with Static Assets and one D1 database at `workout.lagrangee.xyz`. Keep Coach routes public and protect `/app` and `/api/private` with signed application sessions. Disable `workers.dev`, Preview URLs, caching, and token-bearing logs before production.
 - **Source control and delivery:** Publish the complete project to a private GitHub repository owned by the configured GitHub account. Pull requests run the repository's `release-check`; only the default branch may run the production Wrangler deploy. Cloudflare credentials and production identifiers are GitHub Actions secrets or environment values, never committed files. The exact repository owner/name is a deployment input and must be confirmed before repository creation or push.
 - **Recovery and retention:** Retain history without an application-level 90-day cutoff. Use D1 Free Time Travel plus manual Athlete Export; do not add scheduled R2 backup or restore UI.
 - **Scope quality:** Accessibility auditing and WCAG acceptance are explicitly outside this MVP. The two approved prototypes are the visual and interaction references; no additional design-system ticket is required.
@@ -81,7 +82,7 @@ while the Agent-facing Coach API exposes the complete, privacy-filtered history.
 - Contract integration tests cover private identity isolation, Plan Update Package validation/application, Session transitions, Session Record replacement, idempotency, correction, metric boundaries, Coach Share revocation, pagination, schema conformance, and Athlete Export relationships.
 - A focused browser smoke suite at the accepted 375-pixel viewport covers the Today one-item flow, previous/next/progress jump behavior, partial continuation, end-screen unfinished list/RPE/note, and the Plan JSON bottom-sheet paste → error/preview → confirm flow.
 - Data fixtures must cover two Athletes, no plan, Rest Day, no-plan date, heterogeneous sets, left/right expansion, split intervals, partial/completed/skipped Sessions, timezone boundaries, overlapping revisions, corrections, and empty metric denominators.
-- Cloudflare acceptance checks run only after local tests: Access JWT validation, exact path protection, public Coach routes, `workers_dev`/Preview bypass prevention, cache headers, log redaction, D1 indexes, quotas, and recovery rehearsal.
+- Cloudflare acceptance checks run only after local tests: application session validation, private path protection, public Coach routes, `workers_dev`/Preview bypass prevention, cache headers, log redaction, D1 indexes, quotas, and recovery rehearsal.
 - There is no existing runtime test prior art; the resolved prototypes, JSON examples, wire catalogs, and 30-item acceptance contract are the fixture and behavior sources for the first test suite.
 
 ## Out of Scope
@@ -95,8 +96,8 @@ conversation decisions. The detailed canonical contracts below remain part of
 the same spec: they define exact routes, fields, invariants, errors, security
 headers, Cloudflare constraints, and release acceptance criteria. Local
 Markdown is authoritative. Implementation may begin locally, but production
-deployment remains gated on Zero Trust onboarding, two exact Athlete emails,
-Access audience/default-deny verification, custom-domain routing, and quota
+deployment remains gated on two exact Athlete emails, two independent password
+Secrets, application session verification, custom-domain routing, and quota
 checks.
 
 ## Authority and Scope
@@ -109,11 +110,12 @@ The MVP has no offline queue, ad-hoc training, manual plan editor, AI, coaching 
 
 ## Identity and Isolation
 
-- Cloudflare Access admits only two configured email identities using one-time PIN.
-- Every `/api/private/*` request validates the Access JWT signature, issuer,
-  time claims, and application audience. The asserted email is trimmed,
-  Unicode NFKC-normalized, and lowercased before lookup; deployment rejects
-  duplicate normalized mappings. The result maps to exactly one Athlete.
+- The application admits only two configured email identities using independent
+  passwords stored as Cloudflare Worker Secrets.
+- Every `/api/private/*` request validates the signed session HMAC, version,
+  issued and expiry time claims. The session email is trimmed, Unicode
+  NFKC-normalized, and lowercased before lookup; deployment rejects duplicate
+  normalized mappings. The result maps to exactly one Athlete.
 - Private endpoints never accept an Athlete identifier. Every query and mutation is scoped from the verified identity.
 - Athlete A can never read, infer, mutate, export, or share Athlete B's data.
 - The two identity mappings are provisioned as deployment data. There is no sign-up, invitation, or identity-editing workflow.
@@ -338,7 +340,7 @@ Allowed status transitions are:
 
 Every other transition returns `409`.
 
-Missing or invalid Access assertions return `401`; a valid but unmapped identity returns `403`; Worker or D1 quota/service failures return `503`. None of these responses includes authentication claims, internal identities, SQL, stack traces, or quota-account metadata.
+Missing or invalid application sessions return `401`; a valid but unmapped identity returns `403`; Worker or D1 quota/service failures return `503`. None of these responses includes authentication claims, internal identities, SQL, stack traces, or quota-account metadata.
 
 ### Plan Updates
 
@@ -388,16 +390,16 @@ The recoverable-token choice is recorded in [Store Recoverable Coach Share Token
 
 Production is one Cloudflare Worker with Static Assets and one D1 database on `workout.lagrangee.xyz`.
 
-- Access protects both exact and wildcard forms of `/app` and `/api/private`.
+- The Worker protects `/app` and `/api/private` with an HttpOnly signed session Cookie.
 - Coach README and JSON routes remain public bearer surfaces.
 - Shared static assets contain no private data.
-- The Worker validates Access JWTs at the private API origin.
+- The Worker validates application sessions at the private API origin.
 - `workers_dev: false` and `preview_urls: false` prevent bypass hosts.
 - The custom domain is the sole production Worker entrypoint.
 - GitHub Actions runs `npm run release-check` for pull requests and does not deploy production from a pull request.
 - A push to the default branch deploys through Wrangler using least-privilege GitHub Actions permissions, concurrency protection, and secret-backed `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` values.
 - The deployment job verifies the custom domain route and records the deployed version or URL; failed checks or deploys fail the workflow visibly.
-- Deployment remains blocked until Zero Trust Free is onboarded, OTP and the two exact emails are configured, the Access audience and account-wide default-deny behavior are verified, and quotas are rechecked.
+- Deployment remains blocked until the two exact emails, two independent password Secrets, and the session-signing Secret are configured and both login paths are verified; quotas and the custom-host bypass are also rechecked.
 
 ## Recovery and Retention
 
@@ -405,7 +407,7 @@ Training history and revisions are retained without an application-level cutoff.
 
 ## Acceptance Contract
 
-1. Only the two configured Access identities can authenticate; each resolves to one isolated Athlete.
+1. Only the two configured application identities can authenticate; each resolves to one isolated Athlete.
 2. Cross-Athlete resource keys and request tampering return `404` and reveal no existence.
 3. One Athlete may have no plan; another may have one Current Plan with immutable revision history.
 4. A strict seven-slot package with a future `effective_from` applies atomically; invalid, oversized, unknown-field, duplicate-key, and no-op packages create no revision.
@@ -432,7 +434,7 @@ Training history and revisions are retained without an application-level cutoff.
 25. Share and private responses bypass caches, cannot mutate through public routes, and emit no token-bearing URL to configured logs or traces.
 26. `workout.lagrangee.xyz` is the only production Worker hostname; direct `workers.dev` and Preview URL requests cannot reach the App.
 27. D1 indexes cover Athlete/date, revision effective date, Session date, exercise lookup, and Coach digest lookup without unbounded scans.
-28. Free-plan usage and Access seats are verified before deployment; quota exhaustion produces a visible service error without corrupting data.
+28. Free-plan usage and Worker/D1 quotas are verified before deployment; quota exhaustion produces a visible service error without corrupting data.
 29. A Time Travel recovery rehearsal and a full Athlete Export verification succeed before production acceptance.
 30. A forbidden-feature scan finds no offline queue, telemetry, symptom system, ad-hoc Session, manual plan editor, AI, goal, route, coach dashboard, CSV, or restore/import workflow.
 31. The confirmed GitHub repository is private, contains the intended source without secrets, pull-request `release-check` is green, and a default-branch GitHub Actions run deploys the Worker through Wrangler to `workout.lagrangee.xyz` using secret-backed credentials without exposing them in logs.

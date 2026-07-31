@@ -1,7 +1,7 @@
 // @ts-nocheck
 
 import { createStore } from "./store.js";
-import { addDays, base64UrlDecode, base64UrlEncode, deepClone, dateSpan, isRecord, isValidLocalDate, normalizeEmail, localDate, isValidTimezone, sha256Hex, trimString } from "./util.js";
+import { addDays, base64UrlDecode, base64UrlEncode, constantTimeEqual, deepClone, dateSpan, isRecord, isValidLocalDate, normalizeEmail, localDate, isValidTimezone, sha256Hex, trimString } from "./util.js";
 import { planModel, scheduleModel, todayModel, sessionSummary, validatePlanForState, appendPlanRevision } from "./plan.js";
 import { createSession, replaceRecord, endSession, continueOrRestart, findSession, sessionDetail } from "./session.js";
 import { progressModel, exerciseDetail } from "./metrics.js";
@@ -10,6 +10,8 @@ import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, creat
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
+const SESSION_COOKIE = "workout_session";
+const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function createHandler(initialEnv = {}) {
   let storePromise;
@@ -22,12 +24,18 @@ async function route(request, env, getStore, ctx) {
   const url = new URL(request.url);
   if (env.ENVIRONMENT === "production" && env.PRODUCTION_HOST && url.hostname !== env.PRODUCTION_HOST) return textResponse("Not found", 404);
   if (url.pathname === "/healthz") return jsonResponse({ ok: true, service: "workout-tracker" });
+  if (url.pathname === "/api/auth/login") return authLogin(request, env);
+  if (url.pathname === "/api/auth/logout") return authLogout(request);
   if (url.pathname === "/api/coach/v1/schemas" && (request.method === "GET" || request.method === "HEAD")) return maybeHead(jsonResponse({ schema_version: 1, generated_at: new Date().toISOString(), schemas: ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error"].map((name) => ({ name, href: `/api/coach/v1/schemas/${name}`, json_schema_draft: "2020-12" })) }), request);
   if (url.pathname.startsWith("/api/coach/v1/schemas/") && (request.method === "GET" || request.method === "HEAD")) {
     const schema = schemaResource(url.pathname.split("/").at(-1));
     return schema ? maybeHead(new Response(JSON.stringify(schema, null, 2), { status: 200, headers: securityHeaders("application/schema+json") }), request) : jsonError("not_found", "Schema not found", [], 404);
   }
   if (url.pathname.startsWith("/coach/") || url.pathname.startsWith("/api/coach/v1/")) return coachRoute(request, env, getStore, url);
+  if (url.pathname === "/app" && env.ENVIRONMENT === "production") {
+    const auth = await authenticate(request, env);
+    if (auth.error) return new Response(null, { status: 302, headers: { ...securityHeaders("text/plain; charset=utf-8"), Location: "/" } });
+  }
   if (url.pathname === "/" || url.pathname === "/app" || url.pathname.startsWith("/assets/") || url.pathname.endsWith(".js") || url.pathname.endsWith(".css")) return staticRoute(request, env);
   if (url.pathname.startsWith(PRIVATE_PREFIX)) return privateRoute(request, env, getStore, url);
   return textResponse("Not found", 404);
@@ -227,34 +235,94 @@ function exportResponse(state, now) {
 async function authenticate(request, env) {
   const testEmail = request.headers.get("x-athlete-email") ?? request.headers.get("x-test-athlete-email");
   if (testEmail && env.LOCAL_AUTH === "true") return { email: normalizeEmail(testEmail) };
-  const token = request.headers.get("CF-Access-Jwt-Assertion");
-  if (!token) return { error: { code: "unauthorized", message: "A valid Access assertion is required", status: 401 } };
-  const claims = await verifyAccessJwt(token, env);
-  if (!claims) return { error: { code: "unauthorized", message: "A valid Access assertion is required", status: 401 } };
-  const email = claims.email ?? claims.sub; if (typeof email !== "string" || !email.includes("@")) return { error: { code: "unauthorized", message: "A valid Access identity is required", status: 401 } };
-  return { email: normalizeEmail(email) };
+  const authorization = request.headers.get("Authorization");
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
+  const token = bearer || readCookie(request.headers.get("Cookie"), SESSION_COOKIE);
+  const claims = token ? await verifySessionToken(token, env) : null;
+  if (!claims) return { error: { code: "unauthorized", message: "A valid application session is required", status: 401 } };
+  return { email: claims.email };
 }
 
-async function verifyAccessJwt(token, env) {
+async function authLogin(request, env) {
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { ...securityHeaders("text/plain; charset=utf-8"), Allow: "POST" } });
+  if (!validSessionSecret(env.AUTH_SESSION_SECRET)) return jsonError("service_not_configured", "Authentication is not configured", [], 503);
+  let body;
+  try { body = JSON.parse(await request.text()); } catch { return jsonError("invalid_json", "Request body must be valid JSON", [], 400); }
+  if (!isRecord(body) || Object.keys(body).length !== 2 || typeof body.email !== "string" || typeof body.password !== "string") return jsonError("invalid_credentials", "Email or password is incorrect", [], 401);
+  const identity = configuredAuthIdentity(body.email, env);
+  if (!identity || typeof identity.password !== "string" || !identity.password) return jsonError("invalid_credentials", "Email or password is incorrect", [], 401);
+  const suppliedDigest = await sha256Hex(body.password);
+  const expectedDigest = await sha256Hex(identity.password);
+  if (!constantTimeEqual(suppliedDigest, expectedDigest)) return jsonError("invalid_credentials", "Email or password is incorrect", [], 401);
+  const now = Math.floor(Date.now() / 1000);
+  const token = await createSessionToken(identity.email, now, env.AUTH_SESSION_SECRET);
+  const response = jsonResponse({ authenticated: true });
+  response.headers.set("Set-Cookie", sessionCookie(token, SESSION_TTL_SECONDS));
+  return response;
+}
+
+function authLogout(request) {
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { ...securityHeaders("text/plain; charset=utf-8"), Allow: "POST" } });
+  const response = jsonResponse({ logged_out: true });
+  response.headers.set("Set-Cookie", sessionCookie("", 0));
+  return response;
+}
+
+function configuredAuthIdentity(email, env) {
+  if (typeof email !== "string" || !email.includes("@")) return null;
+  const normalized = normalizeEmail(email);
+  const emailA = env.ENVIRONMENT === "production" ? normalizeConfiguredEmail(env.ATHLETE_A_EMAIL) : normalizeEmail(env.ATHLETE_A_EMAIL ?? "athlete-a@example.invalid");
+  const emailB = env.ENVIRONMENT === "production" ? normalizeConfiguredEmail(env.ATHLETE_B_EMAIL) : normalizeEmail(env.ATHLETE_B_EMAIL ?? "athlete-b@example.invalid");
+  if (!emailA || !emailB) return null;
+  if (emailA === emailB) return null;
+  if (normalized === emailA) return { email: emailA, password: env.AUTH_A_PASSWORD };
+  if (normalized === emailB) return { email: emailB, password: env.AUTH_B_PASSWORD };
+  return null;
+}
+
+async function createSessionToken(email, issuedAt, secret) {
+  const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify({ version: 1, email, issued_at: issuedAt, expires_at: issuedAt + SESSION_TTL_SECONDS })));
+  return `${payload}.${await signHmac(payload, secret)}`;
+}
+
+async function verifySessionToken(token, env) {
   try {
-    const [encodedHeader, encodedPayload, encodedSignature] = token.split("."); if (!encodedHeader || !encodedPayload || !encodedSignature) return null;
-    const header = JSON.parse(new TextDecoder().decode(decodePart(encodedHeader))); const claims = JSON.parse(new TextDecoder().decode(decodePart(encodedPayload))); const now = Math.floor(Date.now() / 1000);
-    const issuer = env.ACCESS_ISSUER; const audience = env.ACCESS_AUDIENCE;
-    if (typeof issuer !== "string" || !issuer || typeof audience !== "string" || !audience) return null;
-    if (claims.iss !== issuer) return null;
-    if (!(Array.isArray(claims.aud) ? claims.aud.includes(audience) : claims.aud === audience)) return null;
-    if (typeof claims.exp !== "number" || claims.exp <= now || (claims.nbf !== undefined && claims.nbf > now + 60)) return null;
-    const data = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`); const signature = decodePart(encodedSignature);
-    if (env.ACCESS_JWT_SECRET) {
-      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.ACCESS_JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-      return await crypto.subtle.verify("HMAC", key, signature, data) ? claims : null;
-    }
-    if (!env.ACCESS_JWKS) return null;
-    const jwks = typeof env.ACCESS_JWKS === "string" ? JSON.parse(env.ACCESS_JWKS) : env.ACCESS_JWKS; const jwk = jwks.keys.find((key) => key.kid === header.kid); if (!jwk) return null;
-    const algorithm = header.alg === "ES256" ? { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } : { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
-    const key = await crypto.subtle.importKey("jwk", jwk, algorithm, false, ["verify"]);
-    return await crypto.subtle.verify(algorithm, key, signature, data) ? claims : null;
+    if (!validSessionSecret(env.AUTH_SESSION_SECRET)) return null;
+    const [payload, signature] = token.split("."); if (!payload || !signature) return null;
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+    if (!await crypto.subtle.verify("HMAC", key, decodePart(signature), new TextEncoder().encode(payload))) return null;
+    const claims = JSON.parse(new TextDecoder().decode(decodePart(payload))); const now = Math.floor(Date.now() / 1000);
+    if (claims.version !== 1 || typeof claims.email !== "string" || !Number.isSafeInteger(claims.issued_at) || !Number.isSafeInteger(claims.expires_at) || claims.expires_at <= now || claims.issued_at > now + 60 || claims.expires_at - claims.issued_at !== SESSION_TTL_SECONDS) return null;
+    const identity = configuredAuthIdentity(claims.email, env);
+    return identity ? { email: identity.email } : null;
   } catch { return null; }
+}
+
+async function signHmac(value, secret) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return base64UrlEncode(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value))));
+}
+
+function validSessionSecret(secret) {
+  return typeof secret === "string" && secret.length >= 32;
+}
+
+function normalizeConfiguredEmail(value) {
+  return typeof value === "string" && value.includes("@") ? normalizeEmail(value) : null;
+}
+
+function readCookie(header, name) {
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    return part.slice(separator + 1).trim() || null;
+  }
+  return null;
+}
+
+function sessionCookie(token, maxAge) {
+  return `${SESSION_COOKIE}=${token}; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }
 function decodePart(value) { const normalized = value.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((value.length + 3) % 4); const binary = atob(normalized); return Uint8Array.from(binary, (char) => char.charCodeAt(0)); }
 

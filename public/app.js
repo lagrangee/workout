@@ -1,10 +1,11 @@
 const weekdayLabels = { monday: "周一", tuesday: "周二", wednesday: "周三", thursday: "周四", friday: "周五", saturday: "周六", sunday: "周日" };
-const state = { view: "today", today: null, plan: null, progress: null, session: null, sessionDetail: null, exercise: null, focusIndex: 0, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, draft: "", error: null, planError: null, loading: true, message: "" };
+const state = { view: "today", today: null, plan: null, progress: null, session: null, sessionDetail: null, exercise: null, me: null, focusIndex: 0, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
 
 const app = document.querySelector("#app");
-const athleteEmail = () => localStorage.getItem("workout-athlete-email") || "athlete-a@example.invalid";
 async function api(path, options = {}) {
-  const headers = { "Content-Type": "application/json", "x-athlete-email": athleteEmail(), ...(options.headers || {}) };
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const localEmail = localStorage.getItem("workout-athlete-email");
+  if (localEmail && ["localhost", "127.0.0.1"].includes(location.hostname)) headers["x-athlete-email"] = localEmail;
   const response = await fetch(path, { ...options, headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(data.error?.message || "请求失败"), { data, status: response.status });
@@ -20,7 +21,10 @@ async function refresh() {
     [state.today, state.plan, state.progress] = await Promise.all([api("/api/private/today"), api("/api/private/plan"), api("/api/private/progress?preset=30d")]);
     state.session = state.today.session;
     state.error = null;
-  } catch (error) { state.error = error.data?.error?.message || error.message; }
+  } catch (error) {
+    if (error.status === 401) { state.authRequired = true; state.error = null; }
+    else state.error = error.data?.error?.message || error.message;
+  }
   state.loading = false; render();
 }
 
@@ -29,10 +33,15 @@ function shell(content) {
 }
 
 function render() {
+  if (state.authRequired) { app.innerHTML = loginView(); bind(); return; }
   if (state.loading) { app.innerHTML = shell(`<section class="loading"><span class="spinner"></span><p>正在读取你的训练状态…</p></section>`); return; }
   if (state.error) { app.innerHTML = shell(`<section class="error-card"><p>${escapeHtml(state.error)}</p><button class="primary" data-action="refresh">重新读取</button></section>`); bind(); return; }
   const content = state.view === "today" ? todayView() : state.view === "plan" ? planView() : state.view === "progress" ? progressView() : state.view === "coach" ? coachView() : settingsView();
   app.innerHTML = shell(content); bind();
+}
+
+function loginView() {
+  return `<div class="shell"><main><section class="hero"><p class="eyebrow">WORKOUT TRACKER</p><h1>登录你的训练空间</h1><p class="muted">使用已配置的邮箱和个人密码登录。不会跳转到 Cloudflare Access，也不需要绑定信用卡。</p></section><form class="settings-form" data-form="login"><label>邮箱<input name="email" type="email" autocomplete="username" required /></label><label>密码<input name="password" type="password" autocomplete="current-password" required /></label>${state.authMessage ? `<div class="validation-error">${escapeHtml(state.authMessage)}</div>` : ""}<button class="primary wide">登录</button></form></main></div>`;
 }
 
 function todayView() {
@@ -74,7 +83,7 @@ function progressView() { if (state.exercise) return exerciseView(); const metri
 function exerciseView() { return `<section class="page-head"><button class="text-button" data-action="close-exercise">← 返回 Progress</button><p class="eyebrow">EXERCISE EVIDENCE</p><h1>${escapeHtml(state.exercise.exercise_key)}</h1><p class="muted">${state.exercise.performed_session_count} 个有实际完成结果的 Session</p></section><section class="list-card">${state.exercise.observations.length ? state.exercise.observations.map((observation) => `<article class="week-row"><div><strong>${observation.scheduled_date}</strong><p>${observation.sets.map((set) => `${escapeHtml(set.side)} · ${set.actual.value} ${set.actual.metric}`).join("，")}</p></div></article>`).join("") : `<p class="muted">这个动作目前没有可展示的完成证据。</p>`}</section>`; }
 
 function coachView() { return `<section class="page-head"><p class="eyebrow">AGENT-FIRST SHARING</p><h1>Coach Share</h1><p class="muted">永久、只读、可撤销的 Agent API。分享前请把链接当作秘密。</p></section><section class="quiet-card"><strong>隐私边界</strong><p>公开 API 不包含登录邮箱、内部 ID、token、遥测、症状、目标、路线或教练分析。</p></section><div class="hero-actions"><button class="primary" data-action="create-share">创建分享</button><button class="secondary" data-action="export">下载 Athlete Export</button></div>`; }
-function settingsView() { return `<section class="page-head"><p class="eyebrow">ATHLETE SETTINGS</p><h1>设置</h1><p class="muted">只保存显示名称和 IANA timezone。</p></section><form class="settings-form" data-form="settings"><label>显示名称<input name="display_name" maxlength="50" value="${escapeHtml(state.me?.display_name || "")}" /></label><label>Timezone<input name="timezone" value="${escapeHtml(state.me?.timezone || state.today?.timezone || "Asia/Shanghai")}" /></label><button class="primary wide">保存设置</button></form><p class="muted tiny">本地开发可用 localStorage 的 workout-athlete-email 切换两个 fixture Athlete。</p>`; }
+function settingsView() { return `<section class="page-head"><p class="eyebrow">ATHLETE SETTINGS</p><h1>设置</h1><p class="muted">只保存显示名称和 IANA timezone。</p></section><form class="settings-form" data-form="settings"><label>显示名称<input name="display_name" maxlength="50" value="${escapeHtml(state.me?.display_name || "")}" /></label><label>Timezone<input name="timezone" value="${escapeHtml(state.me?.timezone || state.today?.timezone || "Asia/Shanghai")}" /></label><button class="primary wide">保存设置</button></form><button class="secondary wide" data-action="logout">退出登录</button><p class="muted tiny">本地开发可用 localStorage 的 workout-athlete-email 切换两个 fixture Athlete；生产环境使用登录会话。</p>`; }
 
 async function loadMe() { try { state.me = await api("/api/private/me"); } catch {} }
 function bind() {
@@ -83,12 +92,13 @@ function bind() {
   app.querySelectorAll(".bottom-sheet").forEach((sheet) => sheet.addEventListener("click", (event) => event.stopPropagation()));
   app.querySelectorAll("[data-exercise]").forEach((element) => element.addEventListener("click", () => openExercise(element.dataset.exercise)));
   const form = app.querySelector("[data-form=settings]"); if (form) form.addEventListener("submit", async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(form)); try { await api("/api/private/settings", { method: "PUT", body: JSON.stringify(values) }); state.message = "设置已保存"; await refresh(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } });
+  const loginForm = app.querySelector("[data-form=login]"); if (loginForm) loginForm.addEventListener("submit", async (event) => { event.preventDefault(); state.authMessage = ""; const values = Object.fromEntries(new FormData(loginForm)); try { await api("/api/auth/login", { method: "POST", body: JSON.stringify(values) }); state.authRequired = false; await refresh(); } catch (error) { state.authMessage = error.data?.error?.message || "邮箱或密码不正确"; render(); } });
   const textarea = app.querySelector("#plan-json"); if (textarea) textarea.addEventListener("input", () => { state.draft = textarea.value; state.planError = null; });
 }
 
 async function action(name, value) {
   try {
-    if (name === "refresh") return refresh(); if (name === "settings") { state.view = "settings"; await loadMe(); return render(); }
+    if (name === "refresh") return refresh(); if (name === "logout") { await api("/api/auth/logout", { method: "POST" }); state.authRequired = true; state.me = null; return render(); } if (name === "settings") { state.view = "settings"; await loadMe(); return render(); }
     if (name === "start" || name === "skip") { const date = state.today.date; const body = name === "skip" ? { skip_reason: null } : {}; const result = await api(`/api/private/scheduled-workouts/${date}/${name}`, { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify(body) }); state.session = result; await openSession(result.session_key); return; }
     if (name === "open-session" || name === "restart") { if (name === "restart") { const result = await api(`/api/private/sessions/${state.session.session_key}/restart`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" }); state.session = result; } await openSession(state.session.session_key); return; }
     if (name === "continue") { const result = await api(`/api/private/sessions/${state.session.session_key}/continue`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" }); state.session = result; await openSession(result.session_key); return; }
