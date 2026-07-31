@@ -56,7 +56,7 @@
 
 /** @typedef {{ athlete_key: string, email: string, display_name: string, timezone: string, plan_revisions: PlanRevision[], sessions: WorkoutSession[] }} AthleteState */
 
-/** @typedef {{ DB?: unknown, ASSETS?: unknown, STORE?: unknown, ENVIRONMENT?: string, PRODUCTION_HOST?: string, PUBLIC_ORIGIN?: string, DEFAULT_TIMEZONE?: string, ATHLETE_A_EMAIL?: string, ATHLETE_B_EMAIL?: string, ATHLETE_A_DISPLAY_NAME?: string, ATHLETE_B_DISPLAY_NAME?: string, LOCAL_AUTH?: string, ACCESS_ISSUER?: string, ACCESS_AUDIENCE?: string, ACCESS_JWT_SECRET?: string, ACCESS_JWKS?: string | { keys: Record<string, unknown>[] } }} WorkerEnv */
+/** @typedef {{ DB?: unknown, ASSETS?: unknown, STORE?: unknown, ENVIRONMENT?: string, PRODUCTION_HOST?: string, PUBLIC_ORIGIN?: string, DEFAULT_TIMEZONE?: string, ATHLETE_A_EMAIL?: string, ATHLETE_B_EMAIL?: string, ATHLETE_A_DISPLAY_NAME?: string, ATHLETE_B_DISPLAY_NAME?: string, LOCAL_AUTH?: string, AUTH_A_PASSWORD?: string, AUTH_B_PASSWORD?: string, AUTH_SESSION_SECRET?: string }} WorkerEnv */
 
 /** @typedef {{ waitUntil(promise: Promise<unknown>): void, passThroughOnException(): void }} WorkerExecutionContext */
 

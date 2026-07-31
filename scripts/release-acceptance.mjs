@@ -17,4 +17,4 @@ assert.match(deploy, /CLOUDFLARE_API_TOKEN/);
 assert.match(deploy, /CLOUDFLARE_ACCOUNT_ID/);
 assert.match(deploy, /https:\/\/workout\.lagrangee\.xyz\/healthz/);
 console.log("Local release acceptance evidence: configuration and recovery artifacts present.");
-console.log("Production acceptance status: blocked until the owner verifies Access, hostname bypass, quotas, and a synthetic Time Travel rehearsal.");
+console.log("Production acceptance status: blocked until the owner verifies application secrets/session login, hostname bypass, quotas, and a synthetic Time Travel rehearsal.");
