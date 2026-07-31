@@ -11,7 +11,7 @@ What must the single-day detail show for the scheduled prescription and actual c
 
 ## Answer
 
-The single-day detail shows the complete prescribed content for the selected date, not just the week-summary excerpt: date and weekday, plan revision/source, workout title and estimated duration, then modules with exercises, sets, targets, resistance, and rest. Rest Day and no-plan use distinct empty states.
+The single-day detail shows the complete prescribed content for the selected date, not just the week-summary excerpt: date and weekday, workout title and estimated duration, then modules with exercises, sets, targets, resistance, and rest. The underlying read retains plan revision/source provenance, but the Calendar UI does not render that technical metadata. Rest Day and no-plan use distinct empty states.
 
 When a Session exists, the detail shows its status, completion fraction, completed and unfinished item counts, and an expandable item-level view. Actual values are shown beside prescribed values, with differences made clear. A partial Session lists unfinished items. A skipped Session shows its skip reason when present. A past workout without a Session remains `overdue_unstarted` and does not receive a synthetic record.
 
