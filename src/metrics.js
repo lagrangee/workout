@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { addDays, dateRange, dateSpan, localDate, mondayOf, roundHalfUp } from "./util.js";
+import { addDays, dateRange, dateSpan, isValidLocalDate, localDate, mondayOf, roundHalfUp } from "./util.js";
 import { completionFraction, scheduleEntry, sessionSummary } from "./plan.js";
 
 /** @param {any} state @param {string} from @param {string} to @param {Date} now */
@@ -65,7 +65,7 @@ export function resolvePeriod(state, now, from, to, preset) {
   if ((from && !to) || (!from && to)) return { error: { code: "invalid_period", message: "from and to must be provided together" } };
   if ((from || to) && preset) return { error: { code: "invalid_period", message: "preset and explicit dates are mutually exclusive" } };
   if (from && to) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return { error: { code: "invalid_period", message: "from and to must be valid inclusive local dates" } };
+    if (!isValidLocalDate(from) || !isValidLocalDate(to) || from > to) return { error: { code: "invalid_period", message: "from and to must be valid inclusive local dates" } };
     if (dateSpan(from, to) > 3660) return { error: { code: "invalid_period", message: "The selected period cannot exceed 3660 days" } };
     return { from, to };
   }
@@ -113,7 +113,7 @@ function exerciseKeys(state) {
 }
 /** @param {any} state @param {string} key */
 function latestExerciseName(state, key) {
-  const occurrence = state.sessions.flatMap((session) => session.snapshot.blocks.flatMap((block) => block.exercises)).find((exercise) => exercise.exercise_key === key);
+  const occurrence = state.sessions.slice().sort((left, right) => right.scheduled_date.localeCompare(left.scheduled_date) || right.updated_at.localeCompare(left.updated_at)).flatMap((session) => session.snapshot.blocks.flatMap((block) => block.exercises)).find((exercise) => exercise.exercise_key === key);
   return occurrence?.name ?? key;
 }
 
@@ -138,7 +138,7 @@ export function exerciseDetail(state, exerciseKey, now, from, to, preset) {
         series[item.side].push({ session_key: session.session_key, scheduled_date: session.scheduled_date, completion_item_key: result.completion_item_key, actual: result.actual, resistance: result.resistance, rir: result.rir });
       }
     }
-    observations.push({ session_key: session.session_key, scheduled_date: session.scheduled_date, source_ref: `session:${session.scheduled_date}:${session.session_key}`, sets, total_reps: sumMetric(sets, "reps"), total_duration_sec: sumMetric(sets, "duration_sec"), highest_external_load_kg_per_implement: maxValue(sets, (set) => set.resistance?.mode === "external_weight" ? set.resistance.load_kg : null), highest_external_total_kg: maxValue(sets, (set) => set.total_external_kg), lowest_assistance_kg_per_implement: minValue(sets, (set) => set.assistance_kg) });
+    if (sets.length) observations.push({ session_key: session.session_key, scheduled_date: session.scheduled_date, source_ref: `session:${session.scheduled_date}:${session.session_key}`, sets, total_reps: sumMetric(sets, "reps"), total_duration_sec: sumMetric(sets, "duration_sec"), highest_external_load_kg_per_implement: maxValue(sets, (set) => set.resistance?.mode === "external_weight" ? set.resistance.load_kg : null), highest_external_total_kg: maxValue(sets, (set) => set.total_external_kg), lowest_assistance_kg_per_implement: minValue(sets, (set) => set.assistance_kg) });
   }
   if (!exists) return { error: { code: "not_found", message: "Exercise not found" } };
   for (const side of ["none", "left", "right"]) series[side].sort(sortObservation);

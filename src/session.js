@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { addDays, deepClone, isRecord, isValidUtcInstant, localDate, opaqueKey } from "./util.js";
 import { completionFraction, resolveSlot, scheduledWorkoutKey, sessionSummary, trainingDuration } from "./plan.js";
@@ -30,7 +30,7 @@ function freshRecord(session) {
 export function createSession(state, date, now, kind, skipReason = null) {
   const invalid = assertTodayWorkout(state, date, now);
   if (invalid) return { error: invalid };
-  const existing = state.sessions.find((item) => item.scheduled_date === date);
+  const existing = state.sessions.find(/** @param {any} item */ (item) => item.scheduled_date === date);
   if (existing) {
     if ((kind === "start" && existing.status === "in_progress") || (kind === "skip" && existing.status === "skipped")) return { session: existing, replay: true };
     return { error: { code: "session_state_conflict", message: "A different action cannot be applied to this Session" } };
@@ -45,12 +45,12 @@ export function createSession(state, date, now, kind, skipReason = null) {
     title: slot.title,
     status: kind === "skip" ? "skipped" : "in_progress",
     snapshot: expandForSession(slot),
-    completion_results: [],
-    training_intervals: [],
+    completion_results: /** @type {any[]} */ ([]),
+    training_intervals: /** @type {any[]} */ ([]),
     session_rpe: null,
     note: null,
     skip_reason: kind === "skip" ? skipReason : null,
-    exercise_feedback: [],
+    exercise_feedback: /** @type {any[]} */ ([]),
     created_at: now.toISOString(),
     updated_at: now.toISOString(),
   };
@@ -64,18 +64,19 @@ export function createSession(state, date, now, kind, skipReason = null) {
 function expandForSession(slot) {
   // Kept local to avoid making the mutation route depend on a mutable plan
   // object after the snapshot has been captured.
+  /** @type {any} */
   const snapshot = {
     title: slot.title, start_time: slot.start_time, estimated_duration_min: slot.estimated_duration_min,
-    blocks: [], completion_items: [], exercise_occurrence_keys: [],
+    blocks: /** @type {any[]} */ ([]), completion_items: /** @type {any[]} */ ([]), exercise_occurrence_keys: /** @type {string[]} */ ([]),
   };
-  slot.blocks.forEach((block, blockIndex) => {
+  slot.blocks.forEach(/** @param {any} block @param {number} blockIndex */ (block, blockIndex) => {
     const blockKey = opaqueKey(`sb${blockIndex + 1}`);
-    const snapshotBlock = { block_key: blockKey, title: block.title, exercises: [] };
-    block.exercises.forEach((exercise, exerciseIndex) => {
+    const snapshotBlock = { block_key: blockKey, title: block.title, exercises: /** @type {any[]} */ ([]) };
+    block.exercises.forEach(/** @param {any} exercise @param {number} exerciseIndex */ (exercise, exerciseIndex) => {
       const occurrenceKey = opaqueKey(`eo${blockIndex + 1}${exerciseIndex + 1}`);
       snapshot.exercise_occurrence_keys.push(occurrenceKey);
-      const snapshotExercise = { exercise_occurrence_key: occurrenceKey, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: [] };
-      exercise.sets.forEach((set, setIndex) => {
+      const snapshotExercise = { exercise_occurrence_key: occurrenceKey, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: /** @type {any[]} */ ([]) };
+      exercise.sets.forEach(/** @param {any} set @param {number} setIndex */ (set, setIndex) => {
         const setKey = opaqueKey(`ps${blockIndex + 1}${exerciseIndex + 1}${setIndex + 1}`);
         snapshotExercise.sets.push({ set_key: setKey, ...deepClone(set) });
         for (const side of exercise.side_mode === "left_right" ? ["left", "right"] : ["none"]) snapshot.completion_items.push({ completion_item_key: opaqueKey(`ci${snapshot.completion_items.length + 1}`), exercise_occurrence_key: occurrenceKey, set_key: setKey, side, target: deepClone(set.target), resistance: deepClone(set.resistance) });
@@ -96,8 +97,8 @@ export function replaceRecord(state, session, record, now, mode = "replace") {
   const errors = validateSessionRecord(record, session, now.toISOString(), targetMode);
   if (errors.length) return { error: { code: "invalid_session_record", message: "The Session Record is invalid", details: errors } };
   if (session.status === "in_progress") {
-    const existingOpen = session.training_intervals.find((interval) => interval.ended_at === null);
-    const submittedOpen = record.training_intervals.find((interval) => interval.ended_at === null);
+    const existingOpen = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
+    const submittedOpen = record.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
     if (!existingOpen || !submittedOpen || submittedOpen.interval_key !== existingOpen.interval_key) return { error: { code: "invalid_session_record", message: "The open interval is server-owned and must be preserved" } };
   }
   session.completion_results = deepClone(record.completion_results);
@@ -114,18 +115,18 @@ export function replaceRecord(state, session, record, now, mode = "replace") {
 
 /** @param {any} state @param {string} sessionKey @param {any} payload @param {Date} now */
 export function endSession(state, sessionKey, payload, now) {
-  const session = state.sessions.find((item) => item.session_key === sessionKey);
+  const session = state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey);
   if (!session) return { error: { code: "not_found", message: "Session not found" } };
   if (session.status !== "in_progress") return { error: { code: "session_state_conflict", message: "Only an in-progress Session can end" } };
   if (!payload || typeof payload !== "object" || Object.keys(payload).some((key) => !["record", "ended_at"].includes(key))) return { error: { code: "invalid_request", message: "End requires record and ended_at" } };
   if (!isValidUtcInstant(payload.ended_at)) return { error: { code: "invalid_request", message: "ended_at must be an RFC 3339 UTC instant" } };
   const difference = Date.parse(payload.ended_at) - now.getTime();
   if (difference > 5 * 60 * 1000) return { error: { code: "invalid_request", message: "ended_at cannot be more than five minutes in the future" } };
-  const open = session.training_intervals.find((interval) => interval.ended_at === null);
+  const open = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
   if (!open || Date.parse(payload.ended_at) <= Date.parse(open.started_at)) return { error: { code: "invalid_session_record", message: "ended_at must close the open interval" } };
   if (!isRecord(payload.record) || !Array.isArray(payload.record.training_intervals)) return { error: { code: "invalid_session_record", message: "End requires the complete Session Record" } };
   const proposed = deepClone(payload.record);
-  const proposedOpen = proposed.training_intervals.find((interval) => interval.interval_key === open.interval_key);
+  const proposedOpen = proposed.training_intervals.find(/** @param {any} interval */ (interval) => interval.interval_key === open.interval_key);
   if (!proposedOpen) return { error: { code: "invalid_session_record", message: "End record must include the open interval" } };
   proposedOpen.ended_at = payload.ended_at;
   const errors = validateSessionRecord(proposed, session, now.toISOString(), "terminal");
@@ -144,7 +145,7 @@ export function endSession(state, sessionKey, payload, now) {
 
 /** @param {any} state @param {string} sessionKey @param {Date} now @param {string} command */
 export function continueOrRestart(state, sessionKey, now, command) {
-  const session = state.sessions.find((item) => item.session_key === sessionKey);
+  const session = state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey);
   if (!session) return { error: { code: "not_found", message: "Session not found" } };
   const today = localDate(now, state.timezone);
   if (session.scheduled_date !== today) return { error: { code: "session_date_not_today", message: "Only today's Session can continue or restart" } };
@@ -176,4 +177,4 @@ export function sessionDetail(session) {
 }
 
 /** @param {any} state @param {string} sessionKey */
-export function findSession(state, sessionKey) { return state.sessions.find((item) => item.session_key === sessionKey) ?? null; }
+export function findSession(state, sessionKey) { return state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey) ?? null; }

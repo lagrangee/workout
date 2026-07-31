@@ -1,12 +1,12 @@
 // @ts-nocheck
 
 import { createStore } from "./store.js";
-import { deepClone, isRecord, normalizeEmail, localDate, isValidTimezone, sha256Hex, trimString } from "./util.js";
+import { addDays, base64UrlDecode, base64UrlEncode, deepClone, dateSpan, isRecord, isValidLocalDate, normalizeEmail, localDate, isValidTimezone, sha256Hex, trimString } from "./util.js";
 import { planModel, scheduleModel, todayModel, sessionSummary, validatePlanForState, appendPlanRevision } from "./plan.js";
 import { createSession, replaceRecord, endSession, continueOrRestart, findSession, sessionDetail } from "./session.js";
 import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
-import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShare, schemaResource } from "./coach.js";
+import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -51,7 +51,7 @@ async function coachRoute(request, env, getStore, url) {
   if (!token) return publicNotFound();
   if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...securityHeaders("text/plain; charset=utf-8"), Allow: "GET, HEAD" } });
   const store = await getStore();
-  const state = await findShare(await store.all(), token, env);
+  const state = await findShareInStore(store, token, env);
   if (!state) return publicNotFound();
   const now = new Date();
   const limited = await coachRateLimit(env, state, now);
@@ -85,6 +85,11 @@ async function privateGet(state, path, url, now, env) {
   if (path === "/api/private/me") return jsonResponse({ athlete_key: state.athlete_key, display_name: state.display_name, timezone: state.timezone });
   if (path === "/api/private/today") return jsonResponse(todayModel(state, now));
   if (path === "/api/private/plan") return jsonResponse(planModel(state, now));
+  if (path === "/api/private/plan/update-package") {
+    const current = planModel(state, now).current;
+    const week = current?.week ?? Object.fromEntries(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((day) => [day, null]));
+    return jsonResponse({ schema_version: 1, effective_from: current?.effective_from ?? addDays(localDate(now, state.timezone), 1), week });
+  }
   if (path === "/api/private/schedule") { const result = scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse({ timezone: state.timezone, from: result[0]?.date ?? null, to: result.at(-1)?.date ?? null, entries: result }); }
   if (path === "/api/private/sessions") return listPrivateSessions(state, url);
   if (path.startsWith("/api/private/sessions/")) { const session = findSession(state, path.split("/").at(-1)); return session ? jsonResponse(sessionDetail(session)) : jsonError("not_found", "Session not found", [], 404); }
@@ -196,8 +201,23 @@ async function shareCommand(state, env, now, regenerate) { return { body: await 
 
 function listPrivateSessions(state, url) {
   const from = url.searchParams.get("from"); const to = url.searchParams.get("to"); const status = url.searchParams.get("status"); const exerciseKey = url.searchParams.get("exercise_key");
-  const sessions = state.sessions.filter((session) => (!from || session.scheduled_date >= from) && (!to || session.scheduled_date <= to) && (!status || session.status === status) && (!exerciseKey || session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey)))).sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date) || b.session_key.localeCompare(a.session_key));
-  return jsonResponse({ items: sessions.map(sessionSummary), page: { next_cursor: null } });
+  const rawLimit = url.searchParams.get("limit"); const limit = rawLimit === null ? 50 : Number(rawLimit);
+  if ((from && !to) || (!from && to) || (from && !isValidLocalDate(from)) || (to && !isValidLocalDate(to)) || (from && to && from > to)) return jsonError("invalid_period", "from and to must be valid inclusive local dates", [], 400);
+  if (from && to && (dateSpan(from, to) ?? Infinity) > 3660) return jsonError("invalid_period", "The selected period cannot exceed 3660 days", [], 400);
+  if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || !Number.isInteger(limit) || limit < 1 || limit > 200)) return jsonError("invalid_request", "limit must be an integer between 1 and 200", [], 400);
+  if (status && !["in_progress", "completed", "partial", "skipped"].includes(status)) return jsonError("invalid_request", "status is unsupported", [], 400);
+  const filters = `${from ?? ""}|${to ?? ""}|${status ?? ""}|${exerciseKey ?? ""}|${limit}`;
+  let sessions = state.sessions.filter((session) => (!from || session.scheduled_date >= from) && (!to || session.scheduled_date <= to) && (!status || session.status === status) && (!exerciseKey || session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey)))).sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date) || b.session_key.localeCompare(a.session_key));
+  const cursor = url.searchParams.get("cursor");
+  if (cursor) {
+    try {
+      const value = JSON.parse(new TextDecoder().decode(base64UrlDecode(cursor)));
+      if (value.filters !== filters || typeof value.issued_at !== "number" || !Number.isFinite(value.issued_at) || value.issued_at > Date.now() || Date.now() - value.issued_at > 15 * 60 * 1000 || typeof value.date !== "string" || !isValidLocalDate(value.date) || typeof value.key !== "string" || !value.key) throw new Error("bad cursor");
+      sessions = sessions.filter((session) => session.scheduled_date < value.date || (session.scheduled_date === value.date && session.session_key < value.key));
+    } catch { return jsonError("invalid_cursor", "Cursor is malformed, expired, or does not match the filters", [], 400); }
+  }
+  const page = sessions.slice(0, limit); const last = page.at(-1); const next = sessions.length > limit && last ? base64UrlEncode(new TextEncoder().encode(JSON.stringify({ filters, date: last.scheduled_date, key: last.session_key, issued_at: Date.now() }))) : null;
+  return jsonResponse({ items: page.map(sessionSummary), page: { limit, next_cursor: next } });
 }
 
 function exportResponse(state, now) {

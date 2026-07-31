@@ -68,6 +68,14 @@ export async function findShare(states, token, env) {
   return states.find((state) => state.coach_share && !state.coach_share.revoked_at && state.coach_share.token_digest === digest) ?? null;
 }
 
+/** @param {any} store @param {string} token @param {Record<string, any>} env */
+export async function findShareInStore(store, token, env) {
+  if (!/^[A-Za-z0-9_-]{40,60}$/.test(token)) return null;
+  const digest = await tokenDigest(token, env);
+  if (typeof store.findByCoachDigest === "function") return store.findByCoachDigest(digest);
+  return (await store.all()).find((state) => state.coach_share && !state.coach_share.revoked_at && state.coach_share.token_digest === digest) ?? null;
+}
+
 /** @param {any} state @param {Date} now */
 export function coachManifest(state, now) {
   const today = localDate(now, state.timezone);
@@ -106,11 +114,12 @@ export function coachSchedule(state, url, now) {
 
 /** @param {any} state @param {URL} url @param {Date} now */
 export function coachSessions(state, url, now) {
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") ?? 50)));
-  if (!Number.isInteger(limit)) return { error: { code: "invalid_request", message: "limit must be an integer" } };
+  const rawLimit = url.searchParams.get("limit");
+  const limit = rawLimit === null ? 50 : Number(rawLimit);
+  if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || !Number.isInteger(limit) || limit < 1 || limit > 200)) return { error: { code: "invalid_request", message: "limit must be an integer between 1 and 200" } };
   const status = url.searchParams.get("status"); const from = url.searchParams.get("from"); const to = url.searchParams.get("to"); const exerciseKey = url.searchParams.get("exercise_key");
   if ((from && !to) || (!from && to) || (from && !isValidLocalDate(from)) || (to && !isValidLocalDate(to)) || (from && to && from > to)) return { error: { code: "invalid_period", message: "from and to must be valid inclusive local dates" } };
-  if (from && to && dateSpan(from, to) > 3660) return { error: { code: "invalid_period", message: "The selected period cannot exceed 3660 days" } };
+  if (from && to && (dateSpan(from, to) ?? Infinity) > 3660) return { error: { code: "invalid_period", message: "The selected period cannot exceed 3660 days" } };
   if (status && !["in_progress", "completed", "partial", "skipped"].includes(status)) return { error: { code: "invalid_request", message: "status is unsupported" } };
   const filters = `${from ?? ""}|${to ?? ""}|${status ?? ""}|${exerciseKey ?? ""}|${limit}`;
   let sessions = state.sessions.filter((session) => (!from || session.scheduled_date >= from) && (!to || session.scheduled_date <= to) && (!status || session.status === status) && (!exerciseKey || session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey))));
@@ -119,7 +128,7 @@ export function coachSessions(state, url, now) {
   if (cursor) {
     try {
       const value = JSON.parse(new TextDecoder().decode(decode(cursor)));
-      if (value.filters !== filters || Date.now() - value.issued_at > 15 * 60 * 1000) throw new Error("bad cursor");
+      if (value.filters !== filters || typeof value.issued_at !== "number" || !Number.isFinite(value.issued_at) || value.issued_at > Date.now() || Date.now() - value.issued_at > 15 * 60 * 1000 || typeof value.date !== "string" || !isValidLocalDate(value.date) || typeof value.key !== "string" || !value.key) throw new Error("bad cursor");
       sessions = sessions.filter((session) => session.scheduled_date < value.date || (session.scheduled_date === value.date && session.session_key < value.key));
     } catch { return { error: { code: "invalid_cursor", message: "Cursor is malformed, expired, or does not match the filters" } }; }
   }
@@ -192,7 +201,7 @@ export function coachResource(state, pathname, url, now) {
   if (pathname.includes("/sessions/")) { const key = pathname.split("/sessions/")[1]; const session = state.sessions.find((item) => item.session_key === key); return session ? coachSessionDetail(session, now) : { error: { code: "not_found", message: "Not found" } }; }
   if (pathname.endsWith("/progress")) return progressModel(state, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined);
   if (pathname.includes("/exercises/")) return exerciseDetail(state, decodeURIComponent(pathname.split("/exercises/")[1]), now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined);
-  return coachManifest(state, now);
+  return { error: { code: "not_found", message: "Not found" } };
 }
 
 /** @param {any} session @param {Date} now */

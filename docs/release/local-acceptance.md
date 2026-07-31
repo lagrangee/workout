@@ -5,7 +5,7 @@ Date: 2026-07-31
 ## Passed locally
 
 - `npm run typecheck`
-- `npm test` — 13 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, and app shell.
+- `npm test` — 15 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, and app shell.
 - `node --check src/worker.js`
 - `node --check public/app.js`
 - `npm run forbidden-scan`
@@ -13,23 +13,24 @@ Date: 2026-07-31
 - `npm run release-check`
 - 375×812 in-app browser observation: Today state rendered, mobile navigation opened the read-only Plan view, and the Plan view exposed no manual editor.
 - Additional 375×812 smoke: Today → `继续查看` opened the one-item focus view; `结束并保存` exposed unfinished items, RPE, note, and Exercise Feedback; saving an incomplete Session rendered the partial state with `继续训练` and `校正记录` actions.
-- The same browser run did not observe the Plan JSON validation error state after submitting `{}`; the HTTP seam passes this case, but the full browser Plan update path remains unclaimed pending a fresh local runtime investigation.
+- Fresh 375×812 smoke observed the Plan JSON `{}` error state inside the bottom sheet with path-addressed, copyable repair details; the same run covered terminal correction and showed the corrected Session as `completed 100%` in Today.
 
 ## Evidence boundary
 
-The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql`, `migrations/0002_state_revision.sql`, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
+The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql`, `migrations/0002_state_revision.sql`, `migrations/0003_query_indexes.sql`, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
 
 ## Production-candidate evidence
 
-- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `5ea4ebdc-7cd9-45c1-9f76-fddb888a63e1`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
+- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `a9df3abb-3e1e-4736-a62f-28fb4b943267`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
 - `GET /healthz` returned `200` and `{"ok":true,"service":"workout-tracker"}`. Public Coach schema returned `200` with `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, CSP, no-referrer, and noindex headers.
 - `GET /api/private/me` without an Access assertion returned `401` with the stable unauthorized envelope and the same private security headers.
-- Production D1 migration `0002_state_revision.sql` applied successfully. No production Athlete or seed data was written.
+- Production D1 migrations through `0003_query_indexes.sql` applied successfully. No production Athlete or seed data was written.
 - The repository is private at `lagrangee/workout`; `main` was pushed and `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN` are present by name in GitHub Secrets.
 
 ## Still blocked
 
 - Ticket 24 still requires Zero Trust onboarding, two exact real Athlete email identities, OTP, Access audience/default-deny, custom-hostname bypass, quota, log/trace, and synthetic D1 Time Travel evidence. `ACCESS_ISSUER` and `ACCESS_AUDIENCE` remain placeholders until those inputs exist.
-- Ticket 26's private repository and secrets are verified, but the default-branch Actions run [30615333331](https://github.com/lagrangee/workout/actions/runs/30615333331) failed before runner start because the GitHub account reports failed recent payments or an exceeded spending limit. Direct deploy succeeded separately.
+- Ticket 26's private repository and secrets are verified, but the default-branch Actions run [30615936765](https://github.com/lagrangee/workout/actions/runs/30615936765) failed before runner start because the GitHub account reports failed recent payments or an exceeded spending limit. Direct deploy succeeded separately.
+- Branch-protection verification returned `403`: GitHub reports that this private repository's current plan requires GitHub Pro or a public repository for branch protection. PR CI is configured, but merge-blocking is not verified.
 - Ticket 27's selected Athlete is fixture-only; no production Athlete or seed artifact was mutated. Production seed execution still requires the blocked 24/26 environment evidence.
 - Full browser execution/continuation smoke needs the production-candidate runtime or a browser-connected local API fixture; the local HTTP seam covers those behaviors, while the browser observation is limited to the available local page/navigation surface.

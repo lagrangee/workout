@@ -86,6 +86,17 @@ export class D1Store {
         statements.push(this.db.prepare("INSERT INTO athlete_state (athlete_key, email, state_json, updated_at, state_revision) VALUES (?1, ?2, ?3, ?4, 0)").bind(state.athlete_key, state.email, JSON.stringify(state), now));
       }
       for (const session of state.sessions ?? []) statements.push(this.db.prepare("INSERT INTO session_date_guard (athlete_key, scheduled_date, session_key) VALUES (?1, ?2, ?3) ON CONFLICT(athlete_key, scheduled_date) DO UPDATE SET session_key = excluded.session_key WHERE session_date_guard.session_key = excluded.session_key").bind(state.athlete_key, session.scheduled_date, session.session_key));
+      statements.push(this.db.prepare("DELETE FROM plan_revision_index WHERE athlete_key = ?1").bind(state.athlete_key));
+      statements.push(this.db.prepare("DELETE FROM session_exercise_index WHERE athlete_key = ?1").bind(state.athlete_key));
+      statements.push(this.db.prepare("DELETE FROM session_index WHERE athlete_key = ?1").bind(state.athlete_key));
+      statements.push(this.db.prepare("DELETE FROM coach_share_lookup WHERE athlete_key = ?1").bind(state.athlete_key));
+      for (const revision of state.plan_revisions ?? []) statements.push(this.db.prepare("INSERT INTO plan_revision_index (athlete_key, revision_key, effective_from, revision_sequence) VALUES (?1, ?2, ?3, ?4)").bind(state.athlete_key, revision.revision_key, revision.effective_from, revision.revision_sequence));
+      for (const session of state.sessions ?? []) {
+        statements.push(this.db.prepare("INSERT INTO session_index (athlete_key, session_key, scheduled_date, status, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)").bind(state.athlete_key, session.session_key, session.scheduled_date, session.status, session.updated_at));
+        const exerciseKeys = new Set(session.snapshot?.blocks?.flatMap((block) => block.exercises.map((exercise) => exercise.exercise_key)) ?? []);
+        for (const exerciseKey of exerciseKeys) statements.push(this.db.prepare("INSERT INTO session_exercise_index (athlete_key, exercise_key, session_key, scheduled_date) VALUES (?1, ?2, ?3, ?4)").bind(state.athlete_key, exerciseKey, session.session_key, session.scheduled_date));
+      }
+      if (state.coach_share) statements.push(this.db.prepare("INSERT INTO coach_share_lookup (token_digest, athlete_key, share_key, lookup_key_version, encryption_key_version, revoked_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)").bind(state.coach_share.token_digest, state.athlete_key, state.coach_share.share_key, state.coach_share.lookup_key_version, state.coach_share.encryption_key_version, state.coach_share.revoked_at, now));
     }
     const results = await this.db.batch(statements);
     for (let index = 0; index < stateStatementIndexes.length; index += 1) {
@@ -108,6 +119,11 @@ export class D1Store {
   async all() {
     const result = await this.db.prepare("SELECT state_json FROM athlete_state ORDER BY email").all();
     return (result.results ?? []).map((row) => JSON.parse(row.state_json));
+  }
+
+  async findByCoachDigest(tokenDigest) {
+    const result = await this.db.prepare("SELECT a.state_json FROM coach_share_lookup AS c JOIN athlete_state AS a ON a.athlete_key = c.athlete_key WHERE c.token_digest = ?1 AND c.revoked_at IS NULL").bind(tokenDigest).first();
+    return result ? JSON.parse(result.state_json) : null;
   }
 
   async transaction(fn) {

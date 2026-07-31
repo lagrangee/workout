@@ -6,6 +6,7 @@ import { appFixture, call, post, today } from "../tests/helpers.js";
 
 const seedPath = "seed/workout-tracker-weekly-seed.json";
 const seedText = await readFile(seedPath, "utf8");
+/** @type {any} */
 const seed = JSON.parse(seedText);
 const { handler, store } = appFixture();
 const before = await store.getByEmail("athlete-a@example.invalid");
@@ -22,18 +23,20 @@ const after = await store.getByEmail("athlete-a@example.invalid");
 assert.equal(after.plan_revisions.length, revisionCountBefore + 1);
 
 const plan = await call(handler, "/api/private/plan");
-const readBack = plan.body.future.find((revision) => revision.effective_from === seed.effective_from);
+const readBack = plan.body.future.find(/** @param {any} revision */ (revision) => revision.effective_from === seed.effective_from);
 assert.ok(readBack, "seed revision should remain visible as the next effective plan");
 assert.equal(canonicalJson(readBack.week), canonicalJson(seed.week));
 
 const expectedCounts = { monday: 9, tuesday: 10, wednesday: 9, thursday: 0, friday: 6, saturday: 6, sunday: 0 };
 for (const [day, expected] of Object.entries(expectedCounts)) {
   const slot = seed.week[day];
-  const actual = slot?.kind === "workout" ? expandSnapshot(slot, `seed-${day}`).completion_items.length : 0;
+  const expanded = slot?.kind === "workout" ? expandSnapshot(slot, `seed-${day}`) : null;
+  const actual = expanded?.completion_items.length ?? 0;
   assert.equal(actual, expected, `${day} Completion Item count`);
   if (slot?.kind === "workout") {
-    const unilateral = expandSnapshot(slot, `seed-${day}`).completion_items.filter((item) => item.side !== "none");
-    for (let index = 0; index < unilateral.length; index += 2) assert.deepEqual(unilateral.slice(index, index + 2).map((item) => item.side), ["left", "right"]);
+    /** @type {any[]} */
+    const unilateral = expanded?.completion_items.filter(/** @param {any} item */ (item) => item.side !== "none") ?? [];
+    for (let index = 0; index < unilateral.length; index += 2) assert.deepEqual(unilateral.slice(index, index + 2).map(/** @param {any} item */ (item) => item.side), ["left", "right"]);
   }
 }
 
@@ -43,7 +46,7 @@ const expectedScheduleKinds = Array.from({ length: 7 }, (_, index) => {
   const slot = seed.week[weekdayKey(addDays(seed.effective_from, index))];
   return slot === null ? "no_plan" : slot.kind === "rest" ? "rest" : "workout";
 });
-assert.deepEqual(schedule.body.entries.map((entry) => entry.kind), expectedScheduleKinds);
+assert.deepEqual(schedule.body.entries.map(/** @param {any} entry */ (entry) => entry.kind), expectedScheduleKinds);
 const scheduleText = JSON.stringify(schedule.body);
 for (const forbidden of ["telemetry", "symptom", "condition", "instruction", "route"]) assert.equal(scheduleText.includes(forbidden), false, forbidden);
 
@@ -57,4 +60,4 @@ const otherPlan = await call(handler, "/api/private/plan", {}, "athlete-b@exampl
 assert.equal(otherPlan.body.current, null);
 assert.deepEqual(otherPlan.body.future, []);
 
-console.log(JSON.stringify({ seed: seedPath, selected_athlete: "fixture-only", effective_from: seed.effective_from, revision_created: true, completion_item_counts: expectedCounts, schedule_kinds: schedule.body.entries.map((entry) => entry.kind), no_op_rejected: true, invalid_attempt_preserved_revision_count: true, other_athlete_isolated: true }));
+console.log(JSON.stringify({ seed: seedPath, selected_athlete: "fixture-only", effective_from: seed.effective_from, revision_created: true, completion_item_counts: expectedCounts, schedule_kinds: schedule.body.entries.map(/** @param {any} entry */ (entry) => entry.kind), no_op_rejected: true, invalid_attempt_preserved_revision_count: true, other_athlete_isolated: true }));

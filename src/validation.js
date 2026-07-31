@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { isRecord, isValidLocalDate, isValidTimezone, isValidUtcInstant, trimString } from "./util.js";
 
@@ -12,7 +12,7 @@ class StrictJsonParser {
     return value;
   }
   ws() { while (/\s/.test(this.text[this.index] ?? "")) this.index += 1; }
-  /** @param {string} path */
+  /** @param {string} path @returns {any} */
   value(path) {
     this.ws();
     const char = this.text[this.index];
@@ -20,14 +20,18 @@ class StrictJsonParser {
     if (char === "[") return this.array(path);
     if (char === '"') return this.string();
     if (char === "-" || /\d/.test(char ?? "")) return this.number();
-    for (const [literal, value] of [["true", true], ["false", false], ["null", null]]) {
+    /** @type {Array<[string, any]>} */
+    const literals = [["true", true], ["false", false], ["null", null]];
+    for (const [literal, value] of literals) {
       if (this.text.startsWith(literal, this.index)) { this.index += literal.length; return value; }
     }
     throw new Error(`Expected a JSON value at ${path} (offset ${this.index})`);
   }
-  /** @param {string} path */
+  /** @param {string} path @returns {Record<string, any>} */
   object(path) {
-    this.index += 1; this.ws(); const object = {};
+    this.index += 1; this.ws();
+    /** @type {Record<string, any>} */
+    const object = {};
     if (this.text[this.index] === "}") { this.index += 1; return object; }
     while (this.index < this.text.length) {
       this.ws();
@@ -45,9 +49,11 @@ class StrictJsonParser {
     }
     throw new Error(`Unterminated object at ${path}`);
   }
-  /** @param {string} path */
+  /** @param {string} path @returns {any[]} */
   array(path) {
-    this.index += 1; this.ws(); const array = [];
+    this.index += 1; this.ws();
+    /** @type {any[]} */
+    const array = [];
     if (this.text[this.index] === "]") { this.index += 1; return array; }
     while (this.index < this.text.length) {
       array.push(this.value(`${path}/${array.length}`));
@@ -181,6 +187,7 @@ function validateSlot(value, path, errors) {
 
 /** @param {string} text @param {string} today */
 export function validatePlanPackage(text, today) {
+  /** @type {string[]} */
   const errors = [];
   let packageValue;
   try { packageValue = parseStrictJson(text); } catch (error) { return { ok: false, errors: [{ path: "$", message: error instanceof Error ? error.message : "Invalid JSON" }] }; }
@@ -198,8 +205,9 @@ export function validatePlanPackage(text, today) {
   return errors.length ? { ok: false, errors: errors.map((message) => ({ path: message.split(":")[0], message })) } : { ok: true, value: packageValue };
 }
 
-/** @param {any} value @param {string} path @param {string[]} errors */
+/** @param {any} value @param {string} path @returns {string[]} */
 export function validateSettings(value, path = "$") {
+  /** @type {string[]} */
   const errors = [];
   if (!requireObject(value, path, errors)) return errors;
   exactKeys(value, ["display_name", "timezone"], path, errors);
@@ -221,6 +229,7 @@ function validateResistanceValue(value, path, errors) {
 
 /** @param {any} record @param {any} session @param {string} now @param {string} mode */
 export function validateSessionRecord(record, session, now, mode = "replace") {
+  /** @type {string[]} */
   const errors = [];
   if (!requireObject(record, "$", errors)) return errors;
   exactKeys(record, ["record_schema_version", "completion_results", "training_intervals", "session_rpe", "note", "exercise_feedback", "skip_reason"], "$", errors);
@@ -228,7 +237,7 @@ export function validateSessionRecord(record, session, now, mode = "replace") {
   if (!requireArray(record.completion_results, "/completion_results", errors)) return errors;
   if (!requireArray(record.training_intervals, "/training_intervals", errors)) return errors;
   if (!requireArray(record.exercise_feedback, "/exercise_feedback", errors)) return errors;
-  const itemMap = new Map(session.snapshot.completion_items.map((item) => [item.completion_item_key, item]));
+  const itemMap = new Map(session.snapshot.completion_items.map(/** @param {any} item */ (item) => [item.completion_item_key, item]));
   const resultKeys = new Set();
   for (const [index, result] of record.completion_results.entries()) {
     const path = `/completion_results/${index}`;
