@@ -5,7 +5,7 @@ Date: 2026-07-31
 ## Passed locally
 
 - `npm run typecheck`
-- `npm test` — 15 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, and app shell.
+- `npm test` — 16 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, app shell, and the D1 session-date migration guard.
 - `node --check src/worker.js`
 - `node --check public/app.js`
 - `npm run forbidden-scan`
@@ -21,7 +21,7 @@ The test suite uses a local MemoryStore fixture with the same HTTP handler as th
 
 ## Production-candidate evidence
 
-- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `a9df3abb-3e1e-4736-a62f-28fb4b943267`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
+- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `a5674e17-9518-4ff1-962c-a79e08e7f627`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
 - `GET /healthz` returned `200` and `{"ok":true,"service":"workout-tracker"}`. Public Coach schema returned `200` with `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, CSP, no-referrer, and noindex headers.
 - `GET /api/private/me` without an Access assertion returned `401` with the stable unauthorized envelope and the same private security headers.
 - Production D1 migrations through `0004_restore_session_date_guard.sql` applied successfully. A remote schema read confirmed `session_date_guard` exists; all application projection tables remain at zero rows, so no production Athlete, plan, Session, or seed data was written.

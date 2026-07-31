@@ -5,9 +5,9 @@ Date: 2026-07-31
 ## Verified
 
 - Repository: private `lagrangee/workout`, default branch `main`.
-- Source push: `main` contains implementation commit `d51327d`.
+- Source push: `main` contains the deployed runtime/schema source at commit `13d83f0`; this is the source commit bound to the Worker version below.
 - D1: migrations through `0004_restore_session_date_guard.sql` applied remotely to `workout-tracker`; the previously missing `session_date_guard` table now exists.
-- Worker: direct Wrangler deploy succeeded; version `a9df3abb-3e1e-4736-a62f-28fb4b943267`.
+- Worker: direct Wrangler deploy succeeded; version `a5674e17-9518-4ff1-962c-a79e08e7f627`.
 - Route: `workout.lagrangee.xyz` custom domain active; Preview URLs disabled.
 - Public `GET /healthz`: `200`, body `{"ok":true,"service":"workout-tracker"}`.
 - Public schema route: `200`, no-store/security headers present.
