@@ -3,6 +3,7 @@ main = "src/worker.js"
 compatibility_date = "2026-07-31"
 workers_dev = false
 preview_urls = false
+routes = [{ pattern = "workout.lagrangee.xyz", custom_domain = true, previews_enabled = false }]
 
 [assets]
 directory = "./public"
@@ -12,7 +13,7 @@ not_found_handling = "single-page-application"
 [[d1_databases]]
 binding = "DB"
 database_name = "workout-tracker"
-database_id = "replace-with-production-d1-id"
+database_id = "157c8936-701e-493d-92ad-b45f0d91aae0"
 migrations_dir = "migrations"
 
 [vars]
