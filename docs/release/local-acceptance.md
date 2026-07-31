@@ -17,14 +17,14 @@ Date: 2026-07-31
 
 ## Evidence boundary
 
-The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql`, `migrations/0002_state_revision.sql`, `migrations/0003_query_indexes.sql`, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
+The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql` through `migrations/0004_restore_session_date_guard.sql`, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
 
 ## Production-candidate evidence
 
 - Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `a9df3abb-3e1e-4736-a62f-28fb4b943267`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
 - `GET /healthz` returned `200` and `{"ok":true,"service":"workout-tracker"}`. Public Coach schema returned `200` with `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, CSP, no-referrer, and noindex headers.
 - `GET /api/private/me` without an Access assertion returned `401` with the stable unauthorized envelope and the same private security headers.
-- Production D1 migrations through `0003_query_indexes.sql` applied successfully. No production Athlete or seed data was written.
+- Production D1 migrations through `0004_restore_session_date_guard.sql` applied successfully. A remote schema read confirmed `session_date_guard` exists; all application projection tables remain at zero rows, so no production Athlete, plan, Session, or seed data was written.
 - The repository is private at `lagrangee/workout`; `main` was pushed and `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN` are present by name in GitHub Secrets.
 
 ## Still blocked
