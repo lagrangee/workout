@@ -17,6 +17,7 @@ database_id = "157c8936-701e-493d-92ad-b45f0d91aae0"
 migrations_dir = "migrations"
 
 [vars]
+ENVIRONMENT = "production"
 ATHLETE_A_EMAIL = "athlete-a@example.invalid"
 ATHLETE_B_EMAIL = "athlete-b@example.invalid"
 DEFAULT_TIMEZONE = "Asia/Shanghai"
