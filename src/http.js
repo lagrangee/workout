@@ -2,8 +2,8 @@
 
 import { createStore } from "./store.js";
 import { deepClone, isRecord, normalizeEmail, localDate, isValidTimezone, sha256Hex, trimString } from "./util.js";
-import { planModel, scheduleModel, todayModel, sessionSummary, sessionDetail, validatePlanForState, appendPlanRevision } from "./plan.js";
-import { createSession, replaceRecord, endSession, continueOrRestart, findSession } from "./session.js";
+import { planModel, scheduleModel, todayModel, sessionSummary, validatePlanForState, appendPlanRevision } from "./plan.js";
+import { createSession, replaceRecord, endSession, continueOrRestart, findSession, sessionDetail } from "./session.js";
 import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShare, schemaResource } from "./coach.js";
@@ -53,6 +53,7 @@ async function coachRoute(request, env, getStore, url) {
   if (readmeMatch) return new Response(coachReadme(state, now), { status: 200, headers: securityHeaders("text/markdown; charset=utf-8") });
   const suffix = match[2] || "";
   const manifest = suffix === "" ? coachManifest(state, now) : coachResource(state, suffix, url, now);
+  if (suffix === "" && !manifest.error) manifest.links = { overview: `${url.origin}/api/coach/v1/${token}/overview`, plan: `${url.origin}/api/coach/v1/${token}/plan`, schedule: `${url.origin}/api/coach/v1/${token}/schedule`, sessions: `${url.origin}/api/coach/v1/${token}/sessions`, progress: `${url.origin}/api/coach/v1/${token}/progress`, exercise: `${url.origin}/api/coach/v1/${token}/exercises/{exercise_key}`, schemas: `${url.origin}/api/coach/v1/schemas` };
   if (manifest?.error) return jsonError(manifest.error.code, manifest.error.message, manifest.error.details ?? [], errorStatus(manifest.error.code));
   return jsonResponse(manifest);
 }
@@ -75,7 +76,7 @@ async function privateGet(state, path, url, now, env) {
   if (path === "/api/private/me") return jsonResponse({ athlete_key: state.athlete_key, display_name: state.display_name, timezone: state.timezone });
   if (path === "/api/private/today") return jsonResponse(todayModel(state, now));
   if (path === "/api/private/plan") return jsonResponse(planModel(state, now));
-  if (path === "/api/private/schedule") return jsonResponse({ timezone: state.timezone, from: url.searchParams.get("from"), to: url.searchParams.get("to"), entries: scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now) });
+  if (path === "/api/private/schedule") { const entries = scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now); return jsonResponse({ timezone: state.timezone, from: entries[0]?.date ?? null, to: entries.at(-1)?.date ?? null, entries }); }
   if (path === "/api/private/sessions") return listPrivateSessions(state, url);
   if (path.startsWith("/api/private/sessions/")) { const session = findSession(state, path.split("/").at(-1)); return session ? jsonResponse(sessionDetail(session)) : jsonError("not_found", "Session not found", [], 404); }
   if (path === "/api/private/progress") { const result = progressModel(state, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }
@@ -149,7 +150,7 @@ function applyPlanUpdate(state, rawBody, now) {
 
 function startOrSkip(state, path, rawBody, now) {
   const parts = path.split("/"); const date = parts.at(-2); const kind = parts.at(-1); const body = parseJsonBody(rawBody); if (body.error) return body;
-  if (!isRecord(body.value) || (kind === "start" && Object.keys(body.value).length) || (kind === "skip" && (Object.keys(body.value).some((key) => key !== "skip_reason") || (body.value.skip_reason !== null && typeof body.value.skip_reason !== "string")))) return { body: errorBody("invalid_request", "Command body is invalid", []), status: 400, persist: false };
+  if (!isRecord(body.value) || (kind === "start" && Object.keys(body.value).length) || (kind === "skip" && (!Object.prototype.hasOwnProperty.call(body.value, "skip_reason") || Object.keys(body.value).some((key) => key !== "skip_reason") || (body.value.skip_reason !== null && typeof body.value.skip_reason !== "string")))) return { body: errorBody("invalid_request", "Command body is invalid", []), status: 400, persist: false };
   const reason = kind === "skip" ? trimString(body.value.skip_reason ?? null) : null;
   if (reason !== null && (reason.length < 1 || reason.length > 500)) return { body: errorBody("invalid_request", "skip_reason must contain 1-500 characters", []), status: 400, persist: false };
   const result = createSession(state, date, now, kind, reason); if (result.error) return { body: errorBody(result.error.code, result.error.message, []), status: errorStatus(result.error.code), persist: false };
@@ -226,4 +227,4 @@ function errorBody(code, message, details) { return { error: { code, message, de
 function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "timezone_revision_boundary"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
 function securityHeaders(contentType) { return { "Content-Type": contentType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
 
-const FALLBACK_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workout Tracker</title></head><body><main id="app"><h1>Workout Tracker</h1><p>请配置 Static Assets 后打开应用。</p></main></body></html>`;
+const FALLBACK_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workout Tracker</title><style>body{font-family:system-ui;background:#f6f1e8;color:#26231f;margin:0}main{max-width:760px;margin:auto;padding:36px 22px}nav{display:flex;gap:16px;border-top:1px solid #e6ddd0;padding-top:20px;margin-top:40px}a{color:#a8432c}</style></head><body><main id="app"><p>WORKOUT TRACKER</p><h1>你的训练，今天就从这里开始。</h1><p>在线、移动优先的训练计划与 Session 记录。</p><nav aria-label="主导航"><a href="/app">今日</a><a href="/app#plan">计划</a><a href="/app#progress">进展</a><a href="/app#coach">教练</a><a href="/app#settings">设置</a></nav></main></body></html>`;

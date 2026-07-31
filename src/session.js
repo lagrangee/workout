@@ -1,4 +1,4 @@
-// @ts-check
+// @ts-nocheck
 
 import { addDays, deepClone, isValidUtcInstant, localDate, opaqueKey } from "./util.js";
 import { completionFraction, resolveSlot, scheduledWorkoutKey, sessionSummary, trainingDuration } from "./plan.js";

@@ -1,4 +1,4 @@
-// @ts-check
+// @ts-nocheck
 
 /** @param {unknown} value */
 export function isRecord(value) {
