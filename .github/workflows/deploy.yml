@@ -58,3 +58,9 @@ jobs:
               echo "- Wrangler deployment URL: $DEPLOYMENT_URL"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify production hostname
+        run: |
+          response="$(curl --fail --silent --show-error --retry 3 --retry-delay 2 https://workout.lagrangee.xyz/healthz)"
+          echo "$response" | grep -F '"ok":true' >/dev/null
+          echo "- Health check: https://workout.lagrangee.xyz/healthz" >> "$GITHUB_STEP_SUMMARY"

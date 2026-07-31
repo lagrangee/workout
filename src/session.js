@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { addDays, deepClone, isValidUtcInstant, localDate, opaqueKey } from "./util.js";
+import { addDays, deepClone, isRecord, isValidUtcInstant, localDate, opaqueKey } from "./util.js";
 import { completionFraction, resolveSlot, scheduledWorkoutKey, sessionSummary, trainingDuration } from "./plan.js";
 import { validateSessionRecord } from "./validation.js";
 
@@ -92,7 +92,7 @@ export function replaceRecord(state, session, record, now, mode = "replace") {
   if (session.status === "skipped") {
     if (record.completion_results.length || record.training_intervals.length || record.session_rpe !== null || record.exercise_feedback.length) return { error: { code: "invalid_skipped_record", message: "A skipped Session can only correct its note and skip reason until restart" } };
   }
-  const targetMode = session.status === "in_progress" ? "in_progress" : "terminal";
+  const targetMode = session.status === "skipped" ? "skipped" : session.status === "in_progress" ? "in_progress" : "terminal";
   const errors = validateSessionRecord(record, session, now.toISOString(), targetMode);
   if (errors.length) return { error: { code: "invalid_session_record", message: "The Session Record is invalid", details: errors } };
   if (session.status === "in_progress") {
@@ -123,8 +123,8 @@ export function endSession(state, sessionKey, payload, now) {
   if (difference > 5 * 60 * 1000) return { error: { code: "invalid_request", message: "ended_at cannot be more than five minutes in the future" } };
   const open = session.training_intervals.find((interval) => interval.ended_at === null);
   if (!open || Date.parse(payload.ended_at) <= Date.parse(open.started_at)) return { error: { code: "invalid_session_record", message: "ended_at must close the open interval" } };
+  if (!isRecord(payload.record) || !Array.isArray(payload.record.training_intervals)) return { error: { code: "invalid_session_record", message: "End requires the complete Session Record" } };
   const proposed = deepClone(payload.record);
-  if (!proposed || !Array.isArray(proposed.training_intervals)) return { error: { code: "invalid_session_record", message: "End requires the complete Session Record" } };
   const proposedOpen = proposed.training_intervals.find((interval) => interval.interval_key === open.interval_key);
   if (!proposedOpen) return { error: { code: "invalid_session_record", message: "End record must include the open interval" } };
   proposedOpen.ended_at = payload.ended_at;

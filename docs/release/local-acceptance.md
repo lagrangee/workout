@@ -1,0 +1,25 @@
+# Local release acceptance receipt
+
+Date: 2026-07-31
+
+## Passed locally
+
+- `npm run typecheck`
+- `npm test` — 12 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, and app shell.
+- `node --check src/worker.js`
+- `node --check public/app.js`
+- `npm run forbidden-scan`
+- `npm run seed:verify` — seed validation/preview/apply/read-back fixture passed with 9/10/9/0/6/6/0 Completion Item counts.
+- `npm run release-check`
+- 375×812 in-app browser observation: Today state rendered, mobile navigation opened the read-only Plan view, and the Plan view exposed no manual editor.
+
+## Evidence boundary
+
+The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql`, `migrations/0002_state_revision.sql`, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
+
+## Still blocked
+
+- Ticket 24 requires owner-controlled Cloudflare Zero Trust, Access audience/default-deny, custom-hostname bypass, quota, log/trace, and synthetic D1 Time Travel evidence; no live account mutation or production deployment was authorized in this task.
+- Ticket 25 still depends on ticket 26's private GitHub/Actions and default-branch auto-deploy evidence; the workflow is wired locally, but repository visibility, secrets, workflow success, and deploy route evidence are not available here.
+- Ticket 27's selected Athlete is fixture-only; no production Athlete or seed artifact was mutated. Production seed execution still requires the blocked 24/26 environment evidence.
+- Full browser execution/continuation smoke needs the production-candidate runtime or a browser-connected local API fixture; the local HTTP seam covers those behaviors, while the browser observation is limited to the available local page/navigation surface.

@@ -264,8 +264,15 @@ export function validateSessionRecord(record, session, now, mode = "replace") {
     const previous = record.training_intervals[index - 1]; const current = record.training_intervals[index];
     if (isValidUtcInstant(previous.ended_at) && isValidUtcInstant(current.started_at) && Date.parse(current.started_at) < Date.parse(previous.ended_at)) errors.push(`/training_intervals/${index}: intervals overlap or are out of order`);
   }
-  if (mode === "in_progress" && openCount !== 1) errors.push("/training_intervals: in-progress record needs exactly one open interval");
-  if (mode === "terminal" && openCount !== 0) errors.push("/training_intervals: terminal record cannot have an open interval");
+  for (const [index, result] of record.completion_results.entries()) {
+    if (!isValidUtcInstant(result.completed_at)) continue;
+    const completedAt = Date.parse(result.completed_at);
+    const insideInterval = record.training_intervals.some((interval) => isValidUtcInstant(interval.started_at) && completedAt >= Date.parse(interval.started_at) && (interval.ended_at === null || (isValidUtcInstant(interval.ended_at) && completedAt <= Date.parse(interval.ended_at))));
+    if (!insideInterval) errors.push(`/completion_results/${index}/completed_at: must fall inside a Session interval`);
+  }
+  if (mode === "in_progress" && (openCount !== 1 || record.training_intervals.at(-1)?.ended_at !== null)) errors.push("/training_intervals: in-progress record needs exactly one open interval last");
+  if (mode === "terminal" && (openCount !== 0 || record.training_intervals.length === 0)) errors.push("/training_intervals: terminal record needs at least one closed interval");
+  if (mode === "skipped" && (record.training_intervals.length !== 0 || record.completion_results.length !== 0 || openCount !== 0)) errors.push("/training_intervals: skipped record cannot contain training intervals or results");
   if (record.session_rpe !== null && (!Number.isInteger(record.session_rpe) || record.session_rpe < 0 || record.session_rpe > 10)) errors.push("/session_rpe: must be null or 0-10");
   if (mode === "in_progress" && record.session_rpe !== null) errors.push("/session_rpe: must be null while in progress");
   if (mode === "in_progress" && record.skip_reason !== null) errors.push("/skip_reason: must be null while in progress");

@@ -22,19 +22,22 @@ async function route(request, env, getStore, ctx) {
   const url = new URL(request.url);
   if (env.ENVIRONMENT === "production" && env.PRODUCTION_HOST && url.hostname !== env.PRODUCTION_HOST) return textResponse("Not found", 404);
   if (url.pathname === "/healthz") return jsonResponse({ ok: true, service: "workout-tracker" });
-  if (url.pathname === "/api/coach/v1/schemas" && request.method === "GET") return jsonResponse({ schema_version: 1, generated_at: new Date().toISOString(), schemas: ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error"].map((name) => ({ name, href: `/api/coach/v1/schemas/${name}`, json_schema_draft: "2020-12" })) });
-  if (url.pathname.startsWith("/api/coach/v1/schemas/") && request.method === "GET") {
+  if (url.pathname === "/api/coach/v1/schemas" && (request.method === "GET" || request.method === "HEAD")) return maybeHead(jsonResponse({ schema_version: 1, generated_at: new Date().toISOString(), schemas: ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error"].map((name) => ({ name, href: `/api/coach/v1/schemas/${name}`, json_schema_draft: "2020-12" })) }), request);
+  if (url.pathname.startsWith("/api/coach/v1/schemas/") && (request.method === "GET" || request.method === "HEAD")) {
     const schema = schemaResource(url.pathname.split("/").at(-1));
-    return schema ? new Response(JSON.stringify(schema, null, 2), { status: 200, headers: securityHeaders("application/schema+json") }) : jsonError("not_found", "Schema not found", [], 404);
+    return schema ? maybeHead(new Response(JSON.stringify(schema, null, 2), { status: 200, headers: securityHeaders("application/schema+json") }), request) : jsonError("not_found", "Schema not found", [], 404);
   }
   if (url.pathname.startsWith("/coach/") || url.pathname.startsWith("/api/coach/v1/")) return coachRoute(request, env, getStore, url);
-  if (url.pathname === "/" || url.pathname === "/app" || url.pathname.startsWith("/assets/")) return staticRoute(request, env);
+  if (url.pathname === "/" || url.pathname === "/app" || url.pathname.startsWith("/assets/") || url.pathname.endsWith(".js") || url.pathname.endsWith(".css")) return staticRoute(request, env);
   if (url.pathname.startsWith(PRIVATE_PREFIX)) return privateRoute(request, env, getStore, url);
   return textResponse("Not found", 404);
 }
 
 async function staticRoute(request, env) {
-  if (env.ASSETS?.fetch) return env.ASSETS.fetch(request);
+  if (env.ASSETS?.fetch) {
+    const response = await env.ASSETS.fetch(request);
+    return new Response(request.method === "HEAD" ? null : response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...securityHeaders(response.headers.get("content-type") ?? "text/html; charset=utf-8", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") } });
+  }
   const path = new URL(request.url).pathname;
   if (path.endsWith(".css")) return new Response("", { headers: securityHeaders("text/css; charset=utf-8") });
   if (path.endsWith(".js")) return new Response("", { headers: securityHeaders("text/javascript; charset=utf-8") });
@@ -45,17 +48,20 @@ async function coachRoute(request, env, getStore, url) {
   const match = url.pathname.match(/^\/api\/coach\/v1\/([^/]+)(.*)$/);
   const readmeMatch = url.pathname.match(/^\/coach\/([^/]+)$/);
   const token = match?.[1] ?? readmeMatch?.[1];
-  if (!token || request.method !== "GET") return publicNotFound();
+  if (!token) return publicNotFound();
+  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...securityHeaders("text/plain; charset=utf-8"), Allow: "GET, HEAD" } });
   const store = await getStore();
   const state = await findShare(await store.all(), token, env);
   if (!state) return publicNotFound();
   const now = new Date();
-  if (readmeMatch) return new Response(coachReadme(state, now), { status: 200, headers: securityHeaders("text/markdown; charset=utf-8") });
+  const limited = await coachRateLimit(env, state, now);
+  if (limited) return maybeHead(limited, request);
+  if (readmeMatch) return maybeHead(new Response(coachReadme(state, now), { status: 200, headers: securityHeaders("text/markdown; charset=utf-8") }), request);
   const suffix = match[2] || "";
   const manifest = suffix === "" ? coachManifest(state, now) : coachResource(state, suffix, url, now);
   if (suffix === "" && !manifest.error) manifest.links = { overview: `${url.origin}/api/coach/v1/${token}/overview`, plan: `${url.origin}/api/coach/v1/${token}/plan`, schedule: `${url.origin}/api/coach/v1/${token}/schedule`, sessions: `${url.origin}/api/coach/v1/${token}/sessions`, progress: `${url.origin}/api/coach/v1/${token}/progress`, exercise: `${url.origin}/api/coach/v1/${token}/exercises/{exercise_key}`, schemas: `${url.origin}/api/coach/v1/schemas` };
-  if (manifest?.error) return jsonError(manifest.error.code, manifest.error.message, manifest.error.details ?? [], errorStatus(manifest.error.code));
-  return jsonResponse(manifest);
+  if (manifest?.error) return coachJsonError(manifest.error.code, manifest.error.message, manifest.error.details ?? [], errorStatus(manifest.error.code), now);
+  return maybeHead(jsonResponse(manifest), request);
 }
 
 async function privateRoute(request, env, getStore, url) {
@@ -67,7 +73,10 @@ async function privateRoute(request, env, getStore, url) {
   state.idempotency_records ??= [];
   const now = new Date();
   const path = url.pathname;
-  if (request.method === "GET") return privateGet(state, path, url, now, env);
+  if (request.method === "GET") {
+    try { return await privateGet(state, path, url, now, env); }
+    catch (error) { if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "The requested capability is not configured", [], 503); throw error; }
+  }
   if (request.method === "PUT" || request.method === "POST" || request.method === "DELETE") return privateMutation(request, env, store, state, path, url, now);
   return jsonError("method_not_allowed", "Method not allowed", [], 405);
 }
@@ -76,7 +85,7 @@ async function privateGet(state, path, url, now, env) {
   if (path === "/api/private/me") return jsonResponse({ athlete_key: state.athlete_key, display_name: state.display_name, timezone: state.timezone });
   if (path === "/api/private/today") return jsonResponse(todayModel(state, now));
   if (path === "/api/private/plan") return jsonResponse(planModel(state, now));
-  if (path === "/api/private/schedule") { const entries = scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now); return jsonResponse({ timezone: state.timezone, from: entries[0]?.date ?? null, to: entries.at(-1)?.date ?? null, entries }); }
+  if (path === "/api/private/schedule") { const result = scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse({ timezone: state.timezone, from: result[0]?.date ?? null, to: result.at(-1)?.date ?? null, entries: result }); }
   if (path === "/api/private/sessions") return listPrivateSessions(state, url);
   if (path.startsWith("/api/private/sessions/")) { const session = findSession(state, path.split("/").at(-1)); return session ? jsonResponse(sessionDetail(session)) : jsonError("not_found", "Session not found", [], 404); }
   if (path === "/api/private/progress") { const result = progressModel(state, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }
@@ -88,8 +97,11 @@ async function privateGet(state, path, url, now, env) {
 
 async function privateMutation(request, env, store, originalState, path, url, now) {
   const rawBody = await request.text();
-  const state = originalState;
-  const mutation = async () => {
+  const execute = async (transactionStore) => {
+    const state = transactionStore === store ? originalState : await transactionStore.getByEmail(originalState.email);
+    if (!state) return jsonError("forbidden", "Identity is not configured", [], 403);
+    state.idempotency_records ??= [];
+    const mutation = async () => {
     if (request.method === "PUT" && path === "/api/private/settings") return updateSettings(state, rawBody, now);
     if (request.method === "POST" && path === "/api/private/plan-updates/validate") return validatePlanUpdate(state, rawBody, now);
     if (request.method === "POST" && path === "/api/private/plan-updates/apply") return applyPlanUpdate(state, rawBody, now);
@@ -100,26 +112,34 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (request.method === "POST" && path === "/api/private/coach-share/regenerate") return shareCommand(state, env, now, true);
     if (request.method === "DELETE" && path === "/api/private/coach-share") { if (state.coach_share) { state.coach_share.revoked_at = now.toISOString(); state.training_version += 1; } return { body: { active: false, revoked: true }, status: 200, persist: true }; }
     return { body: { error: { code: "not_found", message: "Resource not found", details: [] } }, status: 404, persist: false };
+    };
+    const requiresKey = request.method === "POST" && path !== "/api/private/plan-updates/validate";
+    if (!requiresKey) {
+      const result = await mutation(); if (result.persist !== false) await transactionStore.save(state); return responseFromResult(result);
+    }
+    const key = request.headers.get("Idempotency-Key");
+    if (!key || key.length > 200) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
+    const digest = await sha256Hex(rawBody);
+    const existing = state.idempotency_records.find((record) => record.key === key && record.method === request.method && record.path === path && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+    if (existing) {
+      if (existing.body_digest !== digest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
+      return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
+    }
+    const result = await mutation();
+    if (result.persist !== false) await transactionStore.save(state);
+    const response = responseFromResult(result);
+    state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+    state.idempotency_records.push({ key, method: request.method, path, body_digest: digest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
+    await transactionStore.save(state);
+    return response;
   };
-  const requiresKey = request.method === "POST" && path !== "/api/private/plan-updates/validate";
-  if (!requiresKey) {
-    const result = await mutation(); if (result.persist !== false) await store.save(state); return responseFromResult(result);
+  try {
+    return store.transaction ? await store.transaction(execute) : await execute(store);
+  } catch (error) {
+    if (error?.code === "D1_CONCURRENCY_CONFLICT") return jsonError("session_state_conflict", "The Athlete state changed concurrently; retry the mutation", [], 409);
+    if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "The requested capability is not configured", [], 503);
+    throw error;
   }
-  const key = request.headers.get("Idempotency-Key");
-  if (!key || key.length > 200) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
-  const digest = await sha256Hex(rawBody);
-  const existing = state.idempotency_records.find((record) => record.key === key && record.method === request.method && record.path === path && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
-  if (existing) {
-    if (existing.body_digest !== digest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
-    return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
-  }
-  const result = await mutation();
-  if (result.persist !== false) await store.save(state);
-  const response = responseFromResult(result);
-  state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
-  state.idempotency_records.push({ key, method: request.method, path, body_digest: digest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
-  await store.save(state);
-  return response;
 }
 
 function updateSettings(state, rawBody, now) {
@@ -186,7 +206,7 @@ function exportResponse(state, now) {
 
 async function authenticate(request, env) {
   const testEmail = request.headers.get("x-athlete-email") ?? request.headers.get("x-test-athlete-email");
-  if (testEmail && env.ENVIRONMENT !== "production" && env.LOCAL_AUTH !== "false") return { email: normalizeEmail(testEmail) };
+  if (testEmail && env.LOCAL_AUTH === "true") return { email: normalizeEmail(testEmail) };
   const token = request.headers.get("CF-Access-Jwt-Assertion");
   if (!token) return { error: { code: "unauthorized", message: "A valid Access assertion is required", status: 401 } };
   const claims = await verifyAccessJwt(token, env);
@@ -200,15 +220,16 @@ async function verifyAccessJwt(token, env) {
     const [encodedHeader, encodedPayload, encodedSignature] = token.split("."); if (!encodedHeader || !encodedPayload || !encodedSignature) return null;
     const header = JSON.parse(new TextDecoder().decode(decodePart(encodedHeader))); const claims = JSON.parse(new TextDecoder().decode(decodePart(encodedPayload))); const now = Math.floor(Date.now() / 1000);
     const issuer = env.ACCESS_ISSUER; const audience = env.ACCESS_AUDIENCE;
-    if (issuer && claims.iss !== issuer) return null;
-    if (audience && !(Array.isArray(claims.aud) ? claims.aud.includes(audience) : claims.aud === audience)) return null;
+    if (typeof issuer !== "string" || !issuer || typeof audience !== "string" || !audience) return null;
+    if (claims.iss !== issuer) return null;
+    if (!(Array.isArray(claims.aud) ? claims.aud.includes(audience) : claims.aud === audience)) return null;
     if (typeof claims.exp !== "number" || claims.exp <= now || (claims.nbf !== undefined && claims.nbf > now + 60)) return null;
     const data = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`); const signature = decodePart(encodedSignature);
     if (env.ACCESS_JWT_SECRET) {
       const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.ACCESS_JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
       return await crypto.subtle.verify("HMAC", key, signature, data) ? claims : null;
     }
-    if (!env.ACCESS_JWKS) return env.ENVIRONMENT === "production" ? null : claims;
+    if (!env.ACCESS_JWKS) return null;
     const jwks = typeof env.ACCESS_JWKS === "string" ? JSON.parse(env.ACCESS_JWKS) : env.ACCESS_JWKS; const jwk = jwks.keys.find((key) => key.kid === header.kid); if (!jwk) return null;
     const algorithm = header.alg === "ES256" ? { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } : { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
     const key = await crypto.subtle.importKey("jwk", jwk, algorithm, false, ["verify"]);
@@ -223,8 +244,19 @@ function jsonResponse(body, status = 200) { return new Response(JSON.stringify(b
 function textResponse(body, status = 200) { return new Response(body, { status, headers: securityHeaders("text/plain; charset=utf-8") }); }
 function publicNotFound() { return new Response("Not found", { status: 404, headers: securityHeaders("text/plain; charset=utf-8") }); }
 function jsonError(code, message, details = [], status = 400) { return jsonResponse(errorBody(code, message, details), status); }
+function coachJsonError(code, message, details = [], status = 400, now = new Date()) { const response = jsonResponse({ schema_version: 1, generated_at: now.toISOString(), error: { code, message, details } }, status); if (status === 429) response.headers.set("Retry-After", "60"); return response; }
+async function coachRateLimit(env, state, now) {
+  if (!env.COACH_RATE_LIMITER?.limit) return null;
+  try {
+    const result = await env.COACH_RATE_LIMITER.limit({ key: state.coach_share.token_digest });
+    return result?.success === false ? coachJsonError("rate_limited", "Coach Share request limit exceeded", [], 429, now) : null;
+  } catch {
+    return null;
+  }
+}
 function errorBody(code, message, details) { return { error: { code, message, details } }; }
 function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "timezone_revision_boundary"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
-function securityHeaders(contentType) { return { "Content-Type": contentType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
+function securityHeaders(contentType, csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") { return { "Content-Type": contentType, "Cache-Control": "no-store", "CDN-Cache-Control": "no-store", "Content-Security-Policy": csp, "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
+function maybeHead(response, request) { return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response; }
 
 const FALLBACK_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workout Tracker</title><style>body{font-family:system-ui;background:#f6f1e8;color:#26231f;margin:0}main{max-width:760px;margin:auto;padding:36px 22px}nav{display:flex;gap:16px;border-top:1px solid #e6ddd0;padding-top:20px;margin-top:40px}a{color:#a8432c}</style></head><body><main id="app"><p>WORKOUT TRACKER</p><h1>你的训练，今天就从这里开始。</h1><p>在线、移动优先的训练计划与 Session 记录。</p><nav aria-label="主导航"><a href="/app">今日</a><a href="/app#plan">计划</a><a href="/app#progress">进展</a><a href="/app#coach">教练</a><a href="/app#settings">设置</a></nav></main></body></html>`;

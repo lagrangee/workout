@@ -22,7 +22,7 @@ function exportSchedule(state, date, now) {
   const entry = scheduleEntry(state, date, now);
   if (entry.kind === "no_plan") return null;
   const revision = effectiveRevision(state, date);
-  return { scheduled_workout_key: entry.scheduled_workout_key ?? `sw_${state.athlete_key}_${date}`, scheduled_date: date, kind: entry.kind, revision_key: revision.revision_key, prescription: entry.kind === "workout" ? deepClone(entry.prescription) : null, session_key: entry.session_key };
+  return { scheduled_workout_key: entry.scheduled_workout_key ?? `sw_${state.athlete_key}_${date}`, scheduled_date: date, kind: entry.kind, revision_key: revision.revision_key, prescription: entry.kind === "workout" ? deepClone(entry.prescription) : null, session_key: entry.session_key, is_overdue_unstarted: entry.is_overdue_unstarted };
 }
 
 /** @param {any} session */
