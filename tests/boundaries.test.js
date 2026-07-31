@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addDays, localDate } from "../src/util.js";
+import { addDays, localDate, weekdayKey, WEEKDAYS } from "../src/util.js";
+import { scheduleEntry, todayModel } from "../src/plan.js";
 import { appFixture, call, packageText, post, today, workout } from "./helpers.js";
 
 test("ticket 25 boundaries: future and current unstarted workouts are not due", async () => {
@@ -18,6 +19,39 @@ test("ticket 25 boundaries: later-confirmed earlier revision masks older future 
   assert.equal((await call(handler, "/api/private/plan-updates/apply", post({ package_text: earlier }, "future-new"))).response.status, 201);
   const plan = await call(handler, "/api/private/plan");
   assert.equal(plan.body.future.length, 1); assert.equal(plan.body.future[0].effective_from, addDays(today, 2));
+});
+
+test("Calendar boundaries: pre-plan dates stay no-plan and midweek revisions win on their effective date", async () => {
+  const { handler, store } = appFixture();
+  const state = await store.getByEmail("athlete-a@example.invalid");
+  const firstPlanDate = state.plan_revisions[0].effective_from;
+  const beforeFirst = await call(handler, `/api/private/schedule?from=${addDays(firstPlanDate, -1)}&to=${addDays(firstPlanDate, -1)}`);
+  assert.equal(beforeFirst.response.status, 200);
+  assert.equal(beforeFirst.body.entries[0].kind, "no_plan");
+
+  const effectiveFrom = addDays(today, 2);
+  const nextWeek = Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
+  nextWeek[weekdayKey(effectiveFrom)] = workout("midweek boundary");
+  const applied = await call(handler, "/api/private/plan-updates/apply", post({ package_text: JSON.stringify({ schema_version: 1, effective_from: effectiveFrom, week: nextWeek }) }, "calendar-boundary"));
+  assert.equal(applied.response.status, 201);
+  const beforeRevision = await call(handler, `/api/private/schedule?from=${addDays(effectiveFrom, -1)}&to=${addDays(effectiveFrom, -1)}`);
+  const afterRevision = await call(handler, `/api/private/schedule?from=${effectiveFrom}&to=${effectiveFrom}`);
+  assert.notEqual(beforeRevision.body.entries[0].revision_key, afterRevision.body.entries[0].revision_key);
+  assert.equal(afterRevision.body.entries[0].title, "midweek boundary");
+});
+
+test("Calendar boundaries: Athlete-local timezone changes the dated projection boundary", async () => {
+  const { store } = appFixture();
+  const state = await store.getByEmail("athlete-a@example.invalid");
+  const instant = new Date("2026-07-31T23:30:00.000Z");
+  state.timezone = "UTC";
+  const utc = todayModel(state, instant);
+  state.timezone = "Asia/Shanghai";
+  const shanghai = todayModel(state, instant);
+  assert.equal(utc.date, localDate(instant, "UTC"));
+  assert.equal(shanghai.date, localDate(instant, "Asia/Shanghai"));
+  assert.notEqual(utc.date, shanghai.date);
+  assert.equal(scheduleEntry(state, shanghai.date, instant).date, shanghai.date);
 });
 
 test("ticket 25 boundaries: public schemas and private/Coach responses carry cache and referrer protections", async () => {

@@ -48,6 +48,10 @@ _Avoid_: Web plan edit, AI-generated in App, patch request
 The deterministic Athlete-local date projection of the Weekly Template applicable on that date. It describes prescribed intent, may be a workout or Rest Day, and never owns execution state.
 _Avoid_: Workout record, completed workout
 
+**Calendar**:
+The authenticated, read-only date-browsing surface over an Athlete's Scheduled Workouts and Workout Sessions. It starts at the first effective Plan Revision date, reads one Athlete-local week at a time, and joins Session summaries by `session_key`; it never creates or executes a Session. Historical completed, partial, and skipped Sessions may expose the existing correction flow as a secondary action.
+_Avoid_: Plan editor, execution surface, synthetic history
+
 **Exercise**:
 A planned movement identified across Plan Revisions by an Athlete-scoped stable key. Its display name may change without starting a new exercise history; changing the key creates a distinct Exercise.
 _Avoid_: Database ID, display name

@@ -23,3 +23,183 @@
   font-size: 13px;
   font-weight: 700;
 }
+
+.calendar-head {
+  padding-bottom: 18px;
+}
+
+.calendar-week-controls {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.calendar-week-controls strong {
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.calendar-week-controls button {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.calendar-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.calendar-day {
+  min-width: 0;
+  min-height: 112px;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 10px 8px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+  text-align: left;
+}
+
+.calendar-day:hover,
+.calendar-day.selected {
+  border-color: var(--accent);
+  box-shadow: 0 8px 20px rgba(214, 93, 63, .12);
+}
+
+.calendar-day:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+  box-shadow: none;
+}
+
+.calendar-day-label,
+.calendar-day-date {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.calendar-day-date {
+  font-weight: 800;
+}
+
+.calendar-day-summary {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+}
+
+.calendar-day-meta {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.calendar-detail {
+  margin: 18px 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.calendar-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: start;
+}
+
+.calendar-detail-head h2 {
+  margin-bottom: 4px;
+}
+
+.calendar-source {
+  display: grid;
+  gap: 3px;
+  margin: 18px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f7eee5;
+  font-size: 12px;
+}
+
+.calendar-source span,
+.calendar-source small {
+  color: var(--muted);
+}
+
+.calendar-session-summary {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.calendar-session-summary p {
+  margin-bottom: 0;
+}
+
+.calendar-prescription h3 {
+  margin: 24px 0 8px;
+}
+
+.prescription-block {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.prescription-block h4 {
+  margin: 0 0 10px;
+}
+
+.prescription-exercise {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+}
+
+.prescription-set {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fbf7f0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.prescription-set small.actual {
+  color: var(--green);
+  font-weight: 750;
+}
+
+.prescription-set small.unfinished {
+  color: #9f5b4b;
+}
+
+.compact-loading {
+  padding: 10vh 0;
+}
+
+@media (max-width: 520px) {
+  .calendar-week {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .calendar-day {
+    min-height: 104px;
+  }
+}

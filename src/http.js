@@ -97,7 +97,12 @@ async function privateGet(state, path, url, now, env) {
     const week = current?.week ?? Object.fromEntries(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((day) => [day, null]));
     return jsonResponse({ schema_version: 1, effective_from: current?.effective_from ?? addDays(localDate(now, state.timezone), 1), week });
   }
-  if (path === "/api/private/schedule") { const result = scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse({ timezone: state.timezone, from: result[0]?.date ?? null, to: result.at(-1)?.date ?? null, entries: result }); }
+  if (path === "/api/private/schedule") {
+    const expandValue = url.searchParams.get("expand");
+    if (expandValue && expandValue !== "prescription") return jsonError("invalid_request", "expand must be prescription", [], 400);
+    const result = scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now, expandValue === "prescription");
+    return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse({ timezone: state.timezone, from: result[0]?.date ?? null, to: result.at(-1)?.date ?? null, entries: result });
+  }
   if (path === "/api/private/sessions") return listPrivateSessions(state, url);
   if (path.startsWith("/api/private/sessions/")) { const session = findSession(state, path.split("/").at(-1)); return session ? jsonResponse(sessionDetail(session)) : jsonError("not_found", "Session not found", [], 404); }
   if (path === "/api/private/progress") { const result = progressModel(state, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }
