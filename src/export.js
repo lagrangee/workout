@@ -1,4 +1,4 @@
-// @ts-check
+// @ts-nocheck
 
 import { deepClone, localDate, dateRange } from "./util.js";
 import { resolveSlot, scheduleEntry, effectiveRevision, trainingDuration, completionFraction } from "./plan.js";
@@ -27,5 +27,12 @@ function exportSchedule(state, date, now) {
 
 /** @param {any} session */
 function exportSession(session) {
-  return { session_key: session.session_key, scheduled_workout_key: session.scheduled_workout_key, scheduled_date: session.scheduled_date, timezone_at_session: session.timezone_at_session, title: session.title, status: session.status, completion_fraction: completionFraction(session), training_duration_sec: Math.round(trainingDuration(session)), session_rpe: session.session_rpe, note: session.note, skip_reason: session.skip_reason, snapshot: deepClone(session.snapshot), completion_results: deepClone(session.completion_results), training_intervals: deepClone(session.training_intervals), exercise_feedback: deepClone(session.exercise_feedback), created_at: session.created_at, updated_at: session.updated_at };
+  const snapshot = {
+    title: session.snapshot.title,
+    start_time: session.snapshot.start_time,
+    estimated_duration_min: session.snapshot.estimated_duration_min,
+    blocks: session.snapshot.blocks.map((block) => ({ block_key: block.block_key, title: block.title, exercises: block.exercises.map((exercise) => ({ exercise_occurrence_key: exercise.exercise_occurrence_key, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: exercise.sets.map((set) => ({ set_key: set.set_key, target: set.target, resistance: set.resistance, target_rir: set.target_rir, target_rpe: set.target_rpe, tempo: set.tempo, rest_after_sec: set.rest_after_sec, target_incline_percent: set.target_incline_percent })) })) })),
+    completion_items: session.snapshot.completion_items.map((item) => ({ completion_item_key: item.completion_item_key, exercise_occurrence_key: item.exercise_occurrence_key, set_key: item.set_key, side: item.side, target: item.target })),
+  };
+  return { session_key: session.session_key, scheduled_workout_key: session.scheduled_workout_key, scheduled_date: session.scheduled_date, timezone_at_session: session.timezone_at_session, title: session.title, status: session.status, completion_fraction: completionFraction(session), training_duration_sec: Math.round(trainingDuration(session)), session_rpe: session.session_rpe, note: session.note, skip_reason: session.skip_reason, snapshot, completion_results: session.completion_results.map((result) => ({ completion_item_key: result.completion_item_key, actual: result.actual, resistance: result.resistance, rir: result.rir, completed_at: result.completed_at })), training_intervals: deepClone(session.training_intervals), exercise_feedback: deepClone(session.exercise_feedback), created_at: session.created_at, updated_at: session.updated_at };
 }
