@@ -69,17 +69,17 @@ export function scheduledWorkoutKey(state, date) {
   return revision && slot ? `sw_${state.athlete_key}_${date}` : null;
 }
 
-/** @param {any} state @param {string} date @param {Date} now */
-export function scheduleEntry(state, date, now = new Date()) {
+/** @param {any} state @param {string} date @param {Date} now @param {boolean} includePrescription @returns {any} */
+export function scheduleEntry(state, date, now = new Date(), includePrescription = true) {
   const { revision, slot } = resolveSlot(state, date);
   const session = state.sessions.find(/** @param {any} item */ (item) => item.scheduled_date === date) ?? null;
   if (!revision || slot === null) return {
-    date, weekday: weekdayKey(date), kind: "no_plan", title: null, estimated_duration_min: null,
+    date, weekday: weekdayKey(date), kind: "no_plan", title: null, module_count: null, estimated_duration_min: null,
     prescription_ref: null, scheduled_workout_key: null, session_key: null,
     is_due: false, is_overdue_unstarted: false, source_ref: `schedule:${date}:no_plan`, revision_key: null,
   };
   if (slot.kind === "rest") return {
-    date, weekday: weekdayKey(date), kind: "rest", title: null, estimated_duration_min: null,
+    date, weekday: weekdayKey(date), kind: "rest", title: null, module_count: null, estimated_duration_min: null,
     prescription_ref: null, scheduled_workout_key: null, session_key: null,
     is_due: false, is_overdue_unstarted: false, source_ref: `schedule:${date}:rest`, revision_key: revision.revision_key,
   };
@@ -87,14 +87,16 @@ export function scheduleEntry(state, date, now = new Date()) {
   const isToday = date === currentDate;
   const isPast = date < currentDate;
   const isDue = Boolean(session) || isPast;
-  return {
-    date, weekday: weekdayKey(date), kind: "workout", title: slot.title, estimated_duration_min: slot.estimated_duration_min,
+  /** @type {any} */
+  const entry = {
+    date, weekday: weekdayKey(date), kind: "workout", title: slot.title, module_count: slot.blocks.length, estimated_duration_min: slot.estimated_duration_min,
     prescription_ref: `prescription:${revision.revision_key}:${weekdayKey(date)}`, scheduled_workout_key: scheduledWorkoutKey(state, date),
     session_key: session?.session_key ?? null,
     is_due: isDue, is_overdue_unstarted: isPast && !session,
     source_ref: `schedule:${date}:${revision.revision_key}`, revision_key: revision.revision_key,
-    prescription: deepClone(slot),
   };
+  if (includePrescription) entry.prescription = deepClone(slot);
+  return entry;
 }
 
 /** @param {any} state @param {Date} now */
@@ -138,6 +140,7 @@ export function sessionSummary(session) {
 export function planModel(state, now = new Date()) {
   const today = localDate(now, state.timezone);
   const current = effectiveRevision(state, today);
+  const firstEffective = state.plan_revisions.slice().sort(/** @param {any} left @param {any} right */ (left, right) => left.effective_from.localeCompare(right.effective_from))[0] ?? null;
   const future = state.plan_revisions
     .filter(/** @param {any} revision */ (revision) => revision.effective_from > today && effectiveRevision(state, revision.effective_from)?.revision_key === revision.revision_key)
     .sort(/** @param {any} left @param {any} right */ (left, right) => left.effective_from.localeCompare(right.effective_from))
@@ -146,19 +149,20 @@ export function planModel(state, now = new Date()) {
     current: current ? { effective_from: current.effective_from, week: deepClone(current.week) } : null,
     future,
     next_effective_from: future[0]?.effective_from ?? null,
+    first_effective_from: firstEffective?.effective_from ?? null,
     pending_count: future.length,
     timezone: state.timezone,
   };
 }
 
-/** @param {any} state @param {string|undefined} from @param {string|undefined} to @param {Date} now */
-export function scheduleModel(state, from, to, now = new Date()) {
+/** @param {any} state @param {string|undefined} from @param {string|undefined} to @param {Date} now @param {boolean} includePrescription */
+export function scheduleModel(state, from, to, now = new Date(), includePrescription = false) {
   const today = localDate(now, state.timezone);
   const start = from ?? addDays(today, -6);
   const end = to ?? today;
   const span = dateSpan(start, end);
   if (span === null || span > 366) return { error: { code: "invalid_period", message: "Schedule requires a valid inclusive range of at most 366 days" } };
-  return dateRange(start, end).map((date) => scheduleEntry(state, date, now));
+  return dateRange(start, end).map((date) => scheduleEntry(state, date, now, includePrescription));
 }
 
 /** @param {any} state @param {any} packageValue @param {Date} now */

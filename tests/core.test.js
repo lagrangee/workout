@@ -24,10 +24,42 @@ test("ticket 16: private identity is isolated and settings are validated", async
 
 test("ticket 17: plan and dated schedule are read-only projections", async () => {
   const { handler } = appFixture();
-  const plan = await call(handler, "/api/private/plan"); assert.equal(plan.response.status, 200); assert.equal(plan.body.current.week[weekdayKey(today)].kind, "workout");
+  const plan = await call(handler, "/api/private/plan"); assert.equal(plan.response.status, 200); assert.equal(plan.body.current.week[weekdayKey(today)].kind, "workout"); assert.equal(plan.body.first_effective_from <= today, true);
   const schedule = await call(handler, `/api/private/schedule?from=${today}&to=${today}`); assert.equal(schedule.body.entries[0].date, today); assert.equal(schedule.body.entries[0].kind, "workout");
   const rest = await call(handler, `/api/private/schedule?from=${addDays(today, 1)}&to=${addDays(today, 1)}`); assert.equal(rest.body.entries[0].kind, "rest");
   const noPlan = await call(handler, `/api/private/schedule?from=${addDays(today, 2)}&to=${addDays(today, 2)}`); assert.equal(noPlan.body.entries[0].kind, "no_plan");
+});
+
+test("tickets 07-08: private Calendar reads are seven-day summary-first projections with explicit detail expansion", async () => {
+  const { handler } = appFixture();
+  const from = addDays(today, -3);
+  const to = addDays(from, 6);
+  const weekRead = await call(handler, `/api/private/schedule?from=${from}&to=${to}`);
+  assert.equal(weekRead.response.status, 200);
+  assert.equal(weekRead.body.entries.length, 7);
+  assert.equal(weekRead.body.from, from);
+  assert.equal(weekRead.body.to, to);
+  assert.equal("prescription" in weekRead.body.entries.find(/** @param {any} entry */ (entry) => entry.kind === "workout"), false);
+  assert.equal(weekRead.body.entries.find(/** @param {any} entry */ (entry) => entry.kind === "workout").module_count, 1);
+
+  const dayRead = await call(handler, `/api/private/schedule?from=${today}&to=${today}&expand=prescription`);
+  assert.equal(dayRead.response.status, 200);
+  assert.equal(dayRead.body.entries[0].prescription.title, "下肢力量");
+  assert.equal(dayRead.body.entries[0].prescription.blocks[0].exercises[0].sets[0].resistance.mode, "external_weight");
+
+  const invalidExpand = await call(handler, `/api/private/schedule?from=${today}&to=${today}&expand=unknown`);
+  assert.equal(invalidExpand.response.status, 400);
+  assert.equal(invalidExpand.body.error.code, "invalid_request");
+
+  const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "calendar-overlay"));
+  assert.equal(started.response.status, 201);
+  const joinedWeek = await call(handler, `/api/private/schedule?from=${today}&to=${today}`);
+  assert.equal(joinedWeek.body.entries[0].session_key, started.body.session_key);
+  const sessionIndex = await call(handler, `/api/private/sessions?from=${today}&to=${today}`);
+  assert.equal(sessionIndex.body.items[0].session_key, started.body.session_key);
+  const otherAthlete = await call(handler, `/api/private/schedule?from=${today}&to=${today}`, {}, "athlete-b@example.invalid");
+  assert.equal(otherAthlete.body.entries[0].kind, "no_plan");
+  assert.equal(otherAthlete.body.entries[0].session_key, null);
 });
 
 test("ticket 18: strict plan package validation and atomic future application", async () => {
@@ -54,6 +86,29 @@ test("ticket 19: start, skip replay, immutable snapshot and unilateral expansion
   const detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); assert.equal(canonicalJson(detail.body.snapshot), originalSnapshot);
 });
 
+test("ticket 09: historical skipped Session remains correctable and Calendar reads do not create records", async () => {
+  const { handler, store } = appFixture();
+  const skipped = await call(handler, `/api/private/scheduled-workouts/${today}/skip`, post({ skip_reason: "身体不适" }, "calendar-skip"));
+  assert.equal(skipped.response.status, 201);
+  assert.equal(skipped.body.status, "skipped");
+  assert.equal(skipped.body.skip_reason, "身体不适");
+  const before = await store.getByEmail("athlete-a@example.invalid");
+  const read = await call(handler, `/api/private/schedule?from=${today}&to=${today}&expand=prescription`);
+  const detail = await call(handler, `/api/private/sessions/${skipped.body.session_key}`);
+  const after = await store.getByEmail("athlete-a@example.invalid");
+  assert.equal(read.body.entries[0].session_key, skipped.body.session_key);
+  assert.equal(detail.body.skip_reason, "身体不适");
+  assert.equal(after.sessions.length, before.sessions.length);
+  assert.equal(canonicalJson(detail.body.snapshot), canonicalJson(skipped.body.snapshot));
+  const corrected = await call(handler, `/api/private/sessions/${skipped.body.session_key}/record`, json({ method: "PUT" }, { record_schema_version: 1, completion_results: [], training_intervals: [], session_rpe: null, note: "改为观察记录", exercise_feedback: [], skip_reason: "仍然不适" }));
+  assert.equal(corrected.response.status, 200);
+  assert.equal(corrected.body.status, "skipped");
+  assert.equal(corrected.body.skip_reason, "仍然不适");
+  assert.equal(corrected.body.note, "改为观察记录");
+  const other = await call(handler, `/api/private/sessions/${skipped.body.session_key}`, {}, "athlete-b@example.invalid");
+  assert.equal(other.response.status, 404);
+});
+
 /** @param {any} detail @param {number} count @param {number|null} rpe @returns {any} */
 function recordFor(detail, count = detail.snapshot.completion_items.length, rpe = null) {
   const now = new Date().toISOString();
@@ -64,6 +119,10 @@ test("tickets 19-20: record, end, continue, split intervals and terminal correct
   const { handler } = appFixture();
   const start = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "start"));
   let detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); const partialRecord = recordFor(detail.body, 1);
+  const otherAthleteDetail = await call(handler, `/api/private/sessions/${start.body.session_key}`, {}, "athlete-b@example.invalid");
+  assert.equal(otherAthleteDetail.response.status, 404);
+  const otherAthleteCorrection = await call(handler, `/api/private/sessions/${start.body.session_key}/record`, json({ method: "PUT" }, partialRecord), "athlete-b@example.invalid");
+  assert.equal(otherAthleteCorrection.response.status, 404);
   const saved = await call(handler, `/api/private/sessions/${start.body.session_key}/record`, json({ method: "PUT" }, partialRecord)); assert.equal(saved.response.status, 200);
   detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); const endedAt = new Date().toISOString(); const endedRecord = recordFor(detail.body, 1, 7); endedRecord.training_intervals[0].ended_at = endedAt;
   const ended = await call(handler, `/api/private/sessions/${start.body.session_key}/end`, post({ record: endedRecord, ended_at: endedAt }, "end")); assert.equal(ended.response.status, 200); assert.equal(ended.body.status, "partial"); assert.equal(ended.body.training_intervals[0].ended_at, endedAt);
