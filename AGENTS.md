@@ -32,3 +32,5 @@ Use concise Conventional Commit subjects such as `feat: add session record` or `
 ## Security & Agent Instructions
 
 Never commit credentials, bearer URLs, raw tokens, or personal data. Keep secrets in ignored environment files and GitHub Actions secrets. Production deploys run only from the default branch; pull requests run validation only. Treat Local Markdown as authoritative; preserve resolved decisions and update linked contracts together. See `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and `docs/agents/domain.md` before changing project records.
+
+Cloudflare/GitHub setup details live in `docs/deployment/github-actions.md`; never replace its secret names with literal values.
