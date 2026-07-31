@@ -53,6 +53,12 @@ export function dateRange(from, to) {
   return dates;
 }
 
+/** @param {string} from @param {string} to */
+export function dateSpan(from, to) {
+  if (!isValidLocalDate(from) || !isValidLocalDate(to) || from > to) return null;
+  return Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+}
+
 /** @param {string} dateText */
 export function weekdayIndex(dateText) {
   const day = new Date(`${dateText}T00:00:00Z`).getUTCDay();

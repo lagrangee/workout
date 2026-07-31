@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { addDays, dateRange, localDate, mondayOf, roundHalfUp } from "./util.js";
+import { addDays, dateRange, dateSpan, localDate, mondayOf, roundHalfUp } from "./util.js";
 import { completionFraction, scheduleEntry, sessionSummary } from "./plan.js";
 
 /** @param {any} state @param {string} from @param {string} to @param {Date} now */
@@ -66,6 +66,7 @@ export function resolvePeriod(state, now, from, to, preset) {
   if ((from || to) && preset) return { error: { code: "invalid_period", message: "preset and explicit dates are mutually exclusive" } };
   if (from && to) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return { error: { code: "invalid_period", message: "from and to must be valid inclusive local dates" } };
+    if (dateSpan(from, to) > 3660) return { error: { code: "invalid_period", message: "The selected period cannot exceed 3660 days" } };
     return { from, to };
   }
   if (preset === "7d") return { from: addDays(today, -6), to: today };
@@ -92,7 +93,7 @@ export function progressModel(state, now, from, to, preset) {
     const includedTo = period.to < weekEnd ? period.to : weekEnd;
     buckets.push({ week_start: weekStart, week_end: weekEnd, included_from: includedFrom, included_to: includedTo, metrics: makeMetric(includedFrom, includedTo) });
   }
-  const exercises = exerciseKeys(state).map((exerciseKey) => ({ exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey && session.completion_results.some((result) => result.exercise_occurrence_key === exercise.exercise_occurrence_key)))).length, detail_ref: `exercise:${exerciseKey}` }));
+  const exercises = exerciseKeys(state).map((exerciseKey) => ({ exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to && session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey && session.completion_results.some((result) => session.snapshot.completion_items.some((item) => item.completion_item_key === result.completion_item_key && item.exercise_occurrence_key === exercise.exercise_occurrence_key))))).length, detail_ref: `exercise:${exerciseKey}` }));
   return {
     metric_semantics_version: 1,
     period: { ...period, timezone: state.timezone, current_date_may_be_incomplete: period.to >= today },
@@ -123,15 +124,14 @@ export function exerciseDetail(state, exerciseKey, now, from, to, preset) {
   const matching = state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to);
   const observations = [];
   const series = { none: [], left: [], right: [] };
-  let exists = false;
+  let exists = state.sessions.some((session) => session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey)));
   for (const session of matching) {
     const occurrences = session.snapshot.blocks.flatMap((block) => block.exercises).filter((exercise) => exercise.exercise_key === exerciseKey);
     if (!occurrences.length) continue;
-    exists = true;
     const sets = [];
     for (const occurrence of occurrences) {
-      for (const result of session.completion_results.filter((item) => item.exercise_occurrence_key === occurrence.exercise_occurrence_key)) {
-        const item = session.snapshot.completion_items.find((candidate) => candidate.completion_item_key === result.completion_item_key);
+      for (const result of session.completion_results) {
+        const item = session.snapshot.completion_items.find((candidate) => candidate.completion_item_key === result.completion_item_key && candidate.exercise_occurrence_key === occurrence.exercise_occurrence_key);
         if (!item) continue;
         const observation = { completion_item_key: result.completion_item_key, set_key: item.set_key, side: item.side, actual: result.actual, resistance: result.resistance, total_external_kg: result.resistance?.mode === "external_weight" ? (result.resistance.load_kg === null ? null : result.resistance.load_kg * result.resistance.quantity) : null, assistance_kg: result.resistance?.mode === "assisted_weight" ? result.resistance.load_kg : null, rir: result.rir };
         sets.push(observation);
@@ -143,7 +143,18 @@ export function exerciseDetail(state, exerciseKey, now, from, to, preset) {
   if (!exists) return { error: { code: "not_found", message: "Exercise not found" } };
   for (const side of ["none", "left", "right"]) series[side].sort(sortObservation);
   observations.sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date) || a.session_key.localeCompare(b.session_key));
-  return { period: { ...period, timezone: state.timezone, current_date_may_be_incomplete: period.to >= localDate(now, state.timezone) }, exercise_key: exerciseKey, display_name_history: [{ name: latestExerciseName(state, exerciseKey), first_date: observations[0]?.scheduled_date ?? period.from, last_date: observations.at(-1)?.scheduled_date ?? period.to }], performed_session_count: observations.length, observations, series };
+  return { period: { ...period, timezone: state.timezone, current_date_may_be_incomplete: period.to >= localDate(now, state.timezone) }, exercise_key: exerciseKey, display_name_history: exerciseNameHistory(state, exerciseKey), performed_session_count: observations.length, observations, series };
+}
+
+function exerciseNameHistory(state, exerciseKey) {
+  const entries = new Map();
+  for (const session of state.sessions) for (const block of session.snapshot.blocks) for (const exercise of block.exercises) if (exercise.exercise_key === exerciseKey) {
+    const current = entries.get(exercise.name) ?? { name: exercise.name, first_date: session.scheduled_date, last_date: session.scheduled_date };
+    current.first_date = current.first_date < session.scheduled_date ? current.first_date : session.scheduled_date;
+    current.last_date = current.last_date > session.scheduled_date ? current.last_date : session.scheduled_date;
+    entries.set(exercise.name, current);
+  }
+  return [...entries.values()].sort((left, right) => left.first_date.localeCompare(right.first_date));
 }
 
 function sumMetric(sets, metric) { const values = sets.filter((set) => set.actual.metric === metric).map((set) => set.actual.value); return values.length ? values.reduce((sum, value) => sum + value, 0) : null; }

@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { addDays, canonicalJson, dateRange, deepClone, localDate, opaqueKey, WEEKDAYS, weekdayKey } from "./util.js";
+import { addDays, canonicalJson, dateRange, dateSpan, deepClone, localDate, opaqueKey, WEEKDAYS, weekdayKey } from "./util.js";
 import { validatePlanPackage } from "./validation.js";
 
 /** @param {any} state @param {string} date */
@@ -155,6 +155,7 @@ export function scheduleModel(state, from, to, now = new Date()) {
   const today = localDate(now, state.timezone);
   const start = from ?? addDays(today, -6);
   const end = to ?? today;
+  if (dateSpan(start, end) === null || dateSpan(start, end) > 366) return { error: { code: "invalid_period", message: "Schedule requires a valid inclusive range of at most 366 days" } };
   return dateRange(start, end).map((date) => scheduleEntry(state, date, now));
 }
 

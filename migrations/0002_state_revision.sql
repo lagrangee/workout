@@ -1,0 +1,1 @@
+ALTER TABLE athlete_state ADD COLUMN state_revision INTEGER NOT NULL DEFAULT 0;

@@ -1,0 +1,523 @@
+{
+  "schema_version": 1,
+  "effective_from": "2026-08-01",
+  "week": {
+    "monday": {
+      "kind": "workout",
+      "title": "核心与足踝",
+      "start_time": "21:00",
+      "estimated_duration_min": 35,
+      "blocks": [
+        {
+          "title": "核心",
+          "exercises": [
+            {
+              "exercise_key": "dead_bug",
+              "name": "死虫",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 8 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "side_plank",
+              "name": "侧平板",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "duration_sec", "min": 30, "max": 40 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "glute_bridge",
+              "name": "徒手臀桥",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 15, "max": 15 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": null, "bottom_hold_sec": null, "concentric_sec": null, "top_hold_sec": 1 },
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "提踵",
+          "exercises": [
+            {
+              "exercise_key": "straight_knee_single_leg_calf_raise",
+              "name": "平地直膝单腿提踵",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 12 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": 3, "bottom_hold_sec": null, "concentric_sec": 1, "top_hold_sec": 1 },
+                  "rest_after_sec": 60,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "bent_knee_single_leg_calf_raise",
+              "name": "平地屈膝单腿提踵",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 10, "max": 15 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": 3, "bottom_hold_sec": null, "concentric_sec": 1, "top_hold_sec": 1 },
+                  "rest_after_sec": 60,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "tuesday": {
+      "kind": "workout",
+      "title": "下肢力量与上肢",
+      "start_time": "21:00",
+      "estimated_duration_min": 80,
+      "blocks": [
+        {
+          "title": "下肢力量",
+          "exercises": [
+            {
+              "exercise_key": "bulgarian_split_squat",
+              "name": "保加利亚分腿蹲",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 6, "max": 8 },
+                  "resistance": null,
+                  "target_rir": 2,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": 4, "bottom_hold_sec": 1, "concentric_sec": null, "top_hold_sec": null },
+                  "rest_after_sec": 120,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "cable_romanian_deadlift",
+              "name": "绳索罗马尼亚硬拉",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 10, "max": 12 },
+                  "resistance": { "mode": "external_weight", "load_kg": null, "quantity": 1 },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": 4, "bottom_hold_sec": 1, "concentric_sec": null, "top_hold_sec": null },
+                  "rest_after_sec": 120,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "step_up",
+              "name": "登阶",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 8 },
+                  "resistance": null,
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": null, "bottom_hold_sec": null, "concentric_sec": null, "top_hold_sec": 1 },
+                  "rest_after_sec": 90,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "上肢",
+          "exercises": [
+            {
+              "exercise_key": "pull_up",
+              "name": "引体向上",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 5, "max": 5 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 150,
+                  "target_incline_percent": null
+                },
+                {
+                  "target": { "metric": "reps", "min": 5, "max": 5 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 150,
+                  "target_incline_percent": null
+                },
+                {
+                  "target": { "metric": "reps", "min": 4, "max": 4 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 150,
+                  "target_incline_percent": null
+                },
+                {
+                  "target": { "metric": "reps", "min": 4, "max": 4 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 150,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "push_up",
+              "name": "俯卧撑",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 10 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": 2,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 90,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "wednesday": {
+      "kind": "workout",
+      "title": "恢复、核心与足踝",
+      "start_time": "21:00",
+      "estimated_duration_min": 40,
+      "blocks": [
+        {
+          "title": "核心与恢复",
+          "exercises": [
+            {
+              "exercise_key": "bird_dog",
+              "name": "鸟狗",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "duration_sec", "min": 6, "max": 8 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "pallof_press",
+              "name": "Pallof Press",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 10, "max": 10 },
+                  "resistance": { "mode": "external_weight", "load_kg": null, "quantity": 1 },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": null, "bottom_hold_sec": null, "concentric_sec": null, "top_hold_sec": 1 },
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "cat_cow",
+              "name": "猫牛式",
+              "category": "mobility",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 8 },
+                  "resistance": null,
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": null,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "single_leg_balance",
+              "name": "单腿站立",
+              "category": "mobility",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "duration_sec", "min": 45, "max": 45 },
+                  "resistance": null,
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "wall_toe_raise",
+              "name": "背靠墙抬脚尖",
+              "category": "mobility",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 20, "max": 20 },
+                  "resistance": null,
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "short_foot",
+              "name": "短足训练",
+              "category": "mobility",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 8 },
+                  "resistance": null,
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": null, "bottom_hold_sec": null, "concentric_sec": null, "top_hold_sec": 5 },
+                  "rest_after_sec": 45,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "thursday": null,
+    "friday": {
+      "kind": "workout",
+      "title": "上肢与核心",
+      "start_time": "21:00",
+      "estimated_duration_min": 45,
+      "blocks": [
+        {
+          "title": "上肢",
+          "exercises": [
+            {
+              "exercise_key": "pull_up",
+              "name": "引体向上",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 4, "max": 5 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": 1,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 120,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "cable_row",
+              "name": "绳索划船",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 10, "max": 12 },
+                  "resistance": { "mode": "external_weight", "load_kg": null, "quantity": 1 },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": null, "bottom_hold_sec": null, "concentric_sec": null, "top_hold_sec": 1 },
+                  "rest_after_sec": 90,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "push_up",
+              "name": "俯卧撑",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 10 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": 2,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 90,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "face_pull",
+              "name": "面拉",
+              "category": "strength",
+              "side_mode": "none",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 12, "max": 15 },
+                  "resistance": { "mode": "external_weight", "load_kg": null, "quantity": 1 },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 60,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "核心",
+          "exercises": [
+            {
+              "exercise_key": "side_plank",
+              "name": "侧平板",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "duration_sec", "min": 30, "max": 40 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": null,
+                  "rest_after_sec": 60,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "saturday": {
+      "kind": "workout",
+      "title": "Step-down 与提踵",
+      "start_time": "21:00",
+      "estimated_duration_min": 35,
+      "blocks": [
+        {
+          "title": "下肢控制",
+          "exercises": [
+            {
+              "exercise_key": "step_down",
+              "name": "Step-down",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 6, "max": 8 },
+                  "resistance": null,
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": 3, "bottom_hold_sec": null, "concentric_sec": null, "top_hold_sec": null },
+                  "rest_after_sec": 60,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "straight_knee_single_leg_calf_raise",
+              "name": "平地直膝单腿提踵",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 8, "max": 12 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": 3, "bottom_hold_sec": null, "concentric_sec": 1, "top_hold_sec": 1 },
+                  "rest_after_sec": 60,
+                  "target_incline_percent": null
+                }
+              ]
+            },
+            {
+              "exercise_key": "bent_knee_single_leg_calf_raise",
+              "name": "平地屈膝单腿提踵",
+              "category": "strength",
+              "side_mode": "left_right",
+              "sets": [
+                {
+                  "target": { "metric": "reps", "min": 10, "max": 15 },
+                  "resistance": { "mode": "bodyweight", "load_kg": null, "quantity": null },
+                  "target_rir": null,
+                  "target_rpe": null,
+                  "tempo": { "eccentric_sec": 3, "bottom_hold_sec": null, "concentric_sec": 1, "top_hold_sec": 1 },
+                  "rest_after_sec": 60,
+                  "target_incline_percent": null
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "sunday": { "kind": "rest" }
+  }
+}

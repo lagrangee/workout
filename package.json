@@ -4,15 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "node scripts/local-server.mjs",
+    "wrangler:dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "generate-types": "wrangler types",
     "test": "node --test tests/**/*.test.js",
     "test:watch": "node --test --watch tests/**/*.test.js",
+    "seed:verify": "node scripts/verify-seed.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
     "forbidden-scan": "node scripts/forbidden-feature-scan.mjs",
-    "release-check": "npm run check && npm run forbidden-scan"
+    "release-check": "npm run check && npm run seed:verify && npm run forbidden-scan && node scripts/release-acceptance.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
