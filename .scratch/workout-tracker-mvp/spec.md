@@ -72,7 +72,7 @@ while the Agent-facing Coach API exposes the complete, privacy-filtered history.
 - **Coach Share security:** Generate 256-bit tokens with Web Crypto. Store only HMAC lookup digest plus AES-GCM ciphertext, nonce, key versions, and Athlete/share-bound AAD. Create/regenerate responses never store or return the plaintext token; only authenticated GET can return the copyable URL.
 - **Export:** Provide one full-history JSON download with an independent Athlete Export Wire Catalog v1, consistent `data_as_of`, no CSV or restore/import flow, and an explicit pre-download capacity error for the MVP delivery bound.
 - **Cloudflare topology:** Use one Worker with Static Assets and one D1 database at `workout.lagrangee.xyz`. Keep Coach routes public and protect `/app` and `/api/private` with signed application sessions. Disable `workers.dev`, Preview URLs, caching, and token-bearing logs before production.
-- **Source control and delivery:** Publish the complete project to a private GitHub repository owned by the configured GitHub account. Pull requests run the repository's `release-check`; only the default branch may run the production Wrangler deploy. Cloudflare credentials and production identifiers are GitHub Actions secrets or environment values, never committed files. The exact repository owner/name is a deployment input and must be confirmed before repository creation or push.
+- **Source control and delivery:** Publish the complete project to a private GitHub repository owned by the configured GitHub account. Pull requests may run repository validation, but production is deployed explicitly with local `npm run release-check` followed by `npx wrangler deploy`. Cloudflare credentials and production identifiers are local Wrangler authentication or Worker Secrets, never committed files.
 - **Recovery and retention:** Retain history without an application-level 90-day cutoff. Use D1 Free Time Travel plus manual Athlete Export; do not add scheduled R2 backup or restore UI.
 - **Scope quality:** Accessibility auditing and WCAG acceptance are explicitly outside this MVP. The two approved prototypes are the visual and interaction references; no additional design-system ticket is required.
 
@@ -396,10 +396,9 @@ Production is one Cloudflare Worker with Static Assets and one D1 database on `w
 - The Worker validates application sessions at the private API origin.
 - `workers_dev: false` and `preview_urls: false` prevent bypass hosts.
 - The custom domain is the sole production Worker entrypoint.
-- GitHub Actions runs `npm run release-check` for pull requests and does not deploy production from a pull request.
-- A push to the default branch deploys through Wrangler using least-privilege GitHub Actions permissions, concurrency protection, and secret-backed `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` values.
-- The deployment job verifies the custom domain route and records the deployed version or URL; failed checks or deploys fail the workflow visibly.
-- Deployment remains blocked until the two exact emails, two independent password Secrets, and the session-signing Secret are configured and both login paths are verified; quotas and the custom-host bypass are also rechecked.
+- GitHub Actions may run validation for pull requests but does not deploy production.
+- Production deployment is an explicit local Wrangler action after `npm run release-check`; the operator verifies the custom domain route and records the deployed version.
+- Deployment remains blocked until the two exact emails, two independent password Secrets, and the session-signing Secret are configured and both login paths are verified; quotas, the custom-host bypass, and seed read-back are also rechecked.
 
 ## Recovery and Retention
 
@@ -437,4 +436,4 @@ Training history and revisions are retained without an application-level cutoff.
 28. Free-plan usage and Worker/D1 quotas are verified before deployment; quota exhaustion produces a visible service error without corrupting data.
 29. A Time Travel recovery rehearsal and a full Athlete Export verification succeed before production acceptance.
 30. A forbidden-feature scan finds no offline queue, telemetry, symptom system, ad-hoc Session, manual plan editor, AI, goal, route, coach dashboard, CSV, or restore/import workflow.
-31. The confirmed GitHub repository is private, contains the intended source without secrets, pull-request `release-check` is green, and a default-branch GitHub Actions run deploys the Worker through Wrangler to `workout.lagrangee.xyz` using secret-backed credentials without exposing them in logs.
+31. The confirmed GitHub repository is private, contains the intended source without secrets, local `release-check` is green, and a manual Wrangler deployment reaches `workout.lagrangee.xyz` without exposing credentials.

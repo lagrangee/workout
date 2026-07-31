@@ -16,6 +16,6 @@ Date: 2026-07-31
 ## Not passed
 
 - The production Worker still needs the two Athlete email Secrets, two password Secrets, and `AUTH_SESSION_SECRET`; no production Athlete or seed data was written.
-- GitHub Actions run [30621663411](https://github.com/lagrangee/workout/actions/runs/30621663411) completed with a failed `Deploy production` job before any steps ran. This is an account billing/spending blocker, not a release-check failure.
+- The former GitHub Actions auto-deploy run [30621663411](https://github.com/lagrangee/workout/actions/runs/30621663411) failed before any steps because of the account billing/spending gate; production deployment is now manual Wrangler and this run is not a release gate.
 - GitHub branch-protection verification returned `403`: this private repository's current plan requires GitHub Pro or a public repository for the branch-protection feature. PR CI is configured in `.github/workflows/ci.yml`, but merge blocking cannot be claimed from the current plan.
-- D1 Time Travel rehearsal, manual production-candidate Athlete Export verification, and ticket 27 production seed execution remain pending the identity Secret setup and GitHub Actions account gate.
+- D1 Time Travel rehearsal, manual production-candidate Athlete Export verification, and ticket 27 production seed execution remain pending the identity Secret setup and seed read-back.

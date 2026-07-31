@@ -37,6 +37,8 @@ Produce a human-confirmed MVP product and technical contract that can be handed 
 
 ## Implementation tickets
 
+The logical release order is `24 → 26 → 27 → 25`: Cloudflare readiness first, private-source/manual-Wrangler delivery second, seed import/read-back third, and final acceptance last. Ticket numbers remain unchanged so existing references stay stable.
+
 - [Build Worker, D1, and Athlete application shell](issues/16-build-worker-d1-and-athlete-shell.md)
 - [Build plan, schedule, and Today read model](issues/17-build-plan-schedule-and-today-read-model.md)
 - [Build Agent JSON plan update flow](issues/18-build-agent-json-plan-update-flow.md)
@@ -47,6 +49,7 @@ Produce a human-confirmed MVP product and technical contract that can be handed 
 - [Build Athlete Export and recovery artifact](issues/23-build-athlete-export-and-recovery-artifact.md)
 - [Harden Cloudflare production deployment](issues/24-harden-cloudflare-production-deployment.md)
 - [Publish private GitHub repository and configure Cloudflare auto-deploy](issues/26-publish-private-github-repo-and-auto-deploy.md)
+- [Import and verify initial weekly seed](issues/27-import-and-verify-initial-weekly-seed.md)
 - [Run final release acceptance](issues/25-run-release-acceptance.md)
 
 ## Out of scope
