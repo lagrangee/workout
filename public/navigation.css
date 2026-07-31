@@ -3,6 +3,10 @@
   padding-bottom: 92px;
 }
 
+.page-head {
+  padding: 28px 0 16px;
+}
+
 .bottom-nav {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 14px 14px 18px;
@@ -25,7 +29,7 @@
 }
 
 .calendar-head {
-  padding-bottom: 18px;
+  padding-bottom: 12px;
 }
 
 .calendar-week-controls {
@@ -181,10 +185,41 @@
 
 @media (max-width: 520px) {
   .calendar-week {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 
   .calendar-day {
-    min-height: 104px;
+    min-height: 0;
+    grid-template-columns: 52px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    row-gap: 2px;
+    padding: 10px 12px;
+    border-radius: 12px;
+  }
+
+  .calendar-day-label {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .calendar-day-date {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .calendar-day-summary {
+    grid-column: 2;
+    grid-row: 1;
+    white-space: nowrap;
+  }
+
+  .calendar-day-meta {
+    grid-column: 2;
+    grid-row: 2;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 }
