@@ -22,10 +22,10 @@ test("ticket 25 boundaries: later-confirmed earlier revision masks older future 
 
 test("ticket 25 boundaries: public schemas and private/Coach responses carry cache and referrer protections", async () => {
   const { handler } = appFixture();
-  const me = await call(handler, "/api/private/me"); assert.equal(me.response.headers.get("cache-control"), "no-store"); assert.equal(me.response.headers.get("referrer-policy"), "no-referrer");
-  const schema = await call(handler, "/api/coach/v1/schemas/manifest", { headers: {} }, "ignored@example.invalid"); assert.equal(schema.response.status, 200); assert.equal(schema.response.headers.get("cache-control"), "no-store"); assert.equal(schema.body.$schema, "https://json-schema.org/draft/2020-12/schema");
+  const me = await call(handler, "/api/private/me"); assert.equal(me.response.headers.get("cache-control"), "private, no-store"); assert.equal(me.response.headers.get("referrer-policy"), "no-referrer");
+  const schema = await call(handler, "/api/coach/v1/schemas/manifest", { headers: {} }, "ignored@example.invalid"); assert.equal(schema.response.status, 200); assert.equal(schema.response.headers.get("cache-control"), "private, no-store"); assert.equal(schema.body.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.equal(schema.response.headers.get("cdn-cache-control"), "no-store"); assert.equal(schema.response.headers.get("content-security-policy").startsWith("default-src 'none'"), true);
-  for (const name of ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error"]) {
+  for (const name of ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error", "schema_catalog"]) {
     const resource = await call(handler, `/api/coach/v1/schemas/${name}`, { headers: {} }, "ignored@example.invalid");
     assert.equal(resource.response.status, 200); assert.ok(resource.body.required?.length); assert.equal(resource.body.additionalProperties, false);
   }
@@ -82,4 +82,25 @@ test("ticket 22 boundaries: Coach unknown resources and invalid limits are expli
   const unknown = await call(handler, `/api/coach/v1/${token}/not-a-resource`, { headers: {} }, "ignored@example.invalid");
   assert.equal(unknown.response.status, 404);
   assert.equal(unknown.body.error.code, "not_found");
+});
+
+test("Coach API uses one date-window contract and explicit progress buckets", async () => {
+  const { handler } = appFixture();
+  const created = await call(handler, "/api/private/coach-share", post({}, "coach-contract"));
+  assert.equal(created.response.status, 201);
+  const copy = await call(handler, "/api/private/coach-share");
+  const token = copy.body.url.split("/coach/")[1];
+  const from = addDays(today, -8);
+  const day = await call(handler, `/api/coach/v1/${token}/progress?from=${from}&to=${today}&bucket=day`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(day.response.status, 200); assert.equal(day.body.bucket, "day"); assert.equal(day.body.buckets.length, 9); assert.equal(day.body.period.includes_from, true); assert.equal(day.body.period.includes_to, true); assert.equal(day.body.period.includes_current_date, true); assert.equal(day.body.period.current_date_may_be_incomplete, true); assert.equal(day.body.buckets.at(-1).is_partial, false);
+  const month = await call(handler, `/api/coach/v1/${token}/progress?from=${from}&to=${today}&bucket=month`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(month.response.status, 200); assert.equal(month.body.buckets[0].month_start.endsWith("-01"), true); assert.equal(month.body.buckets[0].is_partial, true);
+  const conflict = await call(handler, `/api/coach/v1/${token}/progress?from=${from}&to=${today}&range=30d`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(conflict.response.status, 400); assert.equal(conflict.body.error.code, "invalid_period"); assert.equal(conflict.body.error.field, "range");
+  const invalidBucket = await call(handler, `/api/coach/v1/${token}/progress?range=7d&bucket=quarter`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(invalidBucket.response.status, 400); assert.equal(invalidBucket.body.error.code, "invalid_request"); assert.equal(invalidBucket.body.error.field, "bucket");
+  const sessions = await call(handler, `/api/coach/v1/${token}/sessions?from=${from}&to=${today}`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(sessions.response.status, 200); assert.equal(sessions.body.period.includes_current_date, true);
+  const exercise = await call(handler, `/api/coach/v1/${token}/exercises/not-an-exercise?from=${from}&to=${today}`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(exercise.response.status, 404); assert.equal(exercise.body.error.code, "not_found");
 });

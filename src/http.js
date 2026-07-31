@@ -26,7 +26,7 @@ async function route(request, env, getStore, ctx) {
   if (url.pathname === "/healthz") return jsonResponse({ ok: true, service: "workout-tracker" });
   if (url.pathname === "/api/auth/login") return authLogin(request, env);
   if (url.pathname === "/api/auth/logout") return authLogout(request);
-  if (url.pathname === "/api/coach/v1/schemas" && (request.method === "GET" || request.method === "HEAD")) return maybeHead(jsonResponse({ schema_version: 1, generated_at: new Date().toISOString(), schemas: ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error"].map((name) => ({ name, href: `/api/coach/v1/schemas/${name}`, json_schema_draft: "2020-12" })) }), request);
+  if (url.pathname === "/api/coach/v1/schemas" && (request.method === "GET" || request.method === "HEAD")) return maybeHead(jsonResponse({ schema_version: 1, generated_at: new Date().toISOString(), schemas: ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error", "schema_catalog"].map((name) => ({ name, href: `/api/coach/v1/schemas/${name}`, json_schema_draft: "2020-12" })) }), request);
   if (url.pathname.startsWith("/api/coach/v1/schemas/") && (request.method === "GET" || request.method === "HEAD")) {
     const schema = schemaResource(url.pathname.split("/").at(-1));
     return schema ? maybeHead(new Response(JSON.stringify(schema, null, 2), { status: 200, headers: securityHeaders("application/schema+json") }), request) : jsonError("not_found", "Schema not found", [], 404);
@@ -36,7 +36,7 @@ async function route(request, env, getStore, ctx) {
     const auth = await authenticate(request, env);
     if (auth.error) return new Response(null, { status: 302, headers: { ...securityHeaders("text/plain; charset=utf-8"), Location: "/" } });
   }
-  if (url.pathname === "/" || url.pathname === "/app" || url.pathname.startsWith("/assets/") || url.pathname.endsWith(".js") || url.pathname.endsWith(".css")) return staticRoute(request, env);
+  if (url.pathname === "/" || url.pathname === "/app" || url.pathname.startsWith("/assets/") || url.pathname.endsWith(".js") || url.pathname.endsWith(".css") || url.pathname.endsWith(".png") || url.pathname.endsWith(".webmanifest")) return staticRoute(request, env);
   if (url.pathname.startsWith(PRIVATE_PREFIX)) return privateRoute(request, env, getStore, url);
   return textResponse("Not found", 404);
 }
@@ -64,11 +64,10 @@ async function coachRoute(request, env, getStore, url) {
   const now = new Date();
   const limited = await coachRateLimit(env, state, now);
   if (limited) return maybeHead(limited, request);
-  if (readmeMatch) return maybeHead(new Response(coachReadme(state, now), { status: 200, headers: securityHeaders("text/markdown; charset=utf-8") }), request);
+  if (readmeMatch) return maybeHead(new Response(coachReadme(state, now, url.origin, token), { status: 200, headers: securityHeaders("text/markdown; charset=utf-8") }), request);
   const suffix = match[2] || "";
-  const manifest = suffix === "" ? coachManifest(state, now) : coachResource(state, suffix, url, now);
-  if (suffix === "" && !manifest.error) manifest.links = { overview: `${url.origin}/api/coach/v1/${token}/overview`, plan: `${url.origin}/api/coach/v1/${token}/plan`, schedule: `${url.origin}/api/coach/v1/${token}/schedule`, sessions: `${url.origin}/api/coach/v1/${token}/sessions`, progress: `${url.origin}/api/coach/v1/${token}/progress`, exercise: `${url.origin}/api/coach/v1/${token}/exercises/{exercise_key}`, schemas: `${url.origin}/api/coach/v1/schemas` };
-  if (manifest?.error) return coachJsonError(manifest.error.code, manifest.error.message, manifest.error.details ?? [], errorStatus(manifest.error.code), now);
+  const manifest = suffix === "" ? coachManifest(state, now, url.origin, token) : coachResource(state, suffix, url, now, token);
+  if (manifest?.error) return coachJsonError(manifest.error.code, manifest.error.message, manifest.error.details ?? [], errorStatus(manifest.error.code), now, manifest.error.field ?? null);
   return maybeHead(jsonResponse(manifest), request);
 }
 
@@ -332,7 +331,7 @@ function jsonResponse(body, status = 200) { return new Response(JSON.stringify(b
 function textResponse(body, status = 200) { return new Response(body, { status, headers: securityHeaders("text/plain; charset=utf-8") }); }
 function publicNotFound() { return new Response("Not found", { status: 404, headers: securityHeaders("text/plain; charset=utf-8") }); }
 function jsonError(code, message, details = [], status = 400) { return jsonResponse(errorBody(code, message, details), status); }
-function coachJsonError(code, message, details = [], status = 400, now = new Date()) { const response = jsonResponse({ schema_version: 1, generated_at: now.toISOString(), error: { code, message, details } }, status); if (status === 429) response.headers.set("Retry-After", "60"); return response; }
+function coachJsonError(code, message, details = [], status = 400, now = new Date(), field = null) { const error = { code, message, details }; if (field) error.field = field; const response = jsonResponse({ schema_version: 1, generated_at: now.toISOString(), error }, status); if (status === 429) response.headers.set("Retry-After", "60"); return response; }
 async function coachRateLimit(env, state, now) {
   if (!env.COACH_RATE_LIMITER?.limit) return null;
   try {
@@ -344,7 +343,7 @@ async function coachRateLimit(env, state, now) {
 }
 function errorBody(code, message, details) { return { error: { code, message, details } }; }
 function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "timezone_revision_boundary"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
-function securityHeaders(contentType, csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") { return { "Content-Type": contentType, "Cache-Control": "no-store", "CDN-Cache-Control": "no-store", "Content-Security-Policy": csp, "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
+function securityHeaders(contentType, csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") { return { "Content-Type": contentType, "Cache-Control": "private, no-store", "CDN-Cache-Control": "no-store", "Content-Security-Policy": csp, "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
 function maybeHead(response, request) { return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response; }
 
 const FALLBACK_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workout Tracker</title><style>body{font-family:system-ui;background:#f6f1e8;color:#26231f;margin:0}main{max-width:760px;margin:auto;padding:36px 22px}nav{display:flex;gap:16px;border-top:1px solid #e6ddd0;padding-top:20px;margin-top:40px}a{color:#a8432c}</style></head><body><main id="app"><p>WORKOUT TRACKER</p><h1>你的训练，今天就从这里开始。</h1><p>在线、移动优先的训练计划与 Session 记录。</p><nav aria-label="主导航"><a href="/app">今日</a><a href="/app#plan">计划</a><a href="/app#progress">进展</a><a href="/app#coach">教练</a><a href="/app#settings">设置</a></nav></main></body></html>`;
