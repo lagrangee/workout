@@ -12,6 +12,8 @@ Date: 2026-07-31
 - `npm run seed:verify` — seed validation/preview/apply/read-back fixture passed with 9/10/9/0/6/6/0 Completion Item counts.
 - `npm run release-check`
 - 375×812 in-app browser observation: Today state rendered, mobile navigation opened the read-only Plan view, and the Plan view exposed no manual editor.
+- Additional 375×812 smoke: Today → `继续查看` opened the one-item focus view; `结束并保存` exposed unfinished items, RPE, note, and Exercise Feedback; saving an incomplete Session rendered the partial state with `继续训练` and `校正记录` actions.
+- The same browser run did not observe the Plan JSON validation error state after submitting `{}`; the HTTP seam passes this case, but the full browser Plan update path remains unclaimed pending a fresh local runtime investigation.
 
 ## Evidence boundary
 
