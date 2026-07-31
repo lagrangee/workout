@@ -5,7 +5,7 @@ Date: 2026-07-31
 ## Verified
 
 - Repository: private `lagrangee/workout`, default branch `main`.
-- Source push: `main` contains the implementation commit recorded below after this acceptance run.
+- Source push: `main` contains implementation commit `d51327d`.
 - D1: migrations through `0003_query_indexes.sql` applied remotely to `workout-tracker`.
 - Worker: direct Wrangler deploy succeeded; version `a9df3abb-3e1e-4736-a62f-28fb4b943267`.
 - Route: `workout.lagrangee.xyz` custom domain active; Preview URLs disabled.
