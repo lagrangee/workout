@@ -55,3 +55,31 @@ test("ticket 24 boundaries: unbounded analytical ranges fail before expansion", 
   assert.equal(expand.response.status, 400); assert.equal(expand.body.error.code, "invalid_request");
   assert.equal(coachShare.response.status, 201);
 });
+
+test("ticket 21 boundaries: invalid calendar dates and strict pagination filters fail", async () => {
+  const { handler } = appFixture();
+  const packageResponse = await call(handler, "/api/private/plan/update-package");
+  assert.equal(packageResponse.response.status, 200);
+  assert.equal(packageResponse.body.schema_version, 1);
+  assert.equal(Object.keys(packageResponse.body.week).length, 7);
+  const invalidProgress = await call(handler, "/api/private/progress?from=2026-02-30&to=2026-03-01");
+  assert.equal(invalidProgress.response.status, 400);
+  assert.equal(invalidProgress.body.error.code, "invalid_period");
+  const invalidSessions = await call(handler, "/api/private/sessions?limit=0");
+  assert.equal(invalidSessions.response.status, 400);
+  assert.equal(invalidSessions.body.error.code, "invalid_request");
+});
+
+test("ticket 22 boundaries: Coach unknown resources and invalid limits are explicit errors", async () => {
+  const { handler } = appFixture();
+  const created = await call(handler, "/api/private/coach-share", post({}, "coach-errors"));
+  assert.equal(created.response.status, 201);
+  const copy = await call(handler, "/api/private/coach-share");
+  const token = copy.body.url.split("/coach/")[1];
+  const invalidLimit = await call(handler, `/api/coach/v1/${token}/sessions?limit=0`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(invalidLimit.response.status, 400);
+  assert.equal(invalidLimit.body.error.code, "invalid_request");
+  const unknown = await call(handler, `/api/coach/v1/${token}/not-a-resource`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(unknown.response.status, 404);
+  assert.equal(unknown.body.error.code, "not_found");
+});

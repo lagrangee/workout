@@ -1,6 +1,6 @@
-// @ts-nocheck
+// @ts-check
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {value is Record<string, any>} */
 export function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -10,7 +10,7 @@ export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-/** @param {unknown} value */
+/** @param {any} value @returns {string} */
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (isRecord(value)) {
@@ -19,7 +19,7 @@ export function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
-/** @param {number} number */
+/** @param {number} number @param {number} decimals @returns {number} */
 export function roundHalfUp(number, decimals) {
   const factor = 10 ** decimals;
   return Math.round((number + Number.EPSILON) * factor) / factor;
@@ -156,7 +156,7 @@ export function formatDate(dateText) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${dateText}T00:00:00Z`));
 }
 
-/** @param {unknown} value */
+/** @param {any} value @returns {any} */
 export function trimString(value) {
   return typeof value === "string" ? value.trim() : value;
 }
