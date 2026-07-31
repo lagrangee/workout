@@ -19,4 +19,4 @@
 4. D1 migration 在空的 recovery fixture 上成功；`0003_query_indexes.sql` 的索引投影、`0004_restore_session_date_guard.sql` 的 Session 日期唯一性、Worker/D1 quota、日志/trace redaction、cache bypass 均用非敏感请求复核。
 5. 用脱敏 fixture 演练 D1 Time Travel 回滚与 Athlete Export 检查；禁止在演练中读取真实 Athlete 数据。
 
-这些现场状态未在本地仓库中伪造为“已通过”。缺失任何一项时，ticket 24 / release acceptance 保持 `blocked: production-owner-evidence-required`。
+2026-07-31 的现场证据已补齐：五个 Worker Secret 名称存在（值未读取）、应用登录成功、custom domain `/healthz` 为 `200`、未登录私有边界为 `401`/`302`、生产 seed 已回读，且 synthetic D1 Time Travel/Export recovery rehearsal 已完成并清理临时库。Quota 与日志/trace 的持续运营监控仍属于 Cloudflare 控制台的日常 owner 责任，不是 GitHub Actions release gate。

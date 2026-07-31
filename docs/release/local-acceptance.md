@@ -21,16 +21,16 @@ The test suite uses a local MemoryStore fixture with the same HTTP handler as th
 
 ## Production-candidate evidence
 
-- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `c7dac9d2-94cc-4477-a2b5-19fcde247402`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
+- Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `b4ed0fea-f55f-4f4e-8d95-1f48a6bc1fc2`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
 - `GET /healthz` returned `200` and `{"ok":true,"service":"workout-tracker"}`. Public Coach schema returned `200` with `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, CSP, no-referrer, and noindex headers.
 - `GET /api/private/me` without an application session returned `401` with the stable unauthorized envelope and the same private security headers; `POST /api/auth/login` returns `503 service_not_configured` until the five production Worker Secrets are written, and `/app` redirects unauthenticated production requests to `/`.
-- Production D1 migrations through `0004_restore_session_date_guard.sql` applied successfully. A remote schema read confirmed `session_date_guard` exists; all application projection tables remain at zero rows, so no production Athlete, plan, Session, or seed data was written.
+- Production D1 migrations through `0004_restore_session_date_guard.sql` applied successfully. A remote schema read confirmed `session_date_guard` exists; production seed import and read-back are recorded in [`seed-verification.md`](./seed-verification.md).
 - The repository is private at `lagrangee/workout`; `main` contains the intended source and production deployment is recorded through direct Wrangler evidence, not GitHub Actions auto deploy.
 
-## Still blocked
+## Follow-up notes
 
-- Ticket 24 now requires five Cloudflare Worker Secrets for the two exact Athlete identities and signed sessions, plus custom-hostname bypass, quota, log/trace, and synthetic D1 Time Travel evidence. No Zero Trust onboarding or payment method is required.
+- Ticket 24 is resolved with five Cloudflare Worker Secret names present, signed-session protection, custom-domain checks, D1 state checks, and a synthetic D1 Time Travel/Export recovery receipt. No Zero Trust onboarding or payment method is required.
 - Ticket 26 is resolved with manual Wrangler deployment. The old GitHub Actions auto-deploy run [30621663411](https://github.com/lagrangee/workout/actions/runs/30621663411) failed before any steps because of the account billing/spending gate; it is no longer a release blocker.
 - Branch-protection verification returned `403`: GitHub reports that this private repository's current plan requires GitHub Pro or a public repository for branch protection. PR CI is configured, but merge-blocking is not verified.
-- Ticket 27's selected Athlete is fixture-only; no production Athlete or seed artifact was mutated. Production seed execution still requires the five production Worker Secrets and the remaining recovery rehearsal.
+- Ticket 27 is resolved; the production seed was applied through the authenticated Plan flow and read back with the second Athlete isolated.
 - Full browser execution/continuation smoke needs the production-candidate runtime or a browser-connected local API fixture; the local HTTP seam covers those behaviors, while the browser observation is limited to the available local page/navigation surface.

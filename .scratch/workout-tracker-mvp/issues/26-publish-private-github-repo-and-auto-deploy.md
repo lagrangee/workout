@@ -2,7 +2,7 @@
 
 **What to build:** Publish the complete Workout Tracker project to the confirmed private GitHub repository, keep pull-request validation documented, and use an explicit local Wrangler command for production deployment.
 
-**Blocked by:** 24 — Harden Cloudflare production deployment.
+**Blocked by:** none
 
 **Status:** resolved
 
@@ -22,4 +22,4 @@
 
 This ticket is resolved by the implementation thread. Production deployment is an explicit operator action from the checkout, not a push-triggered GitHub job.
 
-The confirmed target is `lagrangee/workout`. `CLOUDFLARE_API_TOKEN` remains a GitHub secret only if PR validation or other non-deploy automation needs it; the production Wrangler command uses the local Wrangler authentication and never prints the token.
+The confirmed target is `lagrangee/workout`. The production Wrangler command uses the local Wrangler authentication and never prints a token; GitHub Actions has no production deployment Secret dependency.
