@@ -1,0 +1,25 @@
+/* Navigation remains easy to tap on small screens. */
+.shell {
+  padding-bottom: 92px;
+}
+
+.bottom-nav {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 14px 14px 18px;
+}
+
+.nav-link {
+  min-height: 44px;
+  padding: 10px 3px;
+  font-size: 14px;
+}
+
+.notice {
+  margin: 0 22px 18px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #e8f0e8;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 700;
+}

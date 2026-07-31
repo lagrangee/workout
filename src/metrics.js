@@ -59,52 +59,102 @@ export function streakMetric(state, today) {
   return { value, first_qualifying_date: first, last_qualifying_date: last };
 }
 
-/** @param {any} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset */
-export function resolvePeriod(state, now, from, to, preset) {
+/** @param {any} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string|undefined} range */
+export function resolvePeriod(state, now, from, to, preset, range) {
   const today = localDate(now, state.timezone);
-  if ((from && !to) || (!from && to)) return { error: { code: "invalid_period", message: "from and to must be provided together" } };
-  if ((from || to) && preset) return { error: { code: "invalid_period", message: "preset and explicit dates are mutually exclusive" } };
-  if (from && to) {
-    if (!isValidLocalDate(from) || !isValidLocalDate(to) || from > to) return { error: { code: "invalid_period", message: "from and to must be valid inclusive local dates" } };
-    if (dateSpan(from, to) > 3660) return { error: { code: "invalid_period", message: "The selected period cannot exceed 3660 days" } };
+  if (preset !== undefined && range !== undefined) return { error: { code: "invalid_period", field: "range", message: "range and preset are mutually exclusive" } };
+  const selector = range ?? preset;
+  const selectorField = range !== undefined ? "range" : "preset";
+  if ((range !== undefined && !range) || (range === undefined && preset !== undefined && !preset)) return { error: { code: "invalid_period", field: selectorField, message: "period selector must not be empty" } };
+  const hasFrom = from !== undefined;
+  const hasTo = to !== undefined;
+  if (hasFrom !== hasTo) return { error: { code: "invalid_period", field: hasFrom ? "to" : "from", message: "from and to must be provided together" } };
+  if ((hasFrom || hasTo) && selector) return { error: { code: "invalid_period", field: selectorField, message: "from/to and a preset or range are mutually exclusive" } };
+  if (hasFrom && hasTo) {
+    if (!isValidLocalDate(from)) return { error: { code: "invalid_period", field: "from", message: "from must be a valid local date" } };
+    if (!isValidLocalDate(to)) return { error: { code: "invalid_period", field: "to", message: "to must be a valid local date" } };
+    if (from > to) return { error: { code: "invalid_period", field: "from", message: "from must not be after to" } };
+    if (dateSpan(from, to) > 3660) return { error: { code: "invalid_period", field: "to", message: "The selected period cannot exceed 3660 days" } };
     return { from, to };
   }
-  if (preset === "7d") return { from: addDays(today, -6), to: today };
-  if (preset === "30d" || !preset) return { from: addDays(today, -29), to: today };
-  if (preset === "12w") return { from: addDays(mondayOf(today), -77), to: today };
-  if (preset === "all") {
+  if (selector === "7d") return { from: addDays(today, -6), to: today };
+  if (selector === "30d" || !selector) return { from: addDays(today, -29), to: today };
+  if (selector === "12w") return { from: addDays(mondayOf(today), -77), to: today };
+  if (selector === "all") {
     const first = state.plan_revisions.map((revision) => revision.effective_from).sort()[0];
     return { from: first ?? today, to: today };
   }
-  return { error: { code: "invalid_period", message: "unsupported period preset" } };
+  return { error: { code: "invalid_period", field: selectorField, message: "unsupported period preset or range" } };
 }
 
-/** @param {any} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset */
-export function progressModel(state, now, from, to, preset) {
-  const period = resolvePeriod(state, now, from, to, preset);
+/** @param {any} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string} bucket @param {string|undefined} range */
+export function progressModel(state, now, from, to, preset, bucket = "week", range) {
+  const period = resolvePeriod(state, now, from, to, preset, range);
   if (period.error) return period;
+  if (![
+    "day", "week", "month",
+  ].includes(bucket)) return { error: { code: "invalid_request", field: "bucket", message: "bucket must be day, week, or month" } };
   const today = localDate(now, state.timezone);
   const makeMetric = (start, end) => metricSet(state, start, end, now);
   const metrics = makeMetric(period.from, period.to);
-  const buckets = [];
-  for (let weekStart = mondayOf(period.from); weekStart <= period.to; weekStart = addDays(weekStart, 7)) {
-    const weekEnd = addDays(weekStart, 6);
-    const includedFrom = period.from > weekStart ? period.from : weekStart;
-    const includedTo = period.to < weekEnd ? period.to : weekEnd;
-    buckets.push({ week_start: weekStart, week_end: weekEnd, included_from: includedFrom, included_to: includedTo, metrics: makeMetric(includedFrom, includedTo) });
-  }
+  const buckets = progressBuckets(period, bucket, makeMetric);
+  const weekBuckets = progressBuckets(period, "week", makeMetric).map(({ from, to, is_partial, week_start, week_end, included_from, included_to, metrics: bucketMetrics }) => ({ week_start, week_end, included_from, included_to, is_partial, metrics: bucketMetrics }));
   const exercises = exerciseKeys(state).map((exerciseKey) => ({ exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to && session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey && session.completion_results.some((result) => session.snapshot.completion_items.some((item) => item.completion_item_key === result.completion_item_key && item.exercise_occurrence_key === exercise.exercise_occurrence_key))))).length, detail_ref: `exercise:${exerciseKey}` }));
   return {
     metric_semantics_version: 1,
-    period: { ...period, timezone: state.timezone, current_date_may_be_incomplete: period.to >= today },
+    period: periodContext(period, state.timezone, today),
     completion_rate_7d: makeMetric(addDays(today, -6), today).completion_rate,
     completion_rate_30d: makeMetric(addDays(today, -29), today).completion_rate,
     current_streak: streakMetric(state, today),
     metrics,
-    week_buckets: buckets,
+    bucket,
+    buckets,
+    week_buckets: weekBuckets,
     exercises,
     data_as_of: now.toISOString(),
   };
+}
+
+function periodContext(period, timezone, today) {
+  const includesCurrentDate = period.from <= today && today <= period.to;
+  return { ...period, timezone, includes_from: true, includes_to: true, includes_current_date: includesCurrentDate, current_date_may_be_incomplete: includesCurrentDate };
+}
+
+function progressBuckets(period, bucket, makeMetric) {
+  const result = [];
+  let cursor = bucketStart(period.from, bucket);
+  while (cursor <= period.to) {
+    const end = bucketEnd(cursor, bucket);
+    const includedFrom = period.from > cursor ? period.from : cursor;
+    const includedTo = period.to < end ? period.to : end;
+    const item = { from: includedFrom, to: includedTo, is_partial: includedFrom !== cursor || includedTo !== end, metrics: makeMetric(includedFrom, includedTo) };
+    if (bucket === "week") Object.assign(item, { week_start: cursor, week_end: end, included_from: includedFrom, included_to: includedTo });
+    if (bucket === "month") Object.assign(item, { month_start: cursor, month_end: end });
+    result.push(item);
+    cursor = nextBucketStart(cursor, bucket);
+  }
+  return result;
+}
+
+function bucketStart(date, bucket) {
+  if (bucket === "day") return date;
+  if (bucket === "week") return mondayOf(date);
+  return `${date.slice(0, 7)}-01`;
+}
+function bucketEnd(date, bucket) {
+  if (bucket === "day") return date;
+  if (bucket === "week") return addDays(date, 6);
+  return addDays(nextMonthStart(date), -1);
+}
+function nextBucketStart(date, bucket) {
+  if (bucket === "day") return addDays(date, 1);
+  if (bucket === "week") return addDays(date, 7);
+  return nextMonthStart(date);
+}
+function nextMonthStart(date) {
+  const [year, month] = date.slice(0, 7).split("-").map(Number);
+  const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+  return `${String(next.year).padStart(4, "0")}-${String(next.month).padStart(2, "0")}-01`;
 }
 
 /** @param {any} state */
@@ -117,9 +167,9 @@ function latestExerciseName(state, key) {
   return occurrence?.name ?? key;
 }
 
-/** @param {any} state @param {string} exerciseKey @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset */
-export function exerciseDetail(state, exerciseKey, now, from, to, preset) {
-  const period = resolvePeriod(state, now, from, to, preset ?? "12w");
+/** @param {any} state @param {string} exerciseKey @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string|undefined} range */
+export function exerciseDetail(state, exerciseKey, now, from, to, preset, range) {
+  const period = resolvePeriod(state, now, from, to, preset ?? (range === undefined && from === undefined && to === undefined ? "12w" : undefined), range);
   if (period.error) return period;
   const matching = state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to);
   const observations = [];
@@ -143,7 +193,7 @@ export function exerciseDetail(state, exerciseKey, now, from, to, preset) {
   if (!exists) return { error: { code: "not_found", message: "Exercise not found" } };
   for (const side of ["none", "left", "right"]) series[side].sort(sortObservation);
   observations.sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date) || a.session_key.localeCompare(b.session_key));
-  return { period: { ...period, timezone: state.timezone, current_date_may_be_incomplete: period.to >= localDate(now, state.timezone) }, exercise_key: exerciseKey, display_name_history: exerciseNameHistory(state, exerciseKey), performed_session_count: observations.length, observations, series };
+  return { period: periodContext(period, state.timezone, localDate(now, state.timezone)), exercise_key: exerciseKey, display_name_history: exerciseNameHistory(state, exerciseKey), performed_session_count: observations.length, observations, series };
 }
 
 function exerciseNameHistory(state, exerciseKey) {
