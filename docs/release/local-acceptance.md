@@ -5,7 +5,7 @@ Date: 2026-07-31
 ## Passed locally
 
 - `npm run typecheck`
-- `npm test` — 12 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, and app shell.
+- `npm test` — 13 HTTP/static integration tests passed for identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, and app shell.
 - `node --check src/worker.js`
 - `node --check public/app.js`
 - `npm run forbidden-scan`
