@@ -1,0 +1,3 @@
+# Store Recoverable Coach Share Tokens Safely
+
+An Athlete must be able to copy the sole active permanent Coach Share from another authenticated device, so a one-way token digest alone is insufficient. Store a unique HMAC-SHA-256 lookup digest plus AES-GCM ciphertext and a fresh random 96-bit nonce in D1, protected by separate Worker secrets; never store plaintext. Store both key versions and bind ciphertext to Athlete key, share key, and encryption-key version as AES-GCM additional authenticated data. Rotation keeps prior keys readable until ciphertext re-encryption and digest reindex complete atomically. This preserves cross-device recovery while keeping request lookup indexed and limiting database disclosure.
