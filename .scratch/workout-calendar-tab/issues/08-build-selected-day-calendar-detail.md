@@ -7,7 +7,7 @@
 **Status:** implemented
 
 - [x] Selecting a date opens the accepted B detail panel without leaving Calendar.
-- [x] The detail shows the Plan Revision/source, workout title, estimated duration, Blocks, Exercises, Prescribed Sets, targets, structured Resistance, tempo, and rest where present.
+- [x] The detail shows the workout title, estimated duration, Blocks, Exercises, Prescribed Sets, targets, structured Resistance, tempo, and rest where present; technical Plan Revision/source metadata remains available in the read contract but is not rendered.
 - [x] The selected date's prescription is resolved from the Plan Revision effective on that Athlete-local date.
 - [x] A date with a Workout Session shows its immutable Training Plan Snapshot, Session Status, completion fraction, completed/unfinished item counts, and actual values beside prescribed values.
 - [x] Partial Sessions expose unfinished items; skipped Sessions expose their skip reason when present.

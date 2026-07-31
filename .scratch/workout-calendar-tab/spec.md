@@ -64,7 +64,7 @@ The accepted mobile interaction is Prototype B: a compact seven-day selector fol
 
 - **Status presentation:** Preserve the existing domain states: future scheduled, today's not-due unstarted, in-progress, completed, partial, skipped, overdue-unstarted, Rest Day, and no-plan. Rest Day and no-plan are distinct and neutral. An overdue-unstarted date has no Session and no synthetic completion record.
 
-- **Single-day detail:** Show the complete dated prescription, including plan source, title, estimated duration, Blocks, Exercises, Prescribed Sets, structured Resistance, targets, tempo, and rest. When a Session exists, show its immutable Training Plan Snapshot as the execution prescription and show completion fraction, completed/unfinished item counts, actual values, and applicable note/skip context.
+- **Single-day detail:** Show the complete dated prescription, including title, estimated duration, Blocks, Exercises, Prescribed Sets, structured Resistance, targets, tempo, and rest. Keep plan revision/source as read-model provenance, but do not render that technical metadata in the Calendar UI. When a Session exists, show its immutable Training Plan Snapshot as the execution prescription and show completion fraction, completed/unfinished item counts, actual values, and applicable note/skip context.
 
 - **Historical correction:** Calendar detail remains read-only. For a historical completed, partial, or skipped Workout Session, expose a secondary `校正记录` entry to the existing Session correction flow. Do not add inline Calendar editing or correction for an overdue date without a Session.
 

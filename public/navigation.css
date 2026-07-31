@@ -123,21 +123,6 @@
   margin-bottom: 4px;
 }
 
-.calendar-source {
-  display: grid;
-  gap: 3px;
-  margin: 18px 0;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: #f7eee5;
-  font-size: 12px;
-}
-
-.calendar-source span,
-.calendar-source small {
-  color: var(--muted);
-}
-
 .calendar-session-summary {
   display: grid;
   gap: 8px;

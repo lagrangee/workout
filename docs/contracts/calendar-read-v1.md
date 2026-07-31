@@ -20,6 +20,8 @@ The only accepted expansion is `prescription`. It adds the complete resolved wor
 
 When the expanded entry has a `session_key`, the UI makes the separate authenticated `GET /api/private/sessions/:session_key` read. That detail contains the immutable Training Plan Snapshot, Session Status, completion fraction, completed and unfinished Completion Items, Actual Training Data, and skip context. No full Session details are preloaded for unselected dates. An overdue-unstarted entry has no Session and no correction target.
 
+`revision_key` and `source_ref` remain read-model provenance fields for deterministic projection and diagnostics; the Calendar UI does not render them in the selected-day detail.
+
 ## Calendar and Today boundary
 
 The Calendar navigation is `今日 | 日历 | 进展 | 设置`. Calendar provides no start, continue, restart, skip, record, or end action. Today remains the only execution surface. Historical completed, partial, and skipped Session details may link to the existing `校正记录` flow; correction preserves the Scheduled Workout date and immutable Training Plan Snapshot.
