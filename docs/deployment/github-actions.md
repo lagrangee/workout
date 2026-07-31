@@ -1,0 +1,21 @@
+# GitHub Actions 与 Cloudflare 部署
+
+仓库 `lagrangee/workout` 使用两个 workflow：
+
+- `.github/workflows/ci.yml`：Pull Request 只运行 `npm run release-check`，不部署生产环境。
+- `.github/workflows/deploy.yml`：`main` 分支 push（或从 `main` 手动触发）先运行同一套检查，再通过 `cloudflare/wrangler-action@v3` 部署 `wrangler.toml`。
+
+仓库需要以下 GitHub Actions Secret：
+
+- `CLOUDFLARE_ACCOUNT_ID` — 已配置为当前 Cloudflare Workers 账号。
+- `CLOUDFLARE_API_TOKEN` — 需要在 GitHub 仓库设置中补充一个专用于该 Worker 的 Cloudflare API Token。不要提交到文件、命令历史或聊天记录。
+
+建议在 GitHub 的 `production` Environment 中配置部署保护规则；workflow 已使用固定的 `production-deploy` 并发组，避免两个生产部署同时进行。生产域名固定为 `https://workout.lagrangee.xyz`，`workers.dev` 和 Preview URL 仍由 `wrangler.toml` 的生产配置关闭。
+
+首次补充 token 可在本机执行（命令会安全提示输入，不要把值写进 shell 参数）：
+
+```bash
+gh secret set CLOUDFLARE_API_TOKEN --repo lagrangee/workout
+```
+
+补充 token 前，先在 Cloudflare 创建最小权限的 API Token，并确认 D1、Worker、Routes 等权限覆盖当前部署所需资源。
