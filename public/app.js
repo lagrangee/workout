@@ -34,7 +34,7 @@ async function refresh() {
 }
 
 function shell(content) {
-  return `<div class="shell"><header class="topbar"><span class="eyebrow">WORKOUT TRACKER</span><button class="ghost" data-action="settings" aria-label="设置">⚙</button></header><main>${content}</main>${state.message ? `<div class="notice" role="status">${escapeHtml(state.message)}</div>` : ""}<nav class="bottom-nav" aria-label="主导航">${[["today", "今日"], ["calendar", "日历"], ["progress", "进展"], ["settings", "设置"]].map(([id, label]) => `<button class="nav-link ${state.view === id ? "active" : ""}" data-view="${id}">${label}</button>`).join("")}</nav></div>`;
+  return `<div class="shell"><main>${content}</main>${state.message ? `<div class="notice" role="status">${escapeHtml(state.message)}</div>` : ""}<nav class="bottom-nav" aria-label="主导航">${[["today", "今日"], ["calendar", "日历"], ["progress", "进展"], ["settings", "设置"]].map(([id, label]) => `<button class="nav-link ${state.view === id ? "active" : ""}" data-view="${id}">${label}</button>`).join("")}</nav></div>`;
 }
 
 function render() {
