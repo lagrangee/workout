@@ -4,7 +4,7 @@
 weekly template. It takes the original brief's initial strength, mobility,
 core, and foot/ankle work and adapts it to the accepted MVP contract:
 
-- the package repeats one explicit seven-slot week from `2026-08-01` in the
+- the package repeats one explicit seven-slot week from `2026-08-02` in the
   Athlete's `Asia/Shanghai` timezone;
 - running, outdoor-hill, treadmill-hill, route, heart-rate, distance, and
   elevation telemetry are omitted because the App does not record them;
