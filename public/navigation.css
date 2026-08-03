@@ -254,6 +254,35 @@
   margin-bottom: 10px;
 }
 
+.today-plan {
+  margin: 28px 0 18px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.today-plan-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.today-plan-head h2 {
+  margin: 0;
+}
+
+.today-plan-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.today-plan > p:first-of-type {
+  margin-bottom: 0;
+}
+
 .today-progress-card {
   margin: 24px 0 18px;
   padding: 16px;

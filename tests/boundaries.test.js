@@ -8,7 +8,7 @@ test("ticket 25 boundaries: future and current unstarted workouts are not due", 
   const { handler } = appFixture();
   const future = await call(handler, `/api/private/schedule?from=${addDays(today, 1)}&to=${addDays(today, 1)}`);
   assert.equal(future.body.entries[0].kind, "rest"); assert.equal(future.body.entries[0].is_due, false);
-  const current = await call(handler, `/api/private/today`); assert.equal(current.body.entry.is_due, false); assert.equal(current.body.entry.is_overdue_unstarted, false);
+  const current = await call(handler, `/api/private/today`); assert.equal(current.body.entry.is_due, false); assert.equal(current.body.entry.is_overdue_unstarted, false); assert.ok(current.body.entry.prescription?.blocks?.length);
 });
 
 test("ticket 25 boundaries: later-confirmed earlier revision masks older future revision", async () => {
