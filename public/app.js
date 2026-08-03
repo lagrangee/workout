@@ -72,7 +72,8 @@ function todayView() {
   if (!entry || entry.kind === "no_plan") return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today?.date || "今天"}</p><h1>今天没有计划</h1><p class="muted">可以在设置中提交未来训练计划。</p></div></section>`;
   if (entry.kind === "rest") return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today.date} · ${state.today.timezone}</p><span class="status-dot rest"></span><h1>休息日</h1><p class="muted">今天不安排训练。</p><div class="quiet-card">今天把恢复留给自己。</div></div></section>`;
   if (session) return state.correction && state.todayDetail ? correctionView(state.todayDetail, entry) : sessionView(session, entry);
-  return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today.date} · ${state.today.timezone}</p><h1>${escapeHtml(entry.title)}</h1><p class="muted">约 ${entry.estimated_duration_min} 分钟 · 只记录今天的训练</p><div class="hero-actions"><button class="primary" data-action="start">开始训练</button><button class="secondary" data-action="skip">跳过今天</button></div><section class="quiet-card"><strong>今天的规则</strong><p>完成的是实际训练，不要求必须达到目标；计划快照会在开始时固定。</p></section></div></section>`;
+  const plan = entry.prescription;
+  return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today.date} · ${state.today.timezone}</p><h1>${escapeHtml(entry.title)}</h1><p class="muted">约 ${entry.estimated_duration_min} 分钟 · 只记录今天的训练</p><div class="hero-actions"><button class="primary" data-action="start">开始训练</button><button class="secondary" data-action="skip">跳过今天</button></div><section class="today-plan calendar-prescription" aria-label="今日训练计划"><div class="today-plan-head"><h2>今日训练计划</h2><span>${entry.module_count} 个模块</span></div>${plan ? renderCalendarPrescription(plan) : `<p class="muted">今天的训练计划暂时无法读取。</p>`}</section></div></section>`;
 }
 
 function sessionView(session, entry) {
