@@ -71,6 +71,48 @@
   text-align: left;
 }
 
+.calendar-day.completed {
+  border-color: #c7ddc9;
+  background: #edf6ee;
+}
+
+.calendar-day.partial {
+  border-color: #eed9a8;
+  background: #fff5e2;
+}
+
+.calendar-day.skipped {
+  border-color: #e7c1b5;
+  background: #f9ece7;
+}
+
+.calendar-day.in_progress {
+  border-color: #c3d4e6;
+  background: #edf3f9;
+}
+
+.calendar-day.today,
+.calendar-day.scheduled {
+  border-color: #e5d8c7;
+  background: #fbf7f0;
+}
+
+.calendar-day.overdue {
+  border-color: #edc7a9;
+  background: #fff0e4;
+}
+
+.calendar-day.rest {
+  border-color: #ddd8d0;
+  background: #f4f2ef;
+}
+
+.calendar-day.no_plan,
+.calendar-day.before-plan {
+  border-color: #e4e1dc;
+  background: #f8f7f5;
+}
+
 .calendar-day:hover,
 .calendar-day.selected {
   border-color: var(--accent);
@@ -106,6 +148,33 @@
   font-size: 10px;
   line-height: 1.35;
 }
+
+.calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  margin-top: 14px;
+}
+
+.calendar-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.calendar-legend-item i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e5d8c7;
+}
+
+.calendar-legend-item.completed i { background: #a8c5aa; }
+.calendar-legend-item.partial i { background: #e3bb69; }
+.calendar-legend-item.skipped i { background: #d99580; }
+.calendar-legend-item.today i { background: #d8bd9d; }
 
 .calendar-detail {
   margin: 18px 0;
@@ -383,6 +452,32 @@
   color: var(--green);
 }
 
+.progress-range-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 18px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f8f4ee;
+}
+
+.progress-range-tab {
+  min-height: 38px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.progress-range-tab.is-selected {
+  background: var(--card);
+  color: var(--accent-dark);
+  box-shadow: 0 3px 9px rgba(38, 35, 31, .08);
+}
+
 .session-shell {
   min-height: 100vh;
   padding-bottom: 0;
@@ -414,6 +509,21 @@
   font-size: 30px;
   line-height: 1;
   color: var(--ink);
+}
+
+.session-timer-toggle {
+  justify-self: end;
+  min-width: 48px;
+  padding: 8px 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.session-timer-toggle[aria-pressed="true"] {
+  background: #f8ece6;
 }
 
 .session-minimize {

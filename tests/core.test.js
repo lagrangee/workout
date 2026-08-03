@@ -134,8 +134,14 @@ test("tickets 19-20: record, end, continue, split intervals and terminal correct
 });
 
 test("ticket 21: progress exposes evidence and exercise detail", async () => {
-  const { handler } = appFixture();
+  const { handler, store } = appFixture();
   const progress = await call(handler, "/api/private/progress?preset=30d"); assert.equal(progress.response.status, 200); assert.ok("completion_rate" in progress.body.metrics); assert.ok("current_streak" in progress.body);
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const currentMonth = await call(handler, `/api/private/progress?from=${monthStart}&to=${today}`);
+  assert.equal(currentMonth.response.status, 200); assert.equal(currentMonth.body.period.from, monthStart); assert.equal(currentMonth.body.period.to, today);
+  const allTime = await call(handler, "/api/private/progress?preset=all");
+  const stored = await store.getByEmail("athlete-a@example.invalid");
+  assert.equal(allTime.response.status, 200); assert.equal(allTime.body.period.from, stored.plan_revisions[0].effective_from); assert.equal(allTime.body.period.to, today);
   const missing = await call(handler, "/api/private/exercises/not-an-exercise?preset=12w"); assert.equal(missing.response.status, 404);
 });
 
