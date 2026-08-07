@@ -8,6 +8,7 @@ import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
+import { agentManifest, agentResource } from "./agent-api.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -49,10 +50,14 @@ async function agentRoute(request, env, getStore, url) {
   const authorization = request.headers.get("Authorization");
   const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
   const store = await getStore();
-  const state = bearer ? await findAgentInStore(store, bearer, env) : null;
+  let state = null;
+  try { state = bearer ? await findAgentInStore(store, bearer, env) : null; }
+  catch (error) { if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "Agent authentication is not configured", [], 503); throw error; }
   if (!state) return agentUnauthorized();
-  if (url.pathname !== "/api/agent/v1") return jsonError("not_found", "Resource not found", [], 404);
-  return maybeHead(jsonResponse({ schema_version: 1, generated_at: new Date().toISOString(), data_as_of: new Date().toISOString(), athlete: { display_name: state.display_name, timezone: state.timezone }, capabilities: ["read", "plan:write"] }), request);
+  const now = new Date();
+  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write"] } : agentResource(state, url.pathname, url, now);
+  if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
+  return maybeHead(jsonResponse(resource), request);
 }
 
 function agentUnauthorized() { return jsonError("agent_unauthorized", "A valid Agent Token is required", [], 401); }

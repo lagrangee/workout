@@ -11,6 +11,7 @@
     "test": "node --test tests/**/*.test.js",
     "test:watch": "node --test --watch tests/**/*.test.js",
     "seed:verify": "node scripts/verify-seed.mjs",
+    "mcp:check": "node --check mcp/bridge.mjs && node --check mcp/cli.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
     "forbidden-scan": "node scripts/forbidden-feature-scan.mjs",

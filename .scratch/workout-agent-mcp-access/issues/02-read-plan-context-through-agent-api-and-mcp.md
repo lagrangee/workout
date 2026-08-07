@@ -6,11 +6,14 @@
 
 **Status:** ready-for-agent
 
-- [ ] `workout_get_overview` returns bounded plan context, coverage, freshness, recent evidence, and current-date completeness metadata for the authenticated Athlete.
-- [ ] `workout_get_plan` returns the applicable Current Plan and effective future Weekly Templates without exposing internal revision identities.
-- [ ] `workout_get_schedule` requires an explicit inclusive Athlete-local date range, supports prescription expansion, and rejects invalid or oversized ranges with stable errors.
-- [ ] Agent API responses preserve structured JSON, `data_as_of`, safe `source_ref` values, metric semantics, and no-store/security behavior.
-- [ ] The local MCP adapter maps these three typed tools to the Agent API and preserves domain fields and error meaning without adding a generic HTTP tool.
-- [ ] Reads have no mutation side effects and do not expose Coach Share URLs, Agent Tokens, database identities, or Athlete selectors.
-- [ ] Tests cover empty and populated plans, future revisions, Rest Day and no-plan projections, boundary dates, invalid ranges, response metadata, and Athlete isolation through the Worker HTTP seam.
+- [x] `workout_get_overview` returns bounded plan context, coverage, freshness, recent evidence, and current-date completeness metadata for the authenticated Athlete.
+- [x] `workout_get_plan` returns the applicable Current Plan and effective future Weekly Templates without exposing internal revision identities.
+- [x] `workout_get_schedule` requires an explicit inclusive Athlete-local date range, supports prescription expansion, and rejects invalid or oversized ranges with stable errors.
+- [x] Agent API responses preserve structured JSON, `data_as_of`, safe `source_ref` values, metric semantics, and no-store/security behavior.
+- [x] The local MCP adapter maps these three typed tools to the Agent API and preserves domain fields and error meaning without adding a generic HTTP tool.
+- [x] Reads have no mutation side effects and do not expose Coach Share URLs, Agent Tokens, database identities, or Athlete selectors.
+- [x] Tests cover empty and populated plans, future revisions, Rest Day and no-plan projections, boundary dates, invalid ranges, response metadata, and Athlete isolation through the Worker HTTP seam.
 
+## Completion
+
+Implemented with the existing Worker projection seams plus a local JSONL stdio MCP bridge. Verified with the Agent API/MCP tests, authentication/core regression tests, `npm run typecheck`, and `npm run mcp:check`.
