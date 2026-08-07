@@ -44,6 +44,10 @@ test("Agent plan validation returns a complete preview and base evidence without
   assert.equal(result.body.base_plan.source_ref, "plan:base");
   assert.doesNotMatch(JSON.stringify(result.body), /revision_key|athlete_key|token_digest|Bearer|\/coach\//);
 
+  const paddedPackage = `${" ".repeat(256 * 1024 - new TextEncoder().encode(packageText(addDays(today, 1), workout("外层包裹"))).byteLength - 32)}${packageText(addDays(today, 1), workout("外层包裹"))}`;
+  const paddedResult = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: paddedPackage });
+  assert.equal(paddedResult.response.status, 200);
+
   const after = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(after.plan_revisions.length, before.plan_revisions.length);
   assert.equal(after.training_version, before.training_version);

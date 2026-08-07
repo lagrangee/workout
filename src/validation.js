@@ -102,9 +102,9 @@ class StrictJsonParser {
   }
 }
 
-/** @param {string} text */
-export function parseStrictJson(text) {
-  if (new TextEncoder().encode(text).byteLength > 256 * 1024) throw new StrictJsonParseError("", "Package exceeds the 256 KiB limit");
+/** @param {string} text @param {number} [maxBytes] */
+export function parseStrictJson(text, maxBytes = 256 * 1024) {
+  if (new TextEncoder().encode(text).byteLength > maxBytes) throw new StrictJsonParseError("", "Package exceeds the 256 KiB limit");
   return new StrictJsonParser(text).parse();
 }
 
