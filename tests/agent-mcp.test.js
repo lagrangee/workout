@@ -42,4 +42,9 @@ test("workout MCP maps typed calls to authenticated Agent API reads and preserve
   const wrongType = await bridge.handleMessage({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "workout_get_schedule", arguments: { from: "2026-08-01", to: true } } });
   assert.equal(wrongType.error.code, -32602);
   assert.equal(requests.length, 2);
+
+  const invalidJsonBridge = new McpBridge({ client: new WorkoutApiClient({ origin: "https://workout.example", token: "local-test-token", fetchImpl: async () => new Response("not-json", { status: 200 }) }) });
+  const invalidJson = await invalidJsonBridge.handleMessage({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "workout_get_plan", arguments: {} } });
+  assert.equal(invalidJson.result.isError, true);
+  assert.equal(invalidJson.result.structuredContent.error.code, "invalid_response");
 });
