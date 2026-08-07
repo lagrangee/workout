@@ -39,3 +39,14 @@ supporting evidence. Remaining handoff requires an authorized production
 deploy/migration/Secret write, user-owned App login to create or rotate the
 Token, local MCP registration in a fresh Codex process, and a separately
 confirmed future plan change for the live apply/readback branch.
+
+2026-08-08 — The authorized production prerequisites are complete.
+`AGENT_TOKEN_SECRET` was written without exposing its value, remote D1
+migration `0005_agent_token_lookup.sql` applied successfully, and Worker
+version `4fa27860-eb98-4e07-84f8-838f39c959f3` was deployed from `main`.
+Production `/healthz` returns `200`; unauthenticated `/api/agent/v1` returns
+the expected `401 agent_unauthorized`. No production plan was read or changed.
+The remaining acceptance boundary is user-owned: create or rotate a Token in
+the authenticated App, configure the local owner-only MCP file, start a fresh
+Codex task, and complete the read-only smoke before any separately confirmed
+plan update.
