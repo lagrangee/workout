@@ -89,6 +89,9 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   const oversizedRange = await agentGet(handler, tokenA, "/api/agent/v1/schedule?from=2026-01-01&to=2027-01-02");
   assert.equal(oversizedRange.response.status, 400);
   assert.equal(oversizedRange.body.error.code, "invalid_period");
+  const emptyExpand = await agentGet(handler, tokenA, `/api/agent/v1/schedule?from=${today}&to=${today}&expand=`);
+  assert.equal(emptyExpand.response.status, 400);
+  assert.equal(emptyExpand.body.error.code, "invalid_request");
 
   const schedule = await agentGet(handler, tokenA, `/api/agent/v1/schedule?from=${today}&to=${addDays(today, 7)}&expand=prescription`);
   assert.equal(schedule.response.status, 200);

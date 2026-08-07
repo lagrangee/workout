@@ -27,4 +27,5 @@ period selectors, no-store metadata, stable safe references, MCP argument
 validation, and cross-Athlete isolation are covered at the Worker seam.
 
 Context pointer: the implementation contract is recorded in
-`docs/contracts/agent-api-v1.md` and `docs/contracts/agent-api-wire-catalog-v1.md`.
+`docs/contracts/agent-api-v1.md` and `docs/contracts/agent-api-wire-catalog-v1.md`;
+the shared decision is indexed in [`map.md`](../map.md#decisions-so-far).
