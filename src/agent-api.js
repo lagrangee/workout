@@ -143,7 +143,7 @@ export function agentResource(state, pathname, url, now) {
   if (pathname === `${AGENT_PREFIX}/overview`) return agentOverview(state, url, now);
   if (pathname === `${AGENT_PREFIX}/plan`) return agentPlan(state, now);
   if (pathname === `${AGENT_PREFIX}/schedule`) return agentSchedule(state, url, now);
-  if (pathname === `${AGENT_PREFIX}/sessions`) return { ...coachResource(state, pathname, url, now), source_ref: "sessions" };
+  if (pathname === `${AGENT_PREFIX}/sessions`) return { ...coachResource(state, pathname, url, now, undefined, { requireTrainingVersion: true }), source_ref: "sessions" };
   if (pathname.startsWith(`${AGENT_PREFIX}/sessions/`)) {
     const resource = coachResource(state, pathname, url, now);
     return resource.error ? resource : { ...resource, training_version: state.training_version };
@@ -153,8 +153,11 @@ export function agentResource(state, pathname, url, now) {
     return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: "progress" };
   }
   if (pathname.startsWith(`${AGENT_PREFIX}/exercises/`)) {
-    const resource = coachResource(state, pathname, url, now);
-    const exerciseKey = decodeURIComponent(pathname.split(`${AGENT_PREFIX}/exercises/`)[1]);
+    const rawExerciseKey = pathname.slice(`${AGENT_PREFIX}/exercises/`.length);
+    let exerciseKey;
+    try { exerciseKey = decodeURIComponent(rawExerciseKey); } catch { return { error: { code: "invalid_request", field: "exercise_key", message: "exercise_key must be a valid path segment" } }; }
+    if (!exerciseKey || exerciseKey.includes("/") || exerciseKey.includes("\\")) return { error: { code: "invalid_request", field: "exercise_key", message: "exercise_key must be a single non-empty path segment" } };
+    const resource = coachResource(state, `${AGENT_PREFIX}/exercises/${encodeURIComponent(exerciseKey)}`, url, now);
     return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: `exercise:${exerciseKey}` };
   }
   return { error: { code: "not_found", message: "Resource not found" } };
@@ -167,6 +170,7 @@ export function agentQueryError(pathname, url) {
   for (const key of url.searchParams.keys()) {
     if (!allowed.includes(key)) return { code: "invalid_request", field: key, message: `Unsupported query parameter: ${key}` };
     if (seen.has(key)) return { code: "invalid_request", field: key, message: `Query parameter may only be provided once: ${key}` };
+    if (["cursor", "status", "exercise_key"].includes(key) && url.searchParams.get(key) === "") return { code: "invalid_request", field: key, message: `${key} must not be empty` };
     seen.add(key);
   }
   return null;

@@ -82,3 +82,37 @@ test("workout MCP maps Session, progress, and Exercise history arguments without
   assert.equal(requests.every((request) => request.options.headers.Authorization === "Bearer local-test-token"), true);
   assert.equal(requests.length, 4);
 });
+
+test("workout MCP preserves typed history errors and never retries stale reads", async () => {
+  const responses = [
+    { status: 400, body: { error: { code: "invalid_cursor", message: "Cursor expired", details: [] } } },
+    { status: 409, body: { error: { code: "training_version_changed", message: "Restart from page one", details: [] } } },
+    { status: 404, body: { error: { code: "not_found", message: "Not found", details: [] } } },
+  ];
+  let calls = 0;
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async () => {
+      const response = responses[calls++];
+      return new Response(JSON.stringify(response.body), { status: response.status, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const bridge = new McpBridge({ client });
+
+  const invalidCursor = await bridge.handleMessage({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "workout_list_sessions", arguments: { cursor: "expired" } } });
+  assert.equal(invalidCursor.result.isError, true);
+  assert.equal(invalidCursor.result.structuredContent.error.code, "invalid_cursor");
+  assert.equal(invalidCursor.result.structuredContent.status, 400);
+
+  const changed = await bridge.handleMessage({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "workout_list_sessions", arguments: { cursor: "stale" } } });
+  assert.equal(changed.result.isError, true);
+  assert.equal(changed.result.structuredContent.error.code, "training_version_changed");
+  assert.equal(changed.result.structuredContent.status, 409);
+
+  const missing = await bridge.handleMessage({ jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "workout_get_session", arguments: { session_key: "missing" } } });
+  assert.equal(missing.result.isError, true);
+  assert.equal(missing.result.structuredContent.error.code, "not_found");
+  assert.equal(missing.result.structuredContent.status, 404);
+  assert.equal(calls, 3);
+});

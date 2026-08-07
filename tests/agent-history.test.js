@@ -86,6 +86,17 @@ test("Agent Session cursors bind filters and training version", async () => {
   assert.equal(malformed.response.status, 400);
   assert.equal(malformed.body.error.code, "invalid_cursor");
 
+  const nullCursor = base64UrlEncode(new TextEncoder().encode("null"));
+  const nullValue = await agentGet(handler, token, `/api/agent/v1/sessions?limit=1&cursor=${nullCursor}`);
+  assert.equal(nullValue.response.status, 400);
+  assert.equal(nullValue.body.error.code, "invalid_cursor");
+
+  for (const field of ["cursor", "status", "exercise_key"]) {
+    const empty = await agentGet(handler, token, `/api/agent/v1/sessions?${field}=`);
+    assert.equal(empty.response.status, 400);
+    assert.equal(empty.body.error.code, "invalid_request");
+  }
+
   const state = await store.getByEmail("athlete-a@example.invalid");
   state.training_version += 1;
   await store.save(state);
@@ -109,6 +120,24 @@ test("Agent Session list preserves skipped status and empty status boundaries", 
   assert.equal(completedPage.response.status, 200);
   assert.deepEqual(completedPage.body.items, []);
   assert.equal(completedPage.body.page.next_cursor, null);
+});
+
+test("Coach Share session cursors remain compatible with the legacy cursor shape", async () => {
+  const { handler, store } = appFixture();
+  await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "agent-history-coach-start"));
+  await seedHistoricalSession(store, addDays(today, -7));
+  const share = await call(handler, "/api/private/coach-share", post({}, "agent-history-coach-share"));
+  assert.equal(share.response.status, 201);
+  const shareCopy = await call(handler, "/api/private/coach-share");
+  assert.equal(shareCopy.response.status, 200);
+  const coachToken = shareCopy.body.url.split("/coach/")[1];
+
+  const first = await call(handler, `/api/coach/v1/${coachToken}/sessions?limit=1`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(first.response.status, 200);
+  assert.equal(typeof first.body.page.next_cursor, "string");
+  const second = await call(handler, `/api/coach/v1/${coachToken}/sessions?limit=1&cursor=${encodeURIComponent(first.body.page.next_cursor)}`, { headers: {} }, "ignored@example.invalid");
+  assert.equal(second.response.status, 200);
+  assert.equal(second.body.items.length, 1);
 });
 
 test("Agent Session detail preserves the immutable snapshot and actual training data", async () => {
@@ -225,4 +254,8 @@ test("Agent exercise history preserves names, resistance semantics, sides, and S
   const missing = await agentGet(handler, token, `/api/agent/v1/exercises/not-an-exercise?from=${today}&to=${today}`);
   assert.equal(missing.response.status, 404);
   assert.equal(missing.body.error.code, "not_found");
+
+  const malformedPath = await agentGet(handler, token, "/api/agent/v1/exercises/%E0%A4%A");
+  assert.equal(malformedPath.response.status, 400);
+  assert.equal(malformedPath.body.error.code, "invalid_request");
 });
