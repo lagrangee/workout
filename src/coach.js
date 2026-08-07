@@ -323,5 +323,10 @@ function coachSessionDetail(session, now) {
 }
 
 export function coachPrescription(slot, revisionKey, weekday) {
-  return { prescription_ref: `prescription:${revisionKey}:${weekday}`, title: slot.title, start_time: slot.start_time, estimated_duration_min: slot.estimated_duration_min, blocks: slot.blocks.map((block, blockIndex) => ({ block_key: `cb_${revisionKey}_${weekday}_${blockIndex + 1}`, title: block.title, exercises: block.exercises.map((exercise, exerciseIndex) => ({ exercise_occurrence_key: `ce_${revisionKey}_${weekday}_${blockIndex + 1}_${exerciseIndex + 1}`, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: exercise.sets.map((set, setIndex) => ({ set_key: `cs_${revisionKey}_${weekday}_${blockIndex + 1}_${exerciseIndex + 1}_${setIndex + 1}`, ...deepClone(set) })) })) })) };
+  return prescriptionProjection(slot, `prescription:${revisionKey}:${weekday}`, `c_${revisionKey}_${weekday}`);
+}
+
+/** @param {any} slot @param {string} prescriptionRef @param {string} keyPrefix */
+export function prescriptionProjection(slot, prescriptionRef, keyPrefix) {
+  return { prescription_ref: prescriptionRef, title: slot.title, start_time: slot.start_time, estimated_duration_min: slot.estimated_duration_min, blocks: slot.blocks.map((block, blockIndex) => ({ block_key: `${keyPrefix}_b${blockIndex + 1}`, title: block.title, exercises: block.exercises.map((exercise, exerciseIndex) => ({ exercise_occurrence_key: `${keyPrefix}_e${blockIndex + 1}_${exerciseIndex + 1}`, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: exercise.sets.map((set, setIndex) => ({ set_key: `${keyPrefix}_s${blockIndex + 1}_${exerciseIndex + 1}_${setIndex + 1}`, ...deepClone(set) })) })) })) };
 }

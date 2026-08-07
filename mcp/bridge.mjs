@@ -121,6 +121,8 @@ export class McpBridge {
     if (params.arguments !== undefined && (!params.arguments || typeof params.arguments !== "object" || Array.isArray(params.arguments))) return makeError(message.id, -32602, "tools/call params.arguments must be an object");
     const available = await this.getTools();
     if (!available.some((tool) => tool.name === params.name)) return makeError(message.id, -32602, `Tool is not available: ${params.name}`);
+    const validationError = validateToolArguments(available.find((tool) => tool.name === params.name), params.arguments ?? {});
+    if (validationError) return makeError(message.id, -32602, validationError);
     try {
       const value = await this.client.callTool(params.name, params.arguments ?? {});
       return makeResponse(message.id, { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value });
@@ -129,4 +131,26 @@ export class McpBridge {
       return makeResponse(message.id, { content: [{ type: "text", text: JSON.stringify(failure) }], structuredContent: failure, isError: true });
     }
   }
+}
+
+function validateToolArguments(tool, args) {
+  const schema = tool.inputSchema;
+  const properties = schema.properties ?? {};
+  for (const required of schema.required ?? []) if (!Object.hasOwn(args, required)) return `Missing required argument: ${required}`;
+  for (const key of Object.keys(args)) {
+    const property = properties[key];
+    if (!property) return `Unknown argument: ${key}`;
+    const value = args[key];
+    if (property.type === "string" && typeof value !== "string") return `Argument ${key} must be a string`;
+    if (property.type === "boolean" && typeof value !== "boolean") return `Argument ${key} must be a boolean`;
+    if (property.enum && !property.enum.includes(value)) return `Argument ${key} is unsupported`;
+    if (property.format === "date" && !isValidDateArgument(value)) return `Argument ${key} must be a valid YYYY-MM-DD date`;
+  }
+  return null;
+}
+
+function isValidDateArgument(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
