@@ -34,8 +34,13 @@ structured data, provenance, and confirmed plan-write boundaries.
   revision, retains a 24-hour idempotency result, and the MCP flow verifies the
   applied plan plus its seven-day Schedule readback. Ticket 06 owns the thin
   Skill; Ticket 07 owns live MCP acceptance.
+- [Ticket 06](issues/06-write-the-workout-agent-skill.md): publish the
+  model-invoked `skills/workout-agent/SKILL.md`. It routes bounded typed reads,
+  preserves provenance and pagination boundaries, leaves analysis presentation
+  to the Agent, and makes future plan writes follow validate → separate
+  confirmation → apply → verified readback with explicit error and excluded-
+  mutation paths.
 
 ## Fog
 
-Tickets 06–07 remain the implementation frontier: the thin Skill and live MCP
-acceptance.
+Ticket 07 remains the implementation frontier: live MCP acceptance.
