@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] An authenticated Athlete can create or rotate one Agent Token and receive its complete value only in the creation or rotation response.
 - [x] Agent access status can be read without returning the plaintext Token; rotation immediately invalidates the previous Token and revocation prevents further access.
@@ -17,3 +17,13 @@
 ## Completion
 
 Implemented through the existing Worker HTTP boundary with a MemoryStore/D1 lookup seam. The post-implementation review findings were fixed by requiring `AGENT_TOKEN_SECRET` in production, adding the versioned Agent API/wire contract and release checklist entries, stabilizing unauthenticated error ordering, and removing duplicated lookup logic. Verified with `node --test tests/agent-auth.test.js`, the authentication/core regression tests, and `npm run typecheck`.
+
+## Answer
+
+Ticket resolved. Agent access is a separate simple bearer capability: the
+authenticated App returns a complete Token only at create/rotate time, while
+the Agent API derives one Athlete from its header and stores only the lookup
+digest plus lifecycle metadata. The existing Coach Share remains read-only.
+
+Context pointer: the implementation contract is recorded in
+`docs/contracts/agent-api-v1.md` and `docs/contracts/agent-api-wire-catalog-v1.md`.

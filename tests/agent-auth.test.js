@@ -18,6 +18,9 @@ async function agentRequest(handler, token, path = "/api/agent/v1", headers = {}
   return { response, body };
 }
 
+/** @param {Response} response */
+async function responseBody(response) { return response.json(); }
+
 test("Agent Token lifecycle is isolated and cannot cross existing auth boundaries", async () => {
   const { handler, store } = appFixture();
 
@@ -35,6 +38,10 @@ test("Agent Token lifecycle is isolated and cannot cross existing auth boundarie
   const missingSelector = await agentRequest(handler, null, "/api/agent/v1?athlete=athlete-b@example.invalid");
   assert.equal(missingSelector.response.status, 401);
 
+  const unconfigured = await handler.fetch(new Request("https://workout.example/api/agent/v1"), { ENVIRONMENT: "production", PRODUCTION_HOST: "workout.example" });
+  assert.equal(unconfigured.status, 503);
+  assert.equal((await responseBody(unconfigured)).error.code, "service_not_configured");
+
   const tampered = await agentRequest(handler, "A".repeat(43));
   assert.equal(tampered.response.status, 401);
   assert.equal(tampered.body.error.code, "agent_unauthorized");
@@ -50,6 +57,11 @@ test("Agent Token lifecycle is isolated and cannot cross existing auth boundarie
   assert.equal(status.body.active, true);
   assert.equal(Object.hasOwn(status.body, "token"), false);
   assert.equal(Object.hasOwn(status.body, "token_digest"), false);
+  assert.equal(created.body.revoked_at, null);
+
+  const methodNotAllowed = await handler.fetch(new Request("https://workout.example/api/agent/v1", { method: "POST", headers: { Authorization: `Bearer ${firstToken}` } }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
+  assert.equal(methodNotAllowed.status, 405);
+  assert.deepEqual(await responseBody(methodNotAllowed), { error: { code: "method_not_allowed", message: "Method not allowed", details: [] } });
 
   const agentMe = await agentRequest(handler, firstToken, "/api/agent/v1", {
     "x-athlete-email": "athlete-b@example.invalid",
