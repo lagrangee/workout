@@ -28,8 +28,14 @@ structured data, provenance, and confirmed plan-write boundaries.
   returns complete preview and digest evidence, and preserves stable JSON
   Pointer errors without exposing revision identities. Confirmation and apply
   remain Ticket 05.
+- [Ticket 05](issues/05-confirm-and-apply-future-plan-updates.md): add the
+  confirmed, atomic Agent Plan Update application. The boundary revalidates
+  package/base evidence, increments `training_version`, appends one immutable
+  revision, retains a 24-hour idempotency result, and the MCP flow verifies the
+  applied plan plus its seven-day Schedule readback. Ticket 06 owns the thin
+  Skill; Ticket 07 owns live MCP acceptance.
 
 ## Fog
 
-Tickets 05–07 remain the implementation frontier: confirmed plan application,
-the Skill, and live MCP acceptance.
+Tickets 06–07 remain the implementation frontier: the thin Skill and live MCP
+acceptance.
