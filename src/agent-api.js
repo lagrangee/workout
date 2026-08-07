@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { canonicalJson, deepClone, dateRange, dateSpan, isValidLocalDate, localDate } from "./util.js";
+import { WEEKDAYS, canonicalJson, deepClone, dateRange, dateSpan, isValidLocalDate, localDate } from "./util.js";
 import { scheduleEntry } from "./plan.js";
 import { coachOverview, prescriptionProjection } from "./coach.js";
 
@@ -24,7 +24,7 @@ export function agentManifest(state, now) {
       timezone: state.timezone,
       date_format: "YYYY-MM-DD",
       date_ranges_inclusive: true,
-      overview: { default_period: "30d", selectors: ["preset", "range"], values: ["7d", "30d", "12w", "all"], from_to_conflicts_with_selector: true, max_days: 3660 },
+      overview: { default_period: "30d", selectors: ["preset", "range"], values: ["7d", "30d", "12w", "all"], from_to_must_be_together: true, preset_range_mutually_exclusive: true, from_to_conflicts_with_selector: true, max_days: 3660 },
       schedule_range_required: true,
       max_days: { schedule: 366 },
     },
@@ -54,7 +54,7 @@ export function agentPlan(state, now) {
     .filter((revision) => revision.effective_from > today && state.plan_revisions.filter((candidate) => candidate.effective_from <= revision.effective_from).sort((left, right) => right.revision_sequence - left.revision_sequence)[0]?.revision_key === revision.revision_key)
     .sort((left, right) => left.effective_from.localeCompare(right.effective_from));
   const firstEffective = state.plan_revisions.slice().sort((left, right) => left.effective_from.localeCompare(right.effective_from))[0]?.effective_from ?? null;
-  const project = (revision) => ({ effective_from: revision.effective_from, week: Object.fromEntries(Object.entries(revision.week).map(([day, slot]) => [day, slot?.kind === "workout" ? { kind: "workout", prescription: prescriptionProjection(slot, `plan:${revision.effective_from}:${day}`, `agent_plan_${revision.effective_from}_${day}`) } : deepClone(slot)])) });
+  const project = (revision) => ({ effective_from: revision.effective_from, week: Object.fromEntries(WEEKDAYS.map((day) => { const slot = revision.week[day] ?? null; return [day, slot?.kind === "workout" ? { kind: "workout", prescription: prescriptionProjection(slot, `plan:${revision.effective_from}:${day}`, safePrescriptionKeys(`agent_plan_${revision.effective_from}_${day}`)) } : deepClone(slot)]; })) });
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
@@ -85,7 +85,7 @@ export function agentSchedule(state, url, now) {
   const entries = dateRange(from, to).map((date) => {
     const raw = scheduleEntry(state, date, now, true);
     const prescriptionRef = raw.kind === "workout" ? stablePrescriptionRef(raw.prescription, raw.weekday) : null;
-    if (expand && prescriptionRef && raw.prescription) prescriptions[prescriptionRef] = prescriptionProjection(raw.prescription, prescriptionRef, `agent_schedule_${raw.weekday}_${stableFingerprint(raw.prescription)}`);
+    if (expand && prescriptionRef && raw.prescription) prescriptions[prescriptionRef] = prescriptionProjection(raw.prescription, prescriptionRef, safePrescriptionKeys(`agent_schedule_${raw.weekday}_${stableFingerprint(raw.prescription)}`));
     return {
       date: raw.date,
       weekday: raw.weekday,
@@ -134,4 +134,25 @@ export function agentResource(state, pathname, url, now) {
   if (pathname === `${AGENT_PREFIX}/plan`) return agentPlan(state, now);
   if (pathname === `${AGENT_PREFIX}/schedule`) return agentSchedule(state, url, now);
   return { error: { code: "not_found", message: "Resource not found" } };
+}
+
+/** @param {string} pathname @param {URL} url */
+export function agentQueryError(pathname, url) {
+  const allowed = pathname === AGENT_PREFIX ? [] : pathname === `${AGENT_PREFIX}/overview` ? ["from", "to", "preset", "range"] : pathname === `${AGENT_PREFIX}/plan` ? [] : pathname === `${AGENT_PREFIX}/schedule` ? ["from", "to", "expand"] : [];
+  const seen = new Set();
+  for (const key of url.searchParams.keys()) {
+    if (!allowed.includes(key)) return { code: "invalid_request", field: key, message: `Unsupported query parameter: ${key}` };
+    if (seen.has(key)) return { code: "invalid_request", field: key, message: `Query parameter may only be provided once: ${key}` };
+    seen.add(key);
+  }
+  return null;
+}
+
+/** @param {string} prefix */
+function safePrescriptionKeys(prefix) {
+  return {
+    block: (blockIndex) => `${prefix}_b${blockIndex + 1}`,
+    exercise: (blockIndex, exerciseIndex) => `${prefix}_e${blockIndex + 1}_${exerciseIndex + 1}`,
+    set: (blockIndex, exerciseIndex, setIndex) => `${prefix}_s${blockIndex + 1}_${exerciseIndex + 1}_${setIndex + 1}`,
+  };
 }
