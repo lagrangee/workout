@@ -70,7 +70,7 @@ plan_update_apply: {
     confirmed: { type: "boolean", const: true },
     idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" }
   },
-  rules: { mutates: true, requires_confirmation: true, idempotent: true, strict_package: true }
+  rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true }
 }
 ```
 
@@ -253,7 +253,7 @@ AgentPlanUpdateApplication = {
   base_plan_digest: string,
   preview: {
     effective_from: LocalDate,
-    week: WeeklyTemplate,
+    week: object,
     changed_weekday_slot_count: integer,
     source_ref: "plan-update:preview"
   }
@@ -322,10 +322,13 @@ effective base evidence selected for the package's future date. This is the
 template the preview compares against, including an already-effective future
 revision when one wins at that date. Validation is non-mutating. Application
 requires the same package and both digest values, an explicit `confirmed: true`,
-and an `Idempotency-Key` header; it rechecks all evidence in the atomic
-mutation boundary and appends one immutable revision. A successful application
-does not expose its revision key. The MCP adapter then reads the Current Plan
-and the affected seven-day Schedule as readback evidence.
+and an `Idempotency-Key` header. Idempotency records are retained for 24 hours.
+The Worker rechecks all evidence in the atomic mutation boundary, increments
+`training_version` once, and appends one immutable revision. A successful
+application does not expose its revision key. The MCP adapter then reads the
+Current Plan and the affected seven-day Schedule as readback evidence and
+checks that the returned plan date/content and schedule dates match the
+application.
 
 ## Errors
 
