@@ -40,7 +40,8 @@ AgentManifest = {
   training_version: integer,
   query_rules: object,
   links: { overview: string, plan: string, schedule: string, sessions: string,
-           progress: string, exercise: string, plan_update_validate: string },
+           progress: string, exercise: string, plan_update_validate: string,
+           plan_update_apply: string },
   endpoints: object,
   capabilities: ["read", "plan:write"]
 }
@@ -58,6 +59,18 @@ plan_update_validate: {
   path: "/api/agent/v1/plan-updates/validate",
   parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" } },
   rules: { mutates: false, strict_package: true }
+},
+plan_update_apply: {
+  method: "POST",
+  path: "/api/agent/v1/plan-updates/apply",
+  parameters: {
+    package_text: { type: "string", content: "Plan Update Package v1 JSON" },
+    package_digest: { type: "string", format: "sha256" },
+    base_plan_digest: { type: "string", format: "sha256" },
+    confirmed: { type: "boolean", const: true },
+    idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" }
+  },
+  rules: { mutates: true, requires_confirmation: true, idempotent: true, strict_package: true }
 }
 ```
 
@@ -228,6 +241,24 @@ AgentPlanUpdateValidation = {
   }
 }
 
+AgentPlanUpdateApplication = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  training_version: integer,
+  source_ref: "plan-update:application",
+  applied: true,
+  effective_from: LocalDate,
+  package_digest: string,
+  base_plan_digest: string,
+  preview: {
+    effective_from: LocalDate,
+    week: WeeklyTemplate,
+    changed_weekday_slot_count: integer,
+    source_ref: "plan-update:preview"
+  }
+}
+
 ScheduleEntry = {
   date: LocalDate,
   weekday: string,
@@ -282,15 +313,19 @@ retain the per-set actual metric, resistance mode and quantities, RIR, side,
 and safe `session:<date>:<session_key>` references; `series.none`, `series.left`,
 and `series.right` never merge sides.
 
-Plan Update validation reuses [Plan Update Package v1](plan-update-package-v1.md)
-as its canonical package contract. The MCP tool accepts a structured `package`
-object and serializes it to the Agent request's exact `package_text` field;
-the Worker then runs the strict text validator. The response digest is over
-the canonical package value and the base-plan digest is over the public
+Plan Update validation and application reuse [Plan Update Package v1](plan-update-package-v1.md)
+as their canonical package contract. The MCP tools accept a structured
+`package` object and serialize it to the Agent request's exact `package_text`
+field; the Worker then runs the strict text validator. The response digest is
+over the canonical package value and the base-plan digest is over the public
 effective base evidence selected for the package's future date. This is the
 template the preview compares against, including an already-effective future
-revision when one wins at that date. This route is non-mutating and does not
-accept confirmation, idempotency, or application fields.
+revision when one wins at that date. Validation is non-mutating. Application
+requires the same package and both digest values, an explicit `confirmed: true`,
+and an `Idempotency-Key` header; it rechecks all evidence in the atomic
+mutation boundary and appends one immutable revision. A successful application
+does not expose its revision key. The MCP adapter then reads the Current Plan
+and the affected seven-day Schedule as readback evidence.
 
 ## Errors
 
@@ -300,7 +335,9 @@ Error = { error: { code: string, message: string, details: object[] } }
 
 Authentication failures use HTTP `401` and `agent_unauthorized`. Unsupported
 methods use `405`; invalid selectors or request values use `400`; an absent
-resource uses `404`; missing production configuration uses `503`.
+resource uses `404`; stale package/base evidence, an idempotency conflict, or
+a concurrent state change uses `409`; missing production configuration uses
+`503`.
 
 `Instant` is an RFC 3339 UTC string. `IanaTimezone` is an IANA timezone name.
 Unknown or inapplicable values are explicit `null`.

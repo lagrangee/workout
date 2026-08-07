@@ -1,9 +1,9 @@
 // @ts-nocheck
 
 import { WEEKDAYS, canonicalJson, deepClone, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
-import { planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
+import { appendPlanRevision, planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
 import { coachOverview, coachResource, prescriptionProjection } from "./coach.js";
-import { parseStrictJson } from "./validation.js";
+import { parseStrictJson, validatePlanPackage } from "./validation.js";
 
 const AGENT_PREFIX = "/api/agent/v1";
 
@@ -40,6 +40,7 @@ export function agentManifest(state, now) {
       progress: `${AGENT_PREFIX}/progress`,
       exercise: `${AGENT_PREFIX}/exercises/{exercise_key}`,
       plan_update_validate: `${AGENT_PREFIX}/plan-updates/validate`,
+      plan_update_apply: `${AGENT_PREFIX}/plan-updates/apply`,
     },
     endpoints: {
       overview: { method: "GET", path: `${AGENT_PREFIX}/overview`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] } },
@@ -50,6 +51,7 @@ export function agentManifest(state, now) {
       progress: { method: "GET", path: `${AGENT_PREFIX}/progress`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"], bucket: ["day", "week", "month"] }, rules: { max_days: 3660, date_window_optional: true } },
       exercise_history: { method: "GET", path: `${AGENT_PREFIX}/exercises/{exercise_key}`, parameters: { exercise_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] }, rules: { max_days: 3660, date_window_optional: true } },
       plan_update_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/validate`, parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" } }, rules: { mutates: false, strict_package: true } },
+      plan_update_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/apply`, parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" }, package_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, strict_package: true } },
     },
   };
 }
@@ -66,7 +68,7 @@ export async function agentValidatePlanUpdate(state, rawBody, now) {
   if (!isRecord(body) || Object.keys(body).length !== 1 || typeof body.package_text !== "string") return { error: { code: "invalid_request", message: "package_text is required and must be a string" } };
   const result = validatePlanForState(state, body.package_text, now);
   if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
-  const basePlan = { ...planUpdateBase(state, result.value), source_ref: "plan:base" };
+  const basePlan = planUpdateBaseEvidence(state, result.value);
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
@@ -80,6 +82,45 @@ export async function agentValidatePlanUpdate(state, rawBody, now) {
     preview: { ...result.preview, source_ref: "plan-update:preview" },
   };
 }
+
+/** @param {any} state @param {string} rawBody @param {Date} now */
+export async function agentApplyPlanUpdate(state, rawBody, now) {
+  let body;
+  try { body = parseStrictJson(rawBody, 512 * 1024); } catch { return { error: { code: "invalid_json", message: "Request body must be valid JSON" } }; }
+  if (!isRecord(body) || Object.keys(body).length !== 4 || typeof body.package_text !== "string" || !isSha256(body.package_digest) || !isSha256(body.base_plan_digest) || body.confirmed !== true) {
+    return { error: { code: body?.confirmed !== true ? "confirmation_required" : "invalid_request", message: body?.confirmed !== true ? "confirmed must be true" : "package_text, package_digest, base_plan_digest, and confirmed are required" } };
+  }
+  const packageResult = validatePlanPackage(body.package_text, localDate(now, state.timezone));
+  if (!packageResult.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: packageResult.errors } };
+  const packageDigest = await sha256Hex(canonicalJson(packageResult.value));
+  if (packageDigest !== body.package_digest) return { error: { code: "package_digest_mismatch", message: "package_digest does not match package_text" } };
+  const basePlan = planUpdateBaseEvidence(state, packageResult.value);
+  const basePlanDigest = await sha256Hex(canonicalJson(basePlan));
+  if (basePlanDigest !== body.base_plan_digest) return { error: { code: "stale_plan", message: "The Current Plan changed after this proposal was validated" } };
+  const result = validatePlanForState(state, body.package_text, now);
+  if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
+  appendPlanRevision(state, result.value, now);
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    data_as_of: now.toISOString(),
+    training_version: state.training_version,
+    source_ref: "plan-update:application",
+    applied: true,
+    effective_from: result.value.effective_from,
+    package_digest: packageDigest,
+    base_plan_digest: basePlanDigest,
+    preview: { ...result.preview, source_ref: "plan-update:preview" },
+  };
+}
+
+/** @param {any} state @param {any} packageValue */
+function planUpdateBaseEvidence(state, packageValue) {
+  return { ...planUpdateBase(state, packageValue), source_ref: "plan:base" };
+}
+
+/** @param {any} value */
+function isSha256(value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); }
 
 /** @param {any} state @param {Date} now */
 export function agentPlan(state, now) {

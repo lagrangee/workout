@@ -8,7 +8,7 @@ import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
-import { agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
+import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -54,20 +54,54 @@ async function agentRoute(request, env, getStore, url) {
   catch (error) { if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "Agent authentication is not configured", [], 503); throw error; }
   if (!state) return agentUnauthorized();
   const isPlanValidationPath = url.pathname === "/api/agent/v1/plan-updates/validate";
+  const isPlanApplyPath = url.pathname === "/api/agent/v1/plan-updates/apply";
   const isPlanValidation = request.method === "POST" && isPlanValidationPath;
-  if (isPlanValidationPath && request.method !== "POST") return agentMethodNotAllowed("POST");
-  if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation) return agentMethodNotAllowed();
+  const isPlanApply = request.method === "POST" && isPlanApplyPath;
+  if ((isPlanValidationPath || isPlanApplyPath) && request.method !== "POST") return agentMethodNotAllowed("POST");
+  if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation && !isPlanApply) return agentMethodNotAllowed();
   if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
   const queryError = agentQueryError(url.pathname, url);
   if (queryError) return jsonError(queryError.code, queryError.message, [], 400);
   const now = new Date();
-  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write"] } : isPlanValidation ? await agentValidatePlanUpdate(state, await request.text(), now) : agentResource(state, url.pathname, url, now);
+  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write"] } : isPlanValidation ? await agentValidatePlanUpdate(state, await request.text(), now) : isPlanApply ? await agentApplyRoute(request, store, state, now) : agentResource(state, url.pathname, url, now);
+  if (resource instanceof Response) return resource;
   if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
   return maybeHead(jsonResponse(resource), request);
 }
 
 function agentUnauthorized() { return jsonError("agent_unauthorized", "A valid Agent Token is required", [], 401); }
 function agentMethodNotAllowed(allow = "GET, HEAD") { const response = jsonError("method_not_allowed", "Method not allowed", [], 405); response.headers.set("Allow", allow); return response; }
+
+/** @param {Request} request @param {any} store @param {any} authenticatedState @param {Date} now */
+async function agentApplyRoute(request, store, authenticatedState, now) {
+  const key = request.headers.get("Idempotency-Key")?.trim() ?? "";
+  if (!key || key.length > 200) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
+  const rawBody = await request.text();
+  const bodyDigest = await sha256Hex(rawBody);
+  const execute = async (transactionStore) => {
+    const state = transactionStore === store ? authenticatedState : await transactionStore.getByEmail(authenticatedState.email);
+    if (!state) return jsonError("forbidden", "Identity is not configured", [], 403);
+    state.idempotency_records ??= [];
+    const existing = state.idempotency_records.find((record) => record.key === key && record.method === request.method && record.path === "/api/agent/v1/plan-updates/apply" && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+    if (existing) {
+      if (existing.body_digest !== bodyDigest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
+      return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
+    }
+    const resource = await agentApplyPlanUpdate(state, rawBody, now);
+    if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
+    const response = jsonResponse(resource, 201);
+    state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+    state.idempotency_records.push({ key, method: request.method, path: "/api/agent/v1/plan-updates/apply", body_digest: bodyDigest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
+    await transactionStore.save(state);
+    return response;
+  };
+  try {
+    return store.transaction ? await store.transaction(execute) : await execute(store);
+  } catch (error) {
+    if (error?.code === "D1_CONCURRENCY_CONFLICT") return jsonError("session_state_conflict", "The Athlete state changed concurrently; retry the mutation", [], 409);
+    throw error;
+  }
+}
 
 async function staticRoute(request, env) {
   if (env.ASSETS?.fetch) {
@@ -384,7 +418,7 @@ async function coachRateLimit(env, state, now) {
   }
 }
 function errorBody(code, message, details) { return { error: { code, message, details } }; }
-function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "timezone_revision_boundary", "training_version_changed"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
+function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "package_digest_mismatch", "stale_plan", "timezone_revision_boundary", "training_version_changed"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
 function securityHeaders(contentType, csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") { return { "Content-Type": contentType, "Cache-Control": "private, no-store", "CDN-Cache-Control": "no-store", "Content-Security-Policy": csp, "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
 function maybeHead(response, request) { return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response; }
 

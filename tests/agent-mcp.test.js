@@ -11,9 +11,10 @@ test("workout MCP exposes exactly the typed tools", async () => {
   await assert.rejects(() => client.getSchedule({ expand: "" }), /** @param {any} error */ (error) => error.code === "invalid_arguments");
   const bridge = new McpBridge({ client });
   const listed = await bridge.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" });
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update"]);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update", "workout_apply_plan_update"]);
   assert.equal(listed.result.tools.some((tool) => tool.name === "http_request"), false);
-  assert.equal(listed.result.tools.every((tool) => tool.annotations.readOnlyHint === true), true);
+  assert.equal(listed.result.tools.filter((tool) => tool.name !== "workout_apply_plan_update").every((tool) => tool.annotations.readOnlyHint === true), true);
+  assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_plan_update").annotations.readOnlyHint, false);
 });
 
 test("workout MCP maps typed calls to authenticated Agent API reads and preserves errors", async () => {
@@ -168,4 +169,57 @@ test("workout MCP serializes a typed Plan Update Package for non-mutating valida
   const incompleteWorkoutResult = await bridge.handleMessage({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: incompleteWorkout } } });
   assert.equal(incompleteWorkoutResult.error.code, -32602);
   assert.equal(requests.length, 1);
+});
+
+test("workout MCP applies a confirmed package and verifies plan and schedule readback", async () => {
+  const requests = [];
+  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), options });
+      if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ schema_version: 1, applied: true, effective_from: "2026-08-09", package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
+      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ source_ref: "plan", future: [{ effective_from: "2026-08-09" }] }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ source_ref: "schedule", entries: [] }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const bridge = new McpBridge({ client });
+  const result = await bridge.handleMessage({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-1" } } });
+  assert.equal(result.result.structuredContent.applied, true);
+  assert.equal(result.result.structuredContent.readback.status, "verified");
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].url, "https://workout.example/api/agent/v1/plan-updates/apply");
+  assert.equal(requests[0].options.headers.Authorization, "Bearer local-test-token");
+  assert.equal(requests[0].options.headers["Idempotency-Key"], "apply-1");
+  assert.deepEqual(JSON.parse(requests[0].options.body), { package_text: JSON.stringify(packageValue), package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true });
+  assert.equal(requests[1].url, "https://workout.example/api/agent/v1/plan");
+  assert.equal(requests[2].url, "https://workout.example/api/agent/v1/schedule?from=2026-08-09&to=2026-08-15&expand=prescription");
+
+  const missingDigest = await bridge.handleMessage({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-2" } } });
+  assert.equal(missingDigest.error.code, -32602);
+  const unconfirmed = await bridge.handleMessage({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: false, idempotency_key: "apply-3" } } });
+  assert.equal(unconfirmed.error.code, -32602);
+  const missingKey = await bridge.handleMessage({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "" } } });
+  assert.equal(missingKey.error.code, -32602);
+  assert.equal(requests.length, 3);
+});
+
+test("workout MCP preserves a successful apply when post-apply readback fails", async () => {
+  let calls = 0;
+  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async (url) => {
+      calls += 1;
+      if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ applied: true, effective_from: "2026-08-09" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: { code: "readback_unavailable", message: "temporary", details: [] } }), { status: 503, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const result = await client.applyPlanUpdate({ package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-4" });
+  assert.equal(result.applied, true);
+  assert.equal(result.readback.status, "failed");
+  assert.equal(result.readback.error.code, "readback_unavailable");
+  assert.equal(calls, 3);
 });
