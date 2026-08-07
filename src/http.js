@@ -53,7 +53,9 @@ async function agentRoute(request, env, getStore, url) {
   try { state = bearer ? await findAgentInStore(store, bearer, env) : null; }
   catch (error) { if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "Agent authentication is not configured", [], 503); throw error; }
   if (!state) return agentUnauthorized();
-  const isPlanValidation = request.method === "POST" && url.pathname === "/api/agent/v1/plan-updates/validate";
+  const isPlanValidationPath = url.pathname === "/api/agent/v1/plan-updates/validate";
+  const isPlanValidation = request.method === "POST" && isPlanValidationPath;
+  if (isPlanValidationPath && request.method !== "POST") return agentMethodNotAllowed("POST");
   if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation) return agentMethodNotAllowed();
   if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
   const queryError = agentQueryError(url.pathname, url);
@@ -65,7 +67,7 @@ async function agentRoute(request, env, getStore, url) {
 }
 
 function agentUnauthorized() { return jsonError("agent_unauthorized", "A valid Agent Token is required", [], 401); }
-function agentMethodNotAllowed() { const response = jsonError("method_not_allowed", "Method not allowed", [], 405); response.headers.set("Allow", "GET, HEAD"); return response; }
+function agentMethodNotAllowed(allow = "GET, HEAD") { const response = jsonError("method_not_allowed", "Method not allowed", [], 405); response.headers.set("Allow", allow); return response; }
 
 async function staticRoute(request, env) {
   if (env.ASSETS?.fetch) {

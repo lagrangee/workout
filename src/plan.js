@@ -180,7 +180,8 @@ export function validatePlanForState(state, text, now = new Date()) {
   /** @type {any} */
   const value = result.value;
   const current = effectiveRevision(state, value.effective_from);
-  if (current && canonicalJson(current.week) === canonicalJson(value.week)) return { ok: false, errors: [{ path: "/week", message: "This package does not change the effective template" }] };
+  const baselineWeek = current?.week ?? Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
+  if (canonicalJson(baselineWeek) === canonicalJson(value.week)) return { ok: false, errors: [{ path: "/week", message: "This package does not change the effective template" }] };
   return { ok: true, value, preview: packagePreview(state, value, now) };
 }
 

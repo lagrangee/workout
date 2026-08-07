@@ -113,11 +113,12 @@ validator. The Agent/MCP layer does not parse natural-language coaching
 requests and does not fill missing package fields. A valid response includes
 the complete resulting week, changed weekday count, `package_digest`,
 `base_plan_digest`, explicit current-plan base evidence, `training_version`,
-and safe `source_ref` values. Invalid JSON, unknown fields, missing values,
-past/current effective dates, duplicate members, and semantic no-ops return
-field-addressed `invalid_plan_package` errors without changing Plan Revision
-history or Current Plan state. Confirmation and application are separate
-future capabilities; validation alone never creates a revision.
+and safe `source_ref` values. An invalid outer request body returns
+`invalid_json` or `invalid_request`; malformed `package_text`, unknown fields,
+missing values, past/current effective dates, duplicate members, and semantic
+no-ops return field-addressed `invalid_plan_package` errors without changing
+Plan Revision history or Current Plan state. Confirmation and application are
+separate future capabilities; validation alone never creates a revision.
 
 ## Response and privacy rules
 
@@ -127,8 +128,11 @@ Athlete-local dates use `YYYY-MM-DD`; instants use RFC 3339 UTC. All responses
 use private no-store caching and the existing security headers.
 
 The API excludes login identity, Cloudflare identity, internal database IDs,
-Token fields, digests, ciphertext, Coach Share management, Session mutation,
-Athlete Settings mutation, goals, routes, symptoms, telemetry, and analysis.
+Token fields, secret-backed lookup digests, ciphertext, Coach Share management,
+Session mutation, Athlete Settings mutation, goals, routes, symptoms,
+telemetry, and analysis. The non-secret `package_digest` and
+`base_plan_digest` are explicit validation response fields used to identify a
+proposal and its plan base; they are not credential digests.
 
 ## Configuration
 

@@ -2,6 +2,17 @@
 
 const BRIDGE_PROTOCOL_VERSION = "2025-06-18";
 const BRIDGE_SERVER_INFO = { name: "workout-agent-mcp", version: "0.1.0" };
+const PLAN_UPDATE_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const PLAN_UPDATE_PACKAGE_SCHEMA = {
+  type: "object",
+  properties: {
+    schema_version: { type: "integer", const: 1 },
+    effective_from: { type: "string", format: "date" },
+    week: { type: "object", properties: Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, {}])), required: PLAN_UPDATE_WEEKDAYS, additionalProperties: false },
+  },
+  required: ["schema_version", "effective_from", "week"],
+  additionalProperties: false,
+};
 
 const TOOL_DEFINITIONS = [
   {
@@ -49,7 +60,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "workout_validate_plan_update",
     description: "Validate a complete future Plan Update Package and return its non-mutating preview and base evidence.",
-    inputSchema: { type: "object", properties: { package: { type: "object" } }, required: ["package"], additionalProperties: false },
+    inputSchema: { type: "object", properties: { package: PLAN_UPDATE_PACKAGE_SCHEMA }, required: ["package"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
 ];
@@ -216,16 +227,33 @@ function validateToolArguments(tool, args) {
   for (const key of Object.keys(args)) {
     const property = properties[key];
     if (!property) return `Unknown argument: ${key}`;
-    const value = args[key];
-    if (property.type === "string" && typeof value !== "string") return `Argument ${key} must be a string`;
-    if (property.type === "object" && (!value || typeof value !== "object" || Array.isArray(value))) return `Argument ${key} must be an object`;
-    if (property.type === "boolean" && typeof value !== "boolean") return `Argument ${key} must be a boolean`;
-    if (property.type === "integer" && !Number.isInteger(value)) return `Argument ${key} must be an integer`;
-    if (property.minimum !== undefined && value < property.minimum) return `Argument ${key} is below the minimum`;
-    if (property.maximum !== undefined && value > property.maximum) return `Argument ${key} is above the maximum`;
-    if (property.enum && !property.enum.includes(value)) return `Argument ${key} is unsupported`;
-    if (property.format === "date" && !isValidDateArgument(value)) return `Argument ${key} must be a valid YYYY-MM-DD date`;
+    const error = validateArgumentValue(property, args[key], `Argument ${key}`);
+    if (error) return error;
   }
+  return null;
+}
+
+function validateArgumentValue(property, value, label) {
+  if (property.type === "string" && typeof value !== "string") return `${label} must be a string`;
+  if (property.type === "object") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return `${label} must be an object`;
+    for (const required of property.required ?? []) if (!Object.hasOwn(value, required)) return `Missing required argument: ${label}.${required}`;
+    for (const key of Object.keys(value)) {
+      const nested = property.properties?.[key];
+      if (!nested && property.additionalProperties === false) return `Unknown argument: ${label}.${key}`;
+      if (nested) {
+        const error = validateArgumentValue(nested, value[key], `${label}.${key}`);
+        if (error) return error;
+      }
+    }
+  }
+  if (property.type === "boolean" && typeof value !== "boolean") return `${label} must be a boolean`;
+  if (property.type === "integer" && !Number.isInteger(value)) return `${label} must be an integer`;
+  if (property.const !== undefined && value !== property.const) return `${label} is unsupported`;
+  if (property.minimum !== undefined && value < property.minimum) return `${label} is below the minimum`;
+  if (property.maximum !== undefined && value > property.maximum) return `${label} is above the maximum`;
+  if (property.enum && !property.enum.includes(value)) return `${label} is unsupported`;
+  if (property.format === "date" && !isValidDateArgument(value)) return `${label} must be a valid YYYY-MM-DD date`;
   return null;
 }
 

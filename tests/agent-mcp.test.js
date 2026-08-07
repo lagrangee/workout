@@ -140,4 +140,8 @@ test("workout MCP serializes a typed Plan Update Package for non-mutating valida
   const wrongType = await bridge.handleMessage({ jsonrpc: "2.0", id: 15, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: [] } } });
   assert.equal(wrongType.error.code, -32602);
   assert.equal(requests.length, 1);
+
+  const incomplete = await bridge.handleMessage({ jsonrpc: "2.0", id: 16, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: {} } } });
+  assert.equal(incomplete.error.code, -32602);
+  assert.equal(requests.length, 1);
 });

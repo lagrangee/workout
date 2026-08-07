@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import { addDays, deepClone, weekdayKey } from "../src/util.js";
 import { appFixture, call, packageText, testAgentSecret, today, workout } from "./helpers.js";
 
-async function createToken(handler) {
-  const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" });
+async function createToken(handler, email = "athlete-a@example.invalid") {
+  const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, email);
   assert.equal(result.response.status, 201);
   return result.body.token;
 }
@@ -47,6 +47,13 @@ test("Agent plan validation returns a complete preview and base evidence without
   assert.equal(manifest.body.endpoints.plan_update_validate.method, "POST");
   assert.equal(manifest.body.endpoints.plan_update_validate.rules.mutates, false);
 
+  const getValidation = await agentGet(handler, token, "/api/agent/v1/plan-updates/validate");
+  assert.equal(getValidation.response.status, 405);
+  assert.equal(getValidation.response.headers.get("Allow"), "POST");
+  const putValidation = await handler.fetch(new Request("https://workout.example/api/agent/v1/plan-updates/validate", { method: "PUT", headers: { Authorization: `Bearer ${token}` } }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
+  assert.equal(putValidation.status, 405);
+  assert.equal(putValidation.headers.get("Allow"), "POST");
+
   const result = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
   assert.equal(result.response.status, 200);
   assert.equal(result.body.valid, true);
@@ -75,6 +82,7 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
     [{ package_text: "not-json" }, "invalid_plan_package"],
     [{ package_text: JSON.stringify({ ...valid, unknown: true }) }, "invalid_plan_package"],
     [{ package_text: `{"schema_version":1,"effective_from":"${addDays(today, 1)}","effective_from":"${addDays(today, 2)}","week":{}}` }, "invalid_plan_package"],
+    [{ package_text: JSON.stringify({ ...valid, week: [] }) }, "invalid_plan_package"],
   ];
   for (const [body, code] of cases) {
     const result = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", body);
@@ -82,6 +90,8 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
     assert.equal(result.body.error.code, code);
     if (code === "invalid_plan_package") assert.equal(Array.isArray(result.body.error.details), true);
   }
+  const malformedWeek = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify({ ...valid, week: [] }) });
+  assert.equal(malformedWeek.body.error.details[0].path, "/week");
 
   const after = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(after.plan_revisions.length, before.plan_revisions.length);
@@ -106,6 +116,13 @@ test("Agent plan validation rejects no-op and non-future effective dates", async
     assert.equal(past.body.error.code, "invalid_plan_package");
     assert.equal(past.body.error.details.some((detail) => detail.path === "/effective_from"), true);
   }
+
+  const emptyWeek = Object.fromEntries(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((day) => [day, null]));
+  const tokenB = await createToken(handler, "athlete-b@example.invalid");
+  const noPlan = await agentPost(handler, tokenB, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify({ schema_version: 1, effective_from: addDays(today, 1), week: emptyWeek }) });
+  assert.equal(noPlan.response.status, 400);
+  assert.equal(noPlan.body.error.code, "invalid_plan_package");
+  assert.equal(noPlan.body.error.details[0].path, "/week");
 });
 
 test("Agent plan preview counts changed and unchanged weekday slots explicitly", async () => {
@@ -119,4 +136,19 @@ test("Agent plan preview counts changed and unchanged weekday slots explicitly",
   assert.equal(result.response.status, 200);
   assert.equal(result.body.preview.changed_weekday_slot_count, 1);
   assert.deepEqual(Object.keys(result.body.preview.week).sort(), ["friday", "monday", "saturday", "sunday", "thursday", "tuesday", "wednesday"]);
+});
+
+test("Agent plan validation remains scoped to the bearer Athlete", async () => {
+  const { handler, store } = appFixture();
+  const tokenA = await createToken(handler, "athlete-a@example.invalid");
+  const tokenB = await createToken(handler, "athlete-b@example.invalid");
+  const packageValue = JSON.parse(packageText(addDays(today, 1), workout("隔离预览")));
+  const a = await agentPost(handler, tokenA, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
+  const b = await agentPost(handler, tokenB, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
+  assert.equal(a.response.status, 200);
+  assert.equal(b.response.status, 200);
+  assert.notEqual(a.body.base_plan_digest, b.body.base_plan_digest);
+  assert.notEqual(a.body.base_plan.effective_from, b.body.base_plan.effective_from);
+  assert.equal((await store.getByEmail("athlete-a@example.invalid")).plan_revisions.length, 1);
+  assert.equal((await store.getByEmail("athlete-b@example.invalid")).plan_revisions.length, 0);
 });
