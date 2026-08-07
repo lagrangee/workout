@@ -79,7 +79,7 @@ export function agentSchedule(state, url, now) {
     return { error: { code: "invalid_period", field: !from ? "from" : !to ? "to" : "to", message: "Schedule requires an inclusive from/to range of at most 366 days" } };
   }
   const expandValue = url.searchParams.get("expand");
-  if (expandValue && expandValue !== "prescription") return { error: { code: "invalid_request", field: "expand", message: "expand must be prescription" } };
+  if (url.searchParams.has("expand") && expandValue !== "prescription") return { error: { code: "invalid_request", field: "expand", message: "expand must be prescription" } };
   const expand = expandValue === "prescription";
   const prescriptions = {};
   const entries = dateRange(from, to).map((date) => {
