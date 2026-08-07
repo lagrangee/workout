@@ -94,7 +94,7 @@ test("Agent Session cursors bind filters and training version", async () => {
   for (const field of ["cursor", "status", "exercise_key"]) {
     const empty = await agentGet(handler, token, `/api/agent/v1/sessions?${field}=`);
     assert.equal(empty.response.status, 400);
-    assert.equal(empty.body.error.code, "invalid_request");
+    assert.equal(empty.body.error.code, field === "cursor" ? "invalid_cursor" : "invalid_request");
   }
 
   const state = await store.getByEmail("athlete-a@example.invalid");

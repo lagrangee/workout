@@ -170,7 +170,7 @@ export function agentQueryError(pathname, url) {
   for (const key of url.searchParams.keys()) {
     if (!allowed.includes(key)) return { code: "invalid_request", field: key, message: `Unsupported query parameter: ${key}` };
     if (seen.has(key)) return { code: "invalid_request", field: key, message: `Query parameter may only be provided once: ${key}` };
-    if (["cursor", "status", "exercise_key"].includes(key) && url.searchParams.get(key) === "") return { code: "invalid_request", field: key, message: `${key} must not be empty` };
+    if (["cursor", "status", "exercise_key"].includes(key) && url.searchParams.get(key) === "") return { code: key === "cursor" ? "invalid_cursor" : "invalid_request", field: key, message: key === "cursor" ? "Cursor is malformed, expired, or does not match the filters" : `${key} must not be empty` };
     seen.add(key);
   }
   return null;
