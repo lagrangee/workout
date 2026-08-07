@@ -22,8 +22,14 @@ structured data, provenance, and confirmed plan-write boundaries.
   version-bound Agent cursors, safe provenance, and structured MCP errors while
   retaining the legacy Coach cursor shape. The contract is in the same Agent
   API documents.
+- [Ticket 04](issues/04-preview-future-plan-update-packages.md): add the
+  non-mutating typed Plan Update preview. The Agent/MCP boundary now validates
+  a complete package, selects the effective plan base for its future date,
+  returns complete preview and digest evidence, and preserves stable JSON
+  Pointer errors without exposing revision identities. Confirmation and apply
+  remain Ticket 05.
 
 ## Fog
 
-Tickets 04–07 remain the implementation frontier: plan-update
-preview/application, the Skill, and live MCP acceptance.
+Tickets 05–07 remain the implementation frontier: confirmed plan application,
+the Skill, and live MCP acceptance.
