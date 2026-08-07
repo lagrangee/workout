@@ -57,6 +57,7 @@ GET /api/agent/v1/sessions[?from=&to=&limit=&cursor=&status=&exercise_key=]
 GET /api/agent/v1/sessions/:session_key
 GET /api/agent/v1/progress[?from=&to=&preset=&range=&bucket=]
 GET /api/agent/v1/exercises/:exercise_key[?from=&to=&preset=&range=]
+POST /api/agent/v1/plan-updates/validate
 ```
 
 The versioned wire shapes are defined in
@@ -104,6 +105,19 @@ requested day/week/month buckets. `exercises/:exercise_key` returns display-name
 history, performed-session count, per-set actuals and resistance semantics,
 side-separated series, and safe Session references. Empty valid windows remain
 successful responses with explicit empty arrays or null denominators.
+
+`plan-updates/validate` is the only current Agent POST and is non-mutating. Its
+request body is exactly `{ "package_text": string }`; the string is the
+canonical Plan Update Package v1 JSON consumed by the existing strict
+validator. The Agent/MCP layer does not parse natural-language coaching
+requests and does not fill missing package fields. A valid response includes
+the complete resulting week, changed weekday count, `package_digest`,
+`base_plan_digest`, explicit current-plan base evidence, `training_version`,
+and safe `source_ref` values. Invalid JSON, unknown fields, missing values,
+past/current effective dates, duplicate members, and semantic no-ops return
+field-addressed `invalid_plan_package` errors without changing Plan Revision
+history or Current Plan state. Confirmation and application are separate
+future capabilities; validation alone never creates a revision.
 
 ## Response and privacy rules
 

@@ -4,14 +4,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { McpBridge, WorkoutApiClient } from "../mcp/bridge.mjs";
 
-test("workout MCP exposes exactly the typed read tools", async () => {
+test("workout MCP exposes exactly the typed tools", async () => {
   assert.throws(() => new WorkoutApiClient({ origin: "http://workout.example", token: "local-test-token" }), /HTTPS/);
   assert.throws(() => new WorkoutApiClient({ origin: "https://workout.example?unexpected=1", token: "local-test-token" }), /query or hash/);
   const client = new WorkoutApiClient({ origin: "https://workout.example", token: "local-test-token", fetchImpl: async () => new Response(JSON.stringify({ ok: true })) });
   await assert.rejects(() => client.getSchedule({ expand: "" }), /** @param {any} error */ (error) => error.code === "invalid_arguments");
   const bridge = new McpBridge({ client });
   const listed = await bridge.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" });
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history"]);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update"]);
   assert.equal(listed.result.tools.some((tool) => tool.name === "http_request"), false);
   assert.equal(listed.result.tools.every((tool) => tool.annotations.readOnlyHint === true), true);
 });
@@ -115,4 +115,29 @@ test("workout MCP preserves typed history errors and never retries stale reads",
   assert.equal(missing.result.structuredContent.error.code, "not_found");
   assert.equal(missing.result.structuredContent.status, 404);
   assert.equal(calls, 3);
+});
+
+test("workout MCP serializes a typed Plan Update Package for non-mutating validation", async () => {
+  const requests = [];
+  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: null, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), options });
+      return new Response(JSON.stringify({ schema_version: 1, valid: true, source_ref: "plan-update:validation", preview: { effective_from: "2026-08-09", week: packageValue.week, changed_weekday_slot_count: 1 } }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const bridge = new McpBridge({ client });
+  const result = await bridge.handleMessage({ jsonrpc: "2.0", id: 14, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: packageValue } } });
+  assert.equal(result.result.structuredContent.valid, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://workout.example/api/agent/v1/plan-updates/validate");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(requests[0].options.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(requests[0].options.body), { package_text: JSON.stringify(packageValue) });
+
+  const wrongType = await bridge.handleMessage({ jsonrpc: "2.0", id: 15, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: [] } } });
+  assert.equal(wrongType.error.code, -32602);
+  assert.equal(requests.length, 1);
 });

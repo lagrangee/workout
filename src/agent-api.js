@@ -1,7 +1,7 @@
 // @ts-nocheck
 
-import { WEEKDAYS, canonicalJson, deepClone, dateRange, dateSpan, isValidLocalDate, localDate } from "./util.js";
-import { scheduleEntry } from "./plan.js";
+import { WEEKDAYS, canonicalJson, deepClone, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
+import { planModel, scheduleEntry, validatePlanForState } from "./plan.js";
 import { coachOverview, coachResource, prescriptionProjection } from "./coach.js";
 
 const AGENT_PREFIX = "/api/agent/v1";
@@ -38,6 +38,7 @@ export function agentManifest(state, now) {
       sessions: `${AGENT_PREFIX}/sessions`,
       progress: `${AGENT_PREFIX}/progress`,
       exercise: `${AGENT_PREFIX}/exercises/{exercise_key}`,
+      plan_update_validate: `${AGENT_PREFIX}/plan-updates/validate`,
     },
     endpoints: {
       overview: { method: "GET", path: `${AGENT_PREFIX}/overview`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] } },
@@ -47,6 +48,7 @@ export function agentManifest(state, now) {
       session_detail: { method: "GET", path: `${AGENT_PREFIX}/sessions/{session_key}`, parameters: { session_key: { type: "string", location: "path" } } },
       progress: { method: "GET", path: `${AGENT_PREFIX}/progress`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"], bucket: ["day", "week", "month"] }, rules: { max_days: 3660, date_window_optional: true } },
       exercise_history: { method: "GET", path: `${AGENT_PREFIX}/exercises/{exercise_key}`, parameters: { exercise_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] }, rules: { max_days: 3660, date_window_optional: true } },
+      plan_update_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/validate`, parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" } }, rules: { mutates: false, strict_package: true } },
     },
   };
 }
@@ -54,6 +56,29 @@ export function agentManifest(state, now) {
 /** @param {any} state @param {URL} url @param {Date} now */
 export function agentOverview(state, url, now) {
   return { ...coachOverview(state, url, now), source_ref: "overview" };
+}
+
+/** @param {any} state @param {string} rawBody @param {Date} now */
+export async function agentValidatePlanUpdate(state, rawBody, now) {
+  let body;
+  try { body = JSON.parse(rawBody); } catch { return { error: { code: "invalid_json", message: "Request body must be valid JSON" } }; }
+  if (!isRecord(body) || Object.keys(body).length !== 1 || typeof body.package_text !== "string") return { error: { code: "invalid_request", message: "package_text is required and must be a string" } };
+  const result = validatePlanForState(state, body.package_text, now);
+  if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
+  const basePlan = planModel(state, now);
+  const currentBase = basePlan.current ? { ...deepClone(basePlan.current), source_ref: "plan:base" } : { effective_from: null, week: null, source_ref: "plan:base" };
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    data_as_of: now.toISOString(),
+    training_version: state.training_version,
+    source_ref: "plan-update:validation",
+    valid: true,
+    package_digest: await sha256Hex(canonicalJson(result.value)),
+    base_plan_digest: await sha256Hex(canonicalJson(basePlan)),
+    base_plan: currentBase,
+    preview: { ...result.preview, source_ref: "plan-update:preview" },
+  };
 }
 
 /** @param {any} state @param {Date} now */

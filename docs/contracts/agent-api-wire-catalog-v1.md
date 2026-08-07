@@ -199,6 +199,24 @@ AgentExerciseHistory = {
   source_ref: string
 }
 
+AgentPlanUpdateValidation = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  training_version: integer,
+  source_ref: "plan-update:validation",
+  valid: true,
+  package_digest: string,
+  base_plan_digest: string,
+  base_plan: { effective_from: LocalDate|null, week: object|null, source_ref: "plan:base" },
+  preview: {
+    effective_from: LocalDate,
+    week: object,
+    changed_weekday_slot_count: integer,
+    source_ref: "plan-update:preview"
+  }
+}
+
 ScheduleEntry = {
   date: LocalDate,
   weekday: string,
@@ -252,6 +270,14 @@ Athlete's current local date as potentially incomplete. Exercise observations
 retain the per-set actual metric, resistance mode and quantities, RIR, side,
 and safe `session:<date>:<session_key>` references; `series.none`, `series.left`,
 and `series.right` never merge sides.
+
+Plan Update validation reuses [Plan Update Package v1](plan-update-package-v1.md)
+as its canonical package contract. The MCP tool accepts a structured `package`
+object and serializes it to the Agent request's exact `package_text` field;
+the Worker then runs the strict text validator. The response digest is over
+the canonical package value and the base-plan digest is over the public
+plan-model evidence used for the preview. This route is non-mutating and does
+not accept confirmation, idempotency, or application fields.
 
 ## Errors
 
