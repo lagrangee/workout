@@ -3,38 +3,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, deepClone, weekdayKey } from "../src/util.js";
-import { agentRequest, appFixture, call, packageText, testAgentSecret, today, week, workout } from "./helpers.js";
-
-async function createToken(handler, email = "athlete-a@example.invalid") {
-  const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, email);
-  assert.equal(result.response.status, 201);
-  return result.body.token;
-}
+import { agentRequest, appFixture, call, createAgentToken, packageText, testAgentSecret, today, week, workout } from "./helpers.js";
 
 async function agentPost(handler, token, path, body) {
   return agentRequest(handler, token, path, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function agentGet(handler, token, path) {
-  return agentRequest(handler, token, path);
-}
-
 test("Agent plan validation returns a complete preview and base evidence without writing", async () => {
   const { handler, store } = appFixture();
-  const token = await createToken(handler);
+  const token = await createAgentToken(handler);
   const before = await store.getByEmail("athlete-a@example.invalid");
   const packageValue = JSON.parse(packageText(addDays(today, 1), workout("Agent 预览")));
 
-  const manifest = await agentGet(handler, token, "/api/agent/v1");
+  const manifest = await agentRequest(handler, token, "/api/agent/v1");
   assert.equal(manifest.body.links.plan_update_validate, "/api/agent/v1/plan-updates/validate");
   assert.equal(manifest.body.endpoints.plan_update_validate.method, "POST");
   assert.equal(manifest.body.endpoints.plan_update_validate.rules.mutates, false);
 
-  const getValidation = await agentGet(handler, token, "/api/agent/v1/plan-updates/validate");
+  const getValidation = await agentRequest(handler, token, "/api/agent/v1/plan-updates/validate");
   assert.equal(getValidation.response.status, 405);
   assert.equal(getValidation.response.headers.get("Allow"), "POST");
   const putValidation = await handler.fetch(new Request("https://workout.example/api/agent/v1/plan-updates/validate", { method: "PUT", headers: { Authorization: `Bearer ${token}` } }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
@@ -61,7 +51,7 @@ test("Agent plan validation returns a complete preview and base evidence without
 
 test("Agent plan validation reports strict errors and preserves zero-write failures", async () => {
   const { handler, store } = appFixture();
-  const token = await createToken(handler);
+  const token = await createAgentToken(handler);
   const before = await store.getByEmail("athlete-a@example.invalid");
   const valid = JSON.parse(packageText(addDays(today, 1), workout("严格校验")));
   const cases = [
@@ -89,6 +79,21 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
     package_text: packageText(addDays(today, 1), duplicateExerciseWorkout),
   });
   assert.equal(duplicateExercise.body.error.details.some((detail) => detail.path === "/week/monday/blocks/1/exercises/0/exercise_key"), true);
+
+  for (const [path, value] of [
+    ["/week/monday/title", "  workout title  "],
+    ["/week/monday/blocks/0/title", "  block title  "],
+    ["/week/monday/blocks/0/exercises/0/name", "  exercise name  "],
+  ]) {
+    const trimmedValue = deepClone(valid);
+    const segments = path.split("/").slice(1);
+    const last = segments.pop();
+    const target = segments.reduce((current, segment) => current[segment], trimmedValue);
+    target[last] = value;
+    const result = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(trimmedValue) });
+    assert.equal(result.response.status, 400);
+    assert.equal(result.body.error.details.some((detail) => detail.path === path), true);
+  }
 
   const duplicateWeekMember = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: `{"schema_version":1,"effective_from":"${addDays(today, 1)}","week":{"monday":null,"monday":null}}`,
@@ -124,7 +129,7 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
 
 test("Agent plan validation rejects no-op and non-future effective dates", async () => {
   const { handler, store } = appFixture();
-  const token = await createToken(handler);
+  const token = await createAgentToken(handler);
   const state = await store.getByEmail("athlete-a@example.invalid");
   const unchangedWeek = deepClone(state.plan_revisions[0].week);
   const noOp = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
@@ -142,7 +147,7 @@ test("Agent plan validation rejects no-op and non-future effective dates", async
   }
 
   const emptyWeek = Object.fromEntries(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((day) => [day, null]));
-  const tokenB = await createToken(handler, "athlete-b@example.invalid");
+  const tokenB = await createAgentToken(handler, "athlete-b@example.invalid");
   const noPlan = await agentPost(handler, tokenB, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify({ schema_version: 1, effective_from: addDays(today, 1), week: emptyWeek }) });
   assert.equal(noPlan.response.status, 400);
   assert.equal(noPlan.body.error.code, "invalid_plan_package");
@@ -151,7 +156,7 @@ test("Agent plan validation rejects no-op and non-future effective dates", async
 
 test("Agent plan preview counts changed and unchanged weekday slots explicitly", async () => {
   const { handler, store } = appFixture();
-  const token = await createToken(handler);
+  const token = await createAgentToken(handler);
   const state = await store.getByEmail("athlete-a@example.invalid");
   const effectiveFrom = addDays(today, 1);
   const week = deepClone(state.plan_revisions[0].week);
@@ -174,7 +179,7 @@ test("Agent plan validation returns the effective plan base used by the preview"
     week: week(workout("已有未来基线")),
   });
   await store.save(state);
-  const token = await createToken(handler);
+  const token = await createAgentToken(handler);
   const result = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: packageText(addDays(futureEffectiveFrom, 1), workout("替换未来基线")),
   });
@@ -186,8 +191,8 @@ test("Agent plan validation returns the effective plan base used by the preview"
 
 test("Agent plan validation remains scoped to the bearer Athlete", async () => {
   const { handler, store } = appFixture();
-  const tokenA = await createToken(handler, "athlete-a@example.invalid");
-  const tokenB = await createToken(handler, "athlete-b@example.invalid");
+  const tokenA = await createAgentToken(handler, "athlete-a@example.invalid");
+  const tokenB = await createAgentToken(handler, "athlete-b@example.invalid");
   const packageValue = JSON.parse(packageText(addDays(today, 1), workout("隔离预览")));
   const athleteAResult = await agentPost(handler, tokenA, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
   const athleteBResult = await agentPost(handler, tokenB, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
