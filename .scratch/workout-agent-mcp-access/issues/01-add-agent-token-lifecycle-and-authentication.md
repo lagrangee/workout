@@ -16,4 +16,4 @@
 
 ## Completion
 
-Implemented through the existing Worker HTTP boundary with a MemoryStore/D1 lookup seam. Verified with `node --test tests/agent-auth.test.js`, the authentication/core regression tests, and `npm run typecheck`.
+Implemented through the existing Worker HTTP boundary with a MemoryStore/D1 lookup seam. The post-implementation review findings were fixed by requiring `AGENT_TOKEN_SECRET` in production, adding the versioned Agent API/wire contract and release checklist entries, stabilizing unauthenticated error ordering, and removing duplicated lookup logic. Verified with `node --test tests/agent-auth.test.js`, the authentication/core regression tests, and `npm run typecheck`.

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, opaqueKey } from "../src/util.js";
-import { appFixture, call, today, week, workout } from "./helpers.js";
+import { appFixture, call, testAgentSecret, today, week, workout } from "./helpers.js";
 
 /** @param {any} handler */
 async function createToken(handler) {
@@ -15,6 +15,7 @@ async function agentGet(handler, token, path) {
   const response = await handler.fetch(new Request(`https://workout.example${path}`, { headers: { Authorization: `Bearer ${token}` } }), {
     LOCAL_AUTH: "true",
     PUBLIC_ORIGIN: "https://workout.example",
+    AGENT_TOKEN_SECRET: testAgentSecret,
   });
   const text = await response.text();
   let body;
@@ -92,6 +93,6 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   assert.equal(bPlan.body.current, null);
   const bSchedule = await agentGet(handler, tokenB, `/api/agent/v1/schedule?from=${today}&to=${today}`);
   assert.equal(bSchedule.body.entries[0].kind, "no_plan");
-  const crossHeader = await handler.fetch(new Request(`https://workout.example/api/agent/v1/overview?athlete_key=${stateB.athlete_key}`, { headers: { Authorization: `Bearer ${tokenA}`, "x-athlete-email": stateB.email } }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example" });
+  const crossHeader = await handler.fetch(new Request(`https://workout.example/api/agent/v1/overview?athlete_key=${stateB.athlete_key}`, { headers: { Authorization: `Bearer ${tokenA}`, "x-athlete-email": stateB.email } }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
   assert.equal(crossHeader.status, 400);
 });

@@ -43,7 +43,7 @@ export class MemoryStore {
   }
 
   async findByAgentDigest(tokenDigest) {
-    return Array.from(this.athletes.values()).find((state) => state.agent_access && !state.agent_access.revoked_at && state.agent_access.token_digest === tokenDigest) ?? null;
+    return findAgentState(this.athletes.values(), tokenDigest);
   }
 
   async transaction(fn) {
@@ -52,12 +52,16 @@ export class MemoryStore {
       getByEmail: async (email) => working.get(normalizeEmail(email)) ?? null,
       save: async (state) => { state.updated_at = new Date().toISOString(); working.set(state.email, deepClone(state)); },
       all: async () => Array.from(working.values(), deepClone),
-      findByAgentDigest: async (tokenDigest) => Array.from(working.values()).find((state) => state.agent_access && !state.agent_access.revoked_at && state.agent_access.token_digest === tokenDigest) ?? null,
+      findByAgentDigest: async (tokenDigest) => findAgentState(working.values(), tokenDigest),
     };
     const result = await fn(transactionStore);
     this.athletes = working;
     return result;
   }
+}
+
+function findAgentState(states, tokenDigest) {
+  return Array.from(states).find((state) => state.agent_access && !state.agent_access.revoked_at && state.agent_access.token_digest === tokenDigest) ?? null;
 }
 
 export class D1Store {
