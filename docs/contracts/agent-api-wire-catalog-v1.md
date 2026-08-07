@@ -40,7 +40,7 @@ AgentManifest = {
   training_version: integer,
   query_rules: object,
   links: { overview: string, plan: string, schedule: string, sessions: string,
-           progress: string, exercise: string },
+           progress: string, exercise: string, plan_update_validate: string },
   endpoints: object,
   capabilities: ["read", "plan:write"]
 }
@@ -49,6 +49,17 @@ AgentManifest = {
 All link values are token-free relative Agent API paths. `capabilities` names
 the personal Token scope; resource availability is still controlled by the
 versioned API contract.
+
+The endpoint catalog includes the non-mutating validation operation:
+
+```text
+plan_update_validate: {
+  method: "POST",
+  path: "/api/agent/v1/plan-updates/validate",
+  parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" } },
+  rules: { mutates: false, strict_package: true }
+}
+```
 
 ## Read resources
 

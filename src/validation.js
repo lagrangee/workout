@@ -196,7 +196,7 @@ export function validatePlanPackage(text, today) {
   if (packageValue.schema_version !== 1) errors.push("/schema_version: must equal integer 1");
   if (!requireString(packageValue.effective_from, "/effective_from", errors) || !isValidLocalDate(packageValue.effective_from)) errors.push("/effective_from: must be a valid local date");
   else if (packageValue.effective_from <= today) errors.push("/effective_from: must be later than the current local date");
-  if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: errors.map((message) => ({ path: "$", message })) };
+  if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: errors.map((message) => ({ path: message.split(":")[0], message })) };
   exactKeys(packageValue.week, ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], "/week", errors);
   for (const weekday of ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]) {
     if (!Object.prototype.hasOwnProperty.call(packageValue.week, weekday)) errors.push(`/week/${weekday}: required`);
