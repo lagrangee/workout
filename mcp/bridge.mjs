@@ -91,9 +91,9 @@ export class WorkoutApiClient {
   }
 }
 
-function hasId(message) { return Boolean(message && typeof message === "object" && Object.prototype.hasOwnProperty.call(message, "id")); }
+export function hasId(message) { return Boolean(message && typeof message === "object" && Object.prototype.hasOwnProperty.call(message, "id")); }
 function makeResponse(id, result) { return { jsonrpc: "2.0", id, result }; }
-function makeError(id, code, message) { return { jsonrpc: "2.0", id, error: { code, message } }; }
+export function makeError(id, code, message) { return { jsonrpc: "2.0", id, error: { code, message } }; }
 
 export class McpBridge {
   constructor({ client, serverInfo = BRIDGE_SERVER_INFO } = {}) {

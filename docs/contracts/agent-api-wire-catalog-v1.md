@@ -49,6 +49,97 @@ All link values are token-free relative Agent API paths. `capabilities` names
 the personal Token scope; resource availability is still controlled by the
 versioned API contract.
 
+## Read resources
+
+The first read resources use these versioned projections:
+
+```text
+AgentOverview = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  metric_semantics_version: 1,
+  athlete: { display_name: string, timezone: IanaTimezone },
+  coverage: object,
+  updated_at: { plan: Instant|null, training: Instant|null },
+  training_version: integer,
+  current_plan: object|null,
+  next_plan: object|null,
+  period: Period,
+  metrics: object,
+  current_streak: object,
+  recent_sessions: object[],
+  source_ref: "overview"
+}
+
+AgentPlan = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  timezone: IanaTimezone,
+  training_version: integer,
+  source_ref: "plan",
+  current: PlanProjection|null,
+  future: PlanProjection[],
+  next_effective_from: LocalDate|null,
+  first_effective_from: LocalDate|null,
+  pending_count: integer
+}
+
+PlanProjection = { effective_from: LocalDate, week: WeeklyTemplate }
+
+AgentSchedule = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  from: LocalDate,
+  to: LocalDate,
+  timezone: IanaTimezone,
+  period: Period,
+  training_version: integer,
+  entries: ScheduleEntry[],
+  prescriptions: { [prescription_ref: string]: Prescription }
+}
+
+ScheduleEntry = {
+  date: LocalDate,
+  weekday: string,
+  kind: "workout"|"rest"|"no_plan",
+  title: string|null,
+  module_count: integer|null,
+  estimated_duration_min: integer|null,
+  prescription_ref: string|null,
+  session_key: string|null,
+  is_due: boolean,
+  is_overdue_unstarted: boolean,
+  source_ref: string
+}
+
+Prescription = {
+  prescription_ref: string,
+  title: string,
+  start_time: string|null,
+  estimated_duration_min: integer,
+  blocks: object[]
+}
+
+Period = {
+  from: LocalDate,
+  to: LocalDate,
+  timezone: IanaTimezone,
+  includes_from: true,
+  includes_to: true,
+  includes_current_date: boolean,
+  current_date_may_be_incomplete: boolean
+}
+```
+
+`Prescription.blocks` contains typed block, exercise, and set objects with
+scoped `block_key`, `exercise_occurrence_key`, and `set_key` values. It does
+not contain `revision_key`, `scheduled_workout_key`, Athlete identifiers, or
+database identities. A schedule response may leave `prescriptions` empty when
+`expand` is absent; entries still carry their safe stable reference.
+
 ## Errors
 
 ```text
