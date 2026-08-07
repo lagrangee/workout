@@ -79,6 +79,11 @@ Athlete-local period, and token-free `source_ref` values. Schedule expansion
 uses the public prescription shape from the wire catalog; it never returns a
 raw internal plan slot or revision identity.
 
+Plan responses use the same typed Weekly Template projection: a workout slot
+contains a `prescription`, a Rest Day remains `{ kind: "rest" }`, and an empty
+slot remains `null`. Plan `source_ref` values are scoped to the Agent resource
+and do not expose internal Plan Revision keys.
+
 ## Response and privacy rules
 
 Successful responses use structured JSON and include `schema_version`,

@@ -10,9 +10,9 @@ async function createToken(handler) {
   return result.body.token;
 }
 
-/** @param {any} handler @param {string} token @param {string} path */
-async function agentGet(handler, token, path) {
-  const response = await handler.fetch(new Request(`https://workout.example${path}`, { headers: { Authorization: `Bearer ${token}` } }), {
+/** @param {any} handler @param {string} token @param {string} path @param {Record<string, string>} extraHeaders */
+async function agentGet(handler, token, path, extraHeaders = {}) {
+  const response = await handler.fetch(new Request(`https://workout.example${path}`, { headers: { Authorization: `Bearer ${token}`, ...extraHeaders } }), {
     LOCAL_AUTH: "true",
     PUBLIC_ORIGIN: "https://workout.example",
     AGENT_TOKEN_SECRET: testAgentSecret,
@@ -90,6 +90,7 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   assert.equal(prescription.prescription_ref, workoutEntries[0].prescription_ref);
   assert.ok(Array.isArray(prescription.blocks));
   assert.equal(Object.hasOwn(prescription, "revision_key"), false);
+  assert.doesNotMatch(JSON.stringify(prescription), /revision_key|scheduled_workout_key/);
   assert.ok(schedule.body.entries.every(/** @param {any} entry */ (entry) => !Object.hasOwn(entry, "revision_key") && !Object.hasOwn(entry, "scheduled_workout_key")));
   assert.ok(schedule.body.entries.every(/** @param {any} entry */ (entry) => /^schedule:\d{4}-\d{2}-\d{2}:(workout|rest|no_plan)$/.test(entry.source_ref)));
 
@@ -105,6 +106,9 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   const bPlan = await agentGet(handler, tokenB, "/api/agent/v1/plan");
   assert.equal(bPlan.response.status, 200);
   assert.equal(bPlan.body.current, null);
+  const spoofedIdentity = await agentGet(handler, tokenA, "/api/agent/v1/plan", { "x-athlete-email": stateB.email });
+  assert.equal(spoofedIdentity.response.status, 200);
+  assert.equal(spoofedIdentity.body.current.effective_from, before.plan_revisions[0].effective_from);
   const bSchedule = await agentGet(handler, tokenB, `/api/agent/v1/schedule?from=${today}&to=${today}`);
   assert.equal(bSchedule.body.entries[0].kind, "no_plan");
   const crossHeader = await handler.fetch(new Request(`https://workout.example/api/agent/v1/overview?athlete_key=${stateB.athlete_key}`, { headers: { Authorization: `Bearer ${tokenA}`, "x-athlete-email": stateB.email } }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });

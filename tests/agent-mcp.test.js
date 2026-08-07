@@ -35,4 +35,10 @@ test("workout MCP maps typed calls to authenticated Agent API reads and preserve
   assert.equal(schedule.result.isError, true);
   assert.equal(schedule.result.structuredContent.error.code, "invalid_period");
   assert.equal(requests[1].url, "https://workout.example/api/agent/v1/schedule?from=2026-08-01&to=2026-08-02");
+
+  const unknownArgument = await bridge.handleMessage({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "workout_get_plan", arguments: { athlete_key: "athlete-b" } } });
+  assert.equal(unknownArgument.error.code, -32602);
+  const wrongType = await bridge.handleMessage({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "workout_get_schedule", arguments: { from: "2026-08-01", to: true } } });
+  assert.equal(wrongType.error.code, -32602);
+  assert.equal(requests.length, 2);
 });

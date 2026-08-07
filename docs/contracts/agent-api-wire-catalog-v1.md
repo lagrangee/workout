@@ -86,7 +86,14 @@ AgentPlan = {
   pending_count: integer
 }
 
-PlanProjection = { effective_from: LocalDate, week: WeeklyTemplate }
+PlanProjection = { effective_from: LocalDate, week: WeeklyTemplate, source_ref: string }
+
+WeeklyTemplate = {
+  monday: WeekSlot, tuesday: WeekSlot, wednesday: WeekSlot,
+  thursday: WeekSlot, friday: WeekSlot, saturday: WeekSlot, sunday: WeekSlot
+}
+
+WeekSlot = null | { kind: "rest" } | { kind: "workout", prescription: Prescription }
 
 AgentSchedule = {
   schema_version: 1,
