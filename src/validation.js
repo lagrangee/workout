@@ -20,9 +20,9 @@ class StrictJsonParser {
   /** @param {string} text */
   constructor(text) { this.text = text; this.index = 0; }
   parse() {
-    const value = this.value("$");
+    const value = this.value("");
     this.ws();
-    if (this.index !== this.text.length) throw new StrictJsonParseError("$", `Unexpected character at offset ${this.index}`);
+    if (this.index !== this.text.length) throw new StrictJsonParseError("", `Unexpected character at offset ${this.index}`);
     return value;
   }
   ws() { while (/\s/.test(this.text[this.index] ?? "")) this.index += 1; }
@@ -220,11 +220,11 @@ export function validatePlanPackage(text, today) {
   try { packageValue = parseStrictJson(text); } catch (error) {
     return {
       ok: false,
-      errors: [{ path: error instanceof StrictJsonParseError ? error.path : "$", message: error instanceof Error ? error.message : "Invalid JSON" }],
+      errors: [{ path: error instanceof StrictJsonParseError && error.path ? error.path : "$", message: error instanceof Error ? error.message : "Invalid JSON" }],
     };
   }
   if (!requireObject(packageValue, "$", errors)) return { ok: false, errors: validationErrorDetails(errors) };
-  exactKeys(packageValue, ["schema_version", "effective_from", "week"], "$", errors);
+  exactKeys(packageValue, ["schema_version", "effective_from", "week"], "", errors);
   if (packageValue.schema_version !== 1) errors.push("/schema_version: must equal integer 1");
   if (!requireString(packageValue.effective_from, "/effective_from", errors) || !isValidLocalDate(packageValue.effective_from)) errors.push("/effective_from: must be a valid local date");
   else if (packageValue.effective_from <= today) errors.push("/effective_from: must be later than the current local date");

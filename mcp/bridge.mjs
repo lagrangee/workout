@@ -273,8 +273,8 @@ function validateToolArguments(tool, args) {
   const properties = schema.properties ?? {};
   for (const required of schema.required ?? []) if (!Object.hasOwn(args, required)) return `Missing required argument: ${required}`;
   for (const key of Object.keys(args)) {
+    if (!Object.hasOwn(properties, key)) return `Unknown argument: ${key}`;
     const property = properties[key];
-    if (!property) return `Unknown argument: ${key}`;
     const error = validateArgumentValue(property, args[key], `Argument ${key}`);
     if (error) return error;
   }
@@ -295,8 +295,9 @@ function validateArgumentValue(property, value, label) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return `${label} must be an object`;
     for (const required of property.required ?? []) if (!Object.hasOwn(value, required)) return `Missing required argument: ${label}.${required}`;
     for (const key of Object.keys(value)) {
-      const nested = property.properties?.[key];
-      if (!nested && property.additionalProperties === false) return `Unknown argument: ${label}.${key}`;
+      const hasNestedProperty = Object.hasOwn(property.properties ?? {}, key);
+      const nested = hasNestedProperty ? property.properties[key] : undefined;
+      if (!hasNestedProperty && property.additionalProperties === false) return `Unknown argument: ${label}.${key}`;
       if (nested) {
         const error = validateArgumentValue(nested, value[key], `${label}.${key}`);
         if (error) return error;
