@@ -151,9 +151,21 @@ test("workout MCP serializes a typed Plan Update Package for non-mutating valida
   assert.equal(nestedUnknownResult.error.code, -32602);
   assert.equal(requests.length, 1);
 
+  const nestedPrototype = JSON.parse(JSON.stringify(packageValue));
+  nestedPrototype.week.monday = JSON.parse('{"kind":"rest","__proto__":true}');
+  const nestedPrototypeResult = await bridge.handleMessage({ jsonrpc: "2.0", id: 18, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: nestedPrototype } } });
+  assert.equal(nestedPrototypeResult.error.code, -32602);
+  assert.equal(requests.length, 1);
+
+  const topLevelConstructor = JSON.parse(JSON.stringify(packageValue));
+  topLevelConstructor.constructor = true;
+  const topLevelConstructorResult = await bridge.handleMessage({ jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: topLevelConstructor } } });
+  assert.equal(topLevelConstructorResult.error.code, -32602);
+  assert.equal(requests.length, 1);
+
   const incompleteWorkout = JSON.parse(JSON.stringify(packageValue));
   incompleteWorkout.week.monday = { kind: "workout" };
-  const incompleteWorkoutResult = await bridge.handleMessage({ jsonrpc: "2.0", id: 18, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: incompleteWorkout } } });
+  const incompleteWorkoutResult = await bridge.handleMessage({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: incompleteWorkout } } });
   assert.equal(incompleteWorkoutResult.error.code, -32602);
   assert.equal(requests.length, 1);
 });

@@ -96,25 +96,33 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
   const duplicateWeekMember = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: `{"schema_version":1,"effective_from":"${addDays(today, 1)}","week":{"monday":null,"monday":null}}`,
   });
-  assert.equal(duplicateWeekMember.body.error.details[0].path, "$/week/monday");
+  assert.equal(duplicateWeekMember.body.error.details[0].path, "/week/monday");
 
   const malformedNestedValue = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: `{"schema_version":1,"effective_from":"${addDays(today, 1)}","week":{"monday":{"kind":"rest",},}}`,
   });
-  assert.equal(malformedNestedValue.body.error.details[0].path, "$/week/monday");
+  assert.equal(malformedNestedValue.body.error.details[0].path, "/week/monday");
 
   const prototypeField = JSON.stringify(valid).slice(0, -1) + ',"__proto__":true}';
   const prototypeResult = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: prototypeField });
-  assert.equal(prototypeResult.body.error.details.some((detail) => detail.path === "$/__proto__"), true);
+  assert.equal(prototypeResult.body.error.details.some((detail) => detail.path === "/__proto__"), true);
 
   const unusualUnknownField = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: JSON.stringify({ ...valid, "odd: field/with~chars": true }),
   });
-  assert.equal(unusualUnknownField.body.error.details.some((detail) => detail.path === "$/odd: field~1with~0chars"), true);
+  assert.equal(unusualUnknownField.body.error.details.some((detail) => detail.path === "/odd: field~1with~0chars"), true);
 
   const after = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(after.plan_revisions.length, before.plan_revisions.length);
   assert.equal(after.training_version, before.training_version);
+
+  const duplicateOuter = await handler.fetch(new Request("https://workout.example/api/agent/v1/plan-updates/validate", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: `{"package_text":${JSON.stringify(packageText(addDays(today, 1), workout("外层重复")))},"package_text":${JSON.stringify(packageText(addDays(today, 2), workout("外层覆盖")))}}`,
+  }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
+  assert.equal(duplicateOuter.status, 400);
+  assert.equal((await duplicateOuter.json()).error.code, "invalid_json");
 });
 
 test("Agent plan validation rejects no-op and non-future effective dates", async () => {
