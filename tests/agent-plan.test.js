@@ -43,9 +43,17 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   assert.equal(typeof overview.body.data_as_of, "string");
   assert.equal(typeof overview.body.coverage.current_local_date, "string");
   assert.equal(overview.body.coverage.current_date_may_be_incomplete, true);
+  assert.equal(overview.response.headers.get("Cache-Control"), "private, no-store");
   assert.equal(Object.hasOwn(overview.body, "athlete_key"), false);
   assert.equal(Object.hasOwn(overview.body, "email"), false);
   assert.doesNotMatch(JSON.stringify(overview.body), new RegExp("/coach/|Bearer|token_digest"));
+
+  const allOverview = await agentGet(handler, tokenA, "/api/agent/v1/overview?range=all");
+  assert.equal(allOverview.response.status, 200);
+  assert.equal(allOverview.body.period.from, before.plan_revisions[0].effective_from);
+  const invalidOverview = await agentGet(handler, tokenA, "/api/agent/v1/overview?range=quarter");
+  assert.equal(invalidOverview.response.status, 400);
+  assert.equal(invalidOverview.body.error.code, "invalid_period");
 
   const plan = await agentGet(handler, tokenA, "/api/agent/v1/plan");
   assert.equal(plan.response.status, 200);
@@ -67,15 +75,21 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   assert.equal(oversizedRange.response.status, 400);
   assert.equal(oversizedRange.body.error.code, "invalid_period");
 
-  const schedule = await agentGet(handler, tokenA, `/api/agent/v1/schedule?from=${today}&to=${addDays(today, 2)}&expand=prescription`);
+  const schedule = await agentGet(handler, tokenA, `/api/agent/v1/schedule?from=${today}&to=${addDays(today, 7)}&expand=prescription`);
   assert.equal(schedule.response.status, 200);
   assert.equal(schedule.body.from, today);
-  assert.equal(schedule.body.to, addDays(today, 2));
+  assert.equal(schedule.body.to, addDays(today, 7));
   assert.equal(schedule.body.period.timezone, "Asia/Shanghai");
-  assert.equal(schedule.body.entries.length, 3);
+  assert.equal(schedule.body.entries.length, 8);
   assert.ok(schedule.body.entries.some(/** @param {any} entry */ (entry) => entry.kind === "workout"));
   assert.ok(schedule.body.entries.some(/** @param {any} entry */ (entry) => entry.kind === "rest" || entry.kind === "no_plan"));
-  assert.ok(Object.keys(schedule.body.prescriptions).length >= 1);
+  const workoutEntries = schedule.body.entries.filter(/** @param {any} entry */ (entry) => entry.kind === "workout");
+  assert.equal(new Set(workoutEntries.map(/** @param {any} entry */ (entry) => entry.prescription_ref)).size, 1);
+  assert.equal(Object.keys(schedule.body.prescriptions).length, 1);
+  const prescription = schedule.body.prescriptions[workoutEntries[0].prescription_ref];
+  assert.equal(prescription.prescription_ref, workoutEntries[0].prescription_ref);
+  assert.ok(Array.isArray(prescription.blocks));
+  assert.equal(Object.hasOwn(prescription, "revision_key"), false);
   assert.ok(schedule.body.entries.every(/** @param {any} entry */ (entry) => !Object.hasOwn(entry, "revision_key") && !Object.hasOwn(entry, "scheduled_workout_key")));
   assert.ok(schedule.body.entries.every(/** @param {any} entry */ (entry) => /^schedule:\d{4}-\d{2}-\d{2}:(workout|rest|no_plan)$/.test(entry.source_ref)));
 

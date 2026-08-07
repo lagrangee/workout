@@ -2,7 +2,7 @@
 
 import { deepClone, dateRange, dateSpan, isValidLocalDate, localDate } from "./util.js";
 import { planModel, scheduleEntry } from "./plan.js";
-import { coachOverview } from "./coach.js";
+import { coachOverview, coachPrescription } from "./coach.js";
 
 const AGENT_PREFIX = "/api/agent/v1";
 
@@ -40,9 +40,9 @@ export function agentManifest(state, now) {
   };
 }
 
-/** @param {any} state @param {Date} now */
-export function agentOverview(state, now) {
-  return { ...coachOverview(state, new URL("https://workout.example/api/agent/v1/overview"), now), source_ref: "overview" };
+/** @param {any} state @param {URL} url @param {Date} now */
+export function agentOverview(state, url, now) {
+  return { ...coachOverview(state, url, now), source_ref: "overview" };
 }
 
 /** @param {any} state @param {Date} now */
@@ -77,8 +77,8 @@ export function agentSchedule(state, url, now) {
   const prescriptions = {};
   const entries = dateRange(from, to).map((date) => {
     const raw = scheduleEntry(state, date, now, expand);
-    const prescriptionRef = raw.kind === "workout" ? `prescription:${date}` : null;
-    if (expand && prescriptionRef && raw.prescription) prescriptions[prescriptionRef] = deepClone(raw.prescription);
+    const prescriptionRef = raw.prescription_ref;
+    if (expand && prescriptionRef && raw.prescription) prescriptions[prescriptionRef] = coachPrescription(raw.prescription, raw.revision_key, raw.weekday);
     return {
       date: raw.date,
       weekday: raw.weekday,
@@ -110,7 +110,7 @@ export function agentSchedule(state, url, now) {
 
 /** @param {any} state @param {string} pathname @param {URL} url @param {Date} now */
 export function agentResource(state, pathname, url, now) {
-  if (pathname === `${AGENT_PREFIX}/overview`) return agentOverview(state, now);
+  if (pathname === `${AGENT_PREFIX}/overview`) return agentOverview(state, url, now);
   if (pathname === `${AGENT_PREFIX}/plan`) return agentPlan(state, now);
   if (pathname === `${AGENT_PREFIX}/schedule`) return agentSchedule(state, url, now);
   return { error: { code: "not_found", message: "Resource not found" } };

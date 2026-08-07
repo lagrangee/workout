@@ -60,6 +60,25 @@ The versioned wire shapes are defined in
 progress, and Plan Update resources must extend this contract rather than
 reuse private App routes.
 
+## Read query rules
+
+`overview` accepts the same inclusive period selectors as the existing domain
+projection: `from` and `to` together, or one of `preset`/`range` with
+`7d`, `30d`, `12w`, or `all`. The default is `30d`; `range` is an alias for
+`preset`; a date window is mutually exclusive with either selector and is
+bounded to 3660 days. Invalid selectors are rejected rather than ignored.
+
+`schedule` requires `from` and `to` as inclusive Athlete-local dates and is
+bounded to 366 days. `expand=prescription` adds deduplicated typed
+prescriptions keyed by the stable `prescription_ref` already present on each
+workout entry. The same plan revision and weekday therefore share one
+prescription object across multiple dates.
+
+All three resources preserve `data_as_of`, `training_version`, the relevant
+Athlete-local period, and token-free `source_ref` values. Schedule expansion
+uses the public prescription shape from the wire catalog; it never returns a
+raw internal plan slot or revision identity.
+
 ## Response and privacy rules
 
 Successful responses use structured JSON and include `schema_version`,
