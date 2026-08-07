@@ -27,6 +27,7 @@ function applyBody(packageValue, preview, overrides = {}) {
 test("Agent plan application requires the preview evidence and returns readback-ready application data", async () => {
   const { handler, store } = appFixture();
   const token = await createAgentToken(handler);
+  const before = await store.getByEmail("athlete-a@example.invalid");
   const packageValue = JSON.parse(packageText(addDays(today, 1), workout("确认应用")));
   const preview = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
   assert.equal(preview.response.status, 200);
@@ -42,10 +43,12 @@ test("Agent plan application requires the preview evidence and returns readback-
   assert.equal(applied.body.effective_from, addDays(today, 1));
   assert.equal(applied.body.package_digest, preview.body.package_digest);
   assert.equal(applied.body.base_plan_digest, preview.body.base_plan_digest);
+  assert.equal(applied.body.training_version, before.training_version + 1);
   assert.doesNotMatch(JSON.stringify(applied.body), /revision_key|athlete_key/);
 
   const state = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(state.plan_revisions.length, 2);
+  assert.equal(state.training_version, before.training_version + 1);
   const plan = await agentRequest(handler, token, "/api/agent/v1/plan");
   assert.equal(plan.response.status, 200);
   assert.equal(plan.body.future[0].effective_from, addDays(today, 1));
@@ -119,6 +122,7 @@ test("Agent plan application replays one idempotent success and rejects a confli
   const state = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(state.plan_revisions.length, 2);
   assert.equal(state.idempotency_records.length, 1);
+  assert.equal(state.training_version, first.body.training_version);
 });
 
 test("Agent plan application preserves effective revision precedence for later updates", async () => {
