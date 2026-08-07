@@ -228,7 +228,7 @@ export class WorkoutApiClient {
         this.get("/plan"),
         this.getSchedule({ from: readbackFrom, to: readbackTo, expand: true }),
       ]);
-      verifyPlanReadback(plan, readbackFrom);
+      verifyPlanReadback(plan, readbackFrom, args.package);
       verifyScheduleReadback(schedule, readbackFrom, readbackTo);
       return { ...applied, readback: { status: "verified", plan, schedule } };
     } catch (error) {
@@ -391,12 +391,45 @@ function addDays(value, days) {
   return date.toISOString().slice(0, 10);
 }
 
-function verifyPlanReadback(plan, effectiveFrom) {
-  if (!plan || !Array.isArray(plan.future) || !plan.future.some((revision) => revision?.effective_from === effectiveFrom)) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not contain the applied effective date");
+function verifyPlanReadback(plan, effectiveFrom, expectedPackage) {
+  const revisions = [plan?.current, ...(Array.isArray(plan?.future) ? plan.future : [])];
+  const revision = revisions.find((candidate) => candidate?.effective_from === effectiveFrom);
+  if (!revision) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not contain the applied effective date");
+  if (JSON.stringify(comparablePlanWeek(revision.week)) !== JSON.stringify(comparablePlanWeek(expectedPackage.week))) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not match the applied Weekly Template");
 }
 
 function verifyScheduleReadback(schedule, from, to) {
   const entries = schedule?.entries;
   const expectedDates = Array.from({ length: 7 }, (_, index) => addDays(from, index));
   if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied seven-day window");
+}
+
+function comparablePlanWeek(week) {
+  return Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, comparablePlanSlot(week?.[day])]));
+}
+
+function comparablePlanSlot(slot) {
+  if (slot === null) return null;
+  if (slot?.kind === "rest") return { kind: "rest" };
+  if (slot?.kind !== "workout") return slot;
+  const source = slot.prescription ?? slot;
+  return {
+    kind: "workout",
+    title: source.title,
+    start_time: source.start_time,
+    estimated_duration_min: source.estimated_duration_min,
+    blocks: source.blocks.map((block) => ({
+      title: block.title,
+      exercises: block.exercises.map((exercise) => ({
+        exercise_key: exercise.exercise_key,
+        name: exercise.name,
+        category: exercise.category,
+        side_mode: exercise.side_mode,
+        sets: exercise.sets.map((set) => {
+          const { set_key: _setKey, ...comparableSet } = set;
+          return comparableSet;
+        }),
+      })),
+    })),
+  };
 }

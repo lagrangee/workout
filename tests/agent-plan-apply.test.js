@@ -69,6 +69,10 @@ test("Agent plan application gates confirmation and idempotency before any write
   assert.equal(missingKey.response.status, 400);
   assert.equal(missingKey.body.error.code, "idempotency_key_required");
 
+  const whitespaceKey = await agentPost(handler, token, "/api/agent/v1/plan-updates/apply", applyBody(packageValue, preview.body), { "Idempotency-Key": "   " });
+  assert.equal(whitespaceKey.response.status, 400);
+  assert.equal(whitespaceKey.body.error.code, "idempotency_key_required");
+
   const missingConfirmation = await agentPost(handler, token, "/api/agent/v1/plan-updates/apply", applyBody(packageValue, preview.body, { confirmed: false }), { "Idempotency-Key": "gate-confirmation" });
   assert.equal(missingConfirmation.response.status, 400);
   assert.equal(missingConfirmation.body.error.code, "confirmation_required");

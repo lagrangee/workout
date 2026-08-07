@@ -74,15 +74,15 @@ function agentMethodNotAllowed(allow = "GET, HEAD") { const response = jsonError
 
 /** @param {Request} request @param {any} store @param {any} authenticatedState @param {Date} now */
 async function agentApplyRoute(request, store, authenticatedState, now) {
-  const key = request.headers.get("Idempotency-Key")?.trim() ?? "";
-  if (!key || key.length > 200) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
+  const key = request.headers.get("Idempotency-Key") ?? "";
+  if (!key || key.length > 200 || key.trim().length === 0) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
   const rawBody = await request.text();
   const bodyDigest = await sha256Hex(rawBody);
   const execute = async (transactionStore) => {
     const state = transactionStore === store ? authenticatedState : await transactionStore.getByEmail(authenticatedState.email);
     if (!state) return jsonError("forbidden", "Identity is not configured", [], 403);
     state.idempotency_records ??= [];
-    const existing = state.idempotency_records.find((record) => record.key === key && record.method === request.method && record.path === "/api/agent/v1/plan-updates/apply" && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+    const existing = findIdempotencyRecord(state, key, request.method, "/api/agent/v1/plan-updates/apply", now);
     if (existing) {
       if (existing.body_digest !== bodyDigest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
       return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
@@ -90,8 +90,7 @@ async function agentApplyRoute(request, store, authenticatedState, now) {
     const resource = await agentApplyPlanUpdate(state, rawBody, now);
     if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
     const response = jsonResponse(resource, 201);
-    state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
-    state.idempotency_records.push({ key, method: request.method, path: "/api/agent/v1/plan-updates/apply", body_digest: bodyDigest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
+    await rememberIdempotencyResponse(state, key, request.method, "/api/agent/v1/plan-updates/apply", bodyDigest, response, now);
     await transactionStore.save(state);
     return response;
   };
@@ -200,9 +199,9 @@ async function privateMutation(request, env, store, originalState, path, url, no
       const result = await mutation(); if (result.persist !== false) await transactionStore.save(state); return responseFromResult(result);
     }
     const key = request.headers.get("Idempotency-Key");
-    if (!key || key.length > 200) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
+    if (!key || key.length > 200 || key.trim().length === 0) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
     const digest = await sha256Hex(rawBody);
-    const existing = state.idempotency_records.find((record) => record.key === key && record.method === request.method && record.path === path && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+    const existing = findIdempotencyRecord(state, key, request.method, path, now);
     if (existing) {
       if (existing.body_digest !== digest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
       return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
@@ -210,8 +209,7 @@ async function privateMutation(request, env, store, originalState, path, url, no
     const result = await mutation();
     if (result.persist !== false) await transactionStore.save(state);
     const response = responseFromResult(result);
-    state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
-    state.idempotency_records.push({ key, method: request.method, path, body_digest: digest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
+    await rememberIdempotencyResponse(state, key, request.method, path, digest, response, now);
     await transactionStore.save(state);
     return response;
   };
@@ -222,6 +220,15 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "The requested capability is not configured", [], 503);
     throw error;
   }
+}
+
+function findIdempotencyRecord(state, key, method, path, now) {
+  return state.idempotency_records.find((record) => record.key === key && record.method === method && record.path === path && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+}
+
+async function rememberIdempotencyResponse(state, key, method, path, bodyDigest, response, now) {
+  state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+  state.idempotency_records.push({ key, method, path, body_digest: bodyDigest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
 }
 
 async function agentAccessCommand(state, env, rawBody, now) {
