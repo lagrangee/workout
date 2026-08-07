@@ -19,8 +19,8 @@ and recommendation style for the question.
    metric evidence, and `workout_get_exercise_history` for movement-level
    trends. Use the bounded defaults for overview, progress, and exercise
    history; use `all` only when the user asks for full history. Completion:
-   the request has one selected typed read tool and every required date or
-   identity argument is known.
+   the request has one selected typed read tool, every required date argument
+   is known, and the connected MCP identity supplies the data owner.
 
 2. **Read a bounded slice.** Give `workout_get_schedule` an explicit
    inclusive date range in the Athlete's local timezone. Give
@@ -63,8 +63,9 @@ and recommendation style for the question.
 7. **Separate confirmation from application.** Show the validated preview
    before asking for confirmation. A separate, explicit confirmation that
    refers to that preview is the gate; then call `workout_apply_plan_update`
-   with the exact validated package and base evidence, plus a fresh idempotency
-   key.
+   with the exact validated package, the same `package_digest` and
+   `base_plan_digest` returned by validation, `confirmed: true`, and a fresh
+   idempotency key.
    Completion: the user has either confirmed the exact preview or declined or
    changed it, in which case the package returns to validation.
 
@@ -85,10 +86,18 @@ configuration action required and continue without requesting the credential
 value in conversation.
 
 Route structured API errors by their meaning: ask for missing information on
-invalid input, restart the read-first flow on stale state or a training
-version change, and surface rate-limit or server failures with their stable
-code. Read tools remain side-effect-free; plan application is the only write
-branch in this skill.
+ invalid input, restart the same bounded traversal on `invalid_cursor`, and
+ restart the read-first flow on stale state or a training version change.
+ Return to the preview/confirmation step for `confirmation_required`, surface
+ `idempotency_conflict` without retrying under the same key, and report
+ `unsupported_operation` as outside this integration. Surface rate-limit or
+ server failures with their stable code. Read tools remain side-effect-free;
+ plan application is the only write branch in this skill.
+
+Route Session lifecycle or correction requests, account-settings changes, and
+share-management requests to the unsupported-operation path. The integration
+ exposes no typed tool for those mutations, so the request remains outside the
+ write flow.
 
 ## Canonical references
 
