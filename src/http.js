@@ -7,6 +7,7 @@ import { createSession, replaceRecord, endSession, continueOrRestart, findSessio
 import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
+import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -31,6 +32,7 @@ async function route(request, env, getStore, ctx) {
     const schema = schemaResource(url.pathname.split("/").at(-1));
     return schema ? maybeHead(new Response(JSON.stringify(schema, null, 2), { status: 200, headers: securityHeaders("application/schema+json") }), request) : jsonError("not_found", "Schema not found", [], 404);
   }
+  if (url.pathname === "/api/agent/v1" || url.pathname.startsWith("/api/agent/v1/")) return agentRoute(request, env, getStore, url);
   if (url.pathname.startsWith("/coach/") || url.pathname.startsWith("/api/coach/v1/")) return coachRoute(request, env, getStore, url);
   if (url.pathname === "/app" && env.ENVIRONMENT === "production") {
     const auth = await authenticate(request, env);
@@ -40,6 +42,20 @@ async function route(request, env, getStore, ctx) {
   if (url.pathname.startsWith(PRIVATE_PREFIX)) return privateRoute(request, env, getStore, url);
   return textResponse("Not found", 404);
 }
+
+async function agentRoute(request, env, getStore, url) {
+  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...securityHeaders("text/plain; charset=utf-8"), Allow: "GET, HEAD" } });
+  if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
+  const authorization = request.headers.get("Authorization");
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
+  const store = await getStore();
+  const state = bearer ? await findAgentInStore(store, bearer, env) : null;
+  if (!state) return agentUnauthorized();
+  if (url.pathname !== "/api/agent/v1") return jsonError("not_found", "Resource not found", [], 404);
+  return maybeHead(jsonResponse({ schema_version: 1, generated_at: new Date().toISOString(), data_as_of: new Date().toISOString(), athlete: { display_name: state.display_name, timezone: state.timezone }, capabilities: ["read", "plan:write"] }), request);
+}
+
+function agentUnauthorized() { return jsonError("agent_unauthorized", "A valid Agent Token is required", [], 401); }
 
 async function staticRoute(request, env) {
   if (env.ASSETS?.fetch) {
@@ -90,6 +106,7 @@ async function privateRoute(request, env, getStore, url) {
 
 async function privateGet(state, path, url, now, env) {
   if (path === "/api/private/me") return jsonResponse({ athlete_key: state.athlete_key, display_name: state.display_name, timezone: state.timezone });
+  if (path === "/api/private/agent-access") return jsonResponse(agentAccessStatus(state));
   if (path === "/api/private/today") return jsonResponse(todayModel(state, now));
   if (path === "/api/private/plan") return jsonResponse(planModel(state, now));
   if (path === "/api/private/plan/update-package") {
@@ -127,10 +144,12 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (request.method === "PUT" && path.match(/^\/api\/private\/sessions\/[^/]+\/record$/)) return correctRecord(state, path, rawBody, now);
     if (request.method === "POST" && path === "/api/private/coach-share") return shareCommand(state, env, now, false);
     if (request.method === "POST" && path === "/api/private/coach-share/regenerate") return shareCommand(state, env, now, true);
+    if (request.method === "POST" && path === "/api/private/agent-access") return agentAccessCommand(state, env, rawBody, now);
+    if (request.method === "DELETE" && path === "/api/private/agent-access") { const result = revokeAgentAccess(state, now); return { body: { active: result.active, revoked: result.revoked }, status: 200, persist: result.persist }; }
     if (request.method === "DELETE" && path === "/api/private/coach-share") { if (state.coach_share) { state.coach_share.revoked_at = now.toISOString(); state.training_version += 1; } return { body: { active: false, revoked: true }, status: 200, persist: true }; }
     return { body: { error: { code: "not_found", message: "Resource not found", details: [] } }, status: 404, persist: false };
     };
-    const requiresKey = request.method === "POST" && path !== "/api/private/plan-updates/validate";
+    const requiresKey = request.method === "POST" && path !== "/api/private/plan-updates/validate" && path !== "/api/private/agent-access";
     if (!requiresKey) {
       const result = await mutation(); if (result.persist !== false) await transactionStore.save(state); return responseFromResult(result);
     }
@@ -157,6 +176,12 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "The requested capability is not configured", [], 503);
     throw error;
   }
+}
+
+async function agentAccessCommand(state, env, rawBody, now) {
+  const body = parseJsonBody(rawBody); if (body.error) return body;
+  if (!isRecord(body.value) || Object.keys(body.value).length !== 0) return { body: errorBody("invalid_request", "Agent access accepts an empty object", []), status: 400, persist: false };
+  return { body: await createAgentAccess(state, env, now), status: 201, persist: true };
 }
 
 function updateSettings(state, rawBody, now) {
