@@ -22,6 +22,30 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, expand: { type: "boolean", default: false } }, required: ["from", "to"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
+  {
+    name: "workout_list_sessions",
+    description: "List bounded Workout Sessions with Athlete-local filters and an opaque cursor.",
+    inputSchema: { type: "object", properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string" }, status: { type: "string", enum: ["in_progress", "completed", "partial", "skipped"] }, exercise_key: { type: "string" } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "workout_get_session",
+    description: "Read one complete Workout Session, immutable Training Plan Snapshot, Actual Training Data, intervals, and feedback.",
+    inputSchema: { type: "object", properties: { session_key: { type: "string" } }, required: ["session_key"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "workout_get_progress",
+    description: "Read progress metrics, evidence, streak, duration, strength days, RPE, and weekly buckets.",
+    inputSchema: { type: "object", properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, preset: { type: "string", enum: ["7d", "30d", "12w", "all"] }, range: { type: "string", enum: ["7d", "30d", "12w", "all"] }, bucket: { type: "string", enum: ["day", "week", "month"], default: "week" } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "workout_get_exercise_history",
+    description: "Read one Exercise's display-name history, performed Sessions, resistance semantics, and side-separated observations.",
+    inputSchema: { type: "object", properties: { exercise_key: { type: "string" }, from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, preset: { type: "string", enum: ["7d", "30d", "12w", "all"] }, range: { type: "string", enum: ["7d", "30d", "12w", "all"] } }, required: ["exercise_key"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
 ];
 
 export class WorkoutApiError extends Error {
@@ -53,6 +77,10 @@ export class WorkoutApiClient {
     if (name === "workout_get_overview") return this.getOverview(args);
     if (name === "workout_get_plan") return this.getPlan(args);
     if (name === "workout_get_schedule") return this.getSchedule(args);
+    if (name === "workout_list_sessions") return this.listSessions(args);
+    if (name === "workout_get_session") return this.getSession(args);
+    if (name === "workout_get_progress") return this.getProgress(args);
+    if (name === "workout_get_exercise_history") return this.getExerciseHistory(args);
     throw new WorkoutApiError("tool_not_found", `Tool is not available: ${name}`, 0);
   }
 
@@ -72,6 +100,32 @@ export class WorkoutApiClient {
     if (typeof args.to === "string") query.set("to", args.to);
     if (args.expand === true) query.set("expand", "prescription");
     return this.get(`/schedule${query.size ? `?${query}` : ""}`);
+  }
+
+  async listSessions(args = {}) {
+    assertToolArguments("workout_list_sessions", args);
+    const query = new URLSearchParams();
+    for (const field of ["from", "to", "limit", "cursor", "status", "exercise_key"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+    return this.get(`/sessions${query.size ? `?${query}` : ""}`);
+  }
+
+  async getSession(args = {}) {
+    assertToolArguments("workout_get_session", args);
+    return this.get(`/sessions/${encodeURIComponent(args.session_key)}`);
+  }
+
+  async getProgress(args = {}) {
+    assertToolArguments("workout_get_progress", args);
+    const query = new URLSearchParams();
+    for (const field of ["from", "to", "preset", "range", "bucket"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+    return this.get(`/progress${query.size ? `?${query}` : ""}`);
+  }
+
+  async getExerciseHistory(args = {}) {
+    assertToolArguments("workout_get_exercise_history", args);
+    const query = new URLSearchParams();
+    for (const field of ["from", "to", "preset", "range"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+    return this.get(`/exercises/${encodeURIComponent(args.exercise_key)}${query.size ? `?${query}` : ""}`);
   }
 
   async get(path) {
@@ -145,6 +199,9 @@ function validateToolArguments(tool, args) {
     const value = args[key];
     if (property.type === "string" && typeof value !== "string") return `Argument ${key} must be a string`;
     if (property.type === "boolean" && typeof value !== "boolean") return `Argument ${key} must be a boolean`;
+    if (property.type === "integer" && !Number.isInteger(value)) return `Argument ${key} must be an integer`;
+    if (property.minimum !== undefined && value < property.minimum) return `Argument ${key} is below the minimum`;
+    if (property.maximum !== undefined && value > property.maximum) return `Argument ${key} is above the maximum`;
     if (property.enum && !property.enum.includes(value)) return `Argument ${key} is unsupported`;
     if (property.format === "date" && !isValidDateArgument(value)) return `Argument ${key} must be a valid YYYY-MM-DD date`;
   }

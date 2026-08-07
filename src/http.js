@@ -381,7 +381,7 @@ async function coachRateLimit(env, state, now) {
   }
 }
 function errorBody(code, message, details) { return { error: { code, message, details } }; }
-function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "timezone_revision_boundary"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
+function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "timezone_revision_boundary", "training_version_changed"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
 function securityHeaders(contentType, csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") { return { "Content-Type": contentType, "Cache-Control": "private, no-store", "CDN-Cache-Control": "no-store", "Content-Security-Policy": csp, "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
 function maybeHead(response, request) { return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response; }
 

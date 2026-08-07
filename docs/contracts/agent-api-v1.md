@@ -53,12 +53,16 @@ The current read resources are:
 GET /api/agent/v1/overview
 GET /api/agent/v1/plan
 GET /api/agent/v1/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD[&expand=prescription]
+GET /api/agent/v1/sessions[?from=&to=&limit=&cursor=&status=&exercise_key=]
+GET /api/agent/v1/sessions/:session_key
+GET /api/agent/v1/progress[?from=&to=&preset=&range=&bucket=]
+GET /api/agent/v1/exercises/:exercise_key[?from=&to=&preset=&range=]
 ```
 
 The versioned wire shapes are defined in
-[Agent API Wire Catalog v1](agent-api-wire-catalog-v1.md). Future Session,
-progress, and Plan Update resources must extend this contract rather than
-reuse private App routes.
+[Agent API Wire Catalog v1](agent-api-wire-catalog-v1.md). Session, progress,
+and Exercise history reads are projections of the existing immutable training
+records; they do not expose private App routes or permit mutation.
 
 ## Read query rules
 
@@ -74,7 +78,7 @@ prescriptions keyed by the stable `prescription_ref` already present on each
 workout entry. The same plan revision and weekday therefore share one
 prescription object across multiple dates.
 
-All three resources preserve `data_as_of`, `training_version`, the relevant
+All resources preserve `data_as_of`, `training_version`, the relevant
 Athlete-local period, and token-free `source_ref` values. Schedule expansion
 uses the public prescription shape from the wire catalog; it never returns a
 raw internal plan slot or revision identity.
@@ -83,6 +87,23 @@ Plan responses use the same typed Weekly Template projection: a workout slot
 contains a `prescription`, a Rest Day remains `{ kind: "rest" }`, and an empty
 slot remains `null`. Plan `source_ref` values are scoped to the Agent resource
 and do not expose internal Plan Revision keys.
+
+`sessions` accepts optional inclusive local-date bounds, a status enum, an
+Exercise key, and a limit from 1 to 200 (default 50). Results are ordered by
+scheduled date descending and stable Session key descending. `page.next_cursor`
+is opaque, bound to every filter including the limit, expires after 15 minutes,
+and carries the `training_version`; a version change returns HTTP 409 with
+`training_version_changed`, so the Agent must restart at page one. Malformed,
+expired, or mismatched cursors return HTTP 400 with `invalid_cursor`.
+
+`sessions/:session_key` returns the immutable Training Plan Snapshot alongside
+Actual Training Data: completion results, intervals, status, duration, RPE,
+notes, skip reason, and Exercise Feedback. `progress` returns metric evidence,
+completion and streak values, duration, strength-training days, RPE, and
+requested day/week/month buckets. `exercises/:exercise_key` returns display-name
+history, performed-session count, per-set actuals and resistance semantics,
+side-separated series, and safe Session references. Empty valid windows remain
+successful responses with explicit empty arrays or null denominators.
 
 ## Response and privacy rules
 

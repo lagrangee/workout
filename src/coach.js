@@ -158,13 +158,16 @@ export function coachSessions(state, url, now) {
   sessions.sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date) || b.session_key.localeCompare(a.session_key));
   const cursor = url.searchParams.get("cursor");
   if (cursor) {
+    let value;
     try {
-      const value = JSON.parse(new TextDecoder().decode(decode(cursor)));
-      if (value.filters !== filters || typeof value.issued_at !== "number" || !Number.isFinite(value.issued_at) || value.issued_at > Date.now() || Date.now() - value.issued_at > 15 * 60 * 1000 || typeof value.date !== "string" || !isValidLocalDate(value.date) || typeof value.key !== "string" || !value.key) throw new Error("bad cursor");
-      sessions = sessions.filter((session) => session.scheduled_date < value.date || (session.scheduled_date === value.date && session.session_key < value.key));
+      value = JSON.parse(new TextDecoder().decode(decode(cursor)));
     } catch { return { error: { code: "invalid_cursor", field: "cursor", message: "Cursor is malformed, expired, or does not match the filters" } }; }
+    if (typeof value.training_version !== "number" || !Number.isInteger(value.training_version)) return { error: { code: "invalid_cursor", field: "cursor", message: "Cursor is malformed, expired, or does not match the filters" } };
+    if (value.training_version !== state.training_version) return { error: { code: "training_version_changed", field: "cursor", message: "Training data changed; restart from page one" } };
+    if (value.filters !== filters || typeof value.issued_at !== "number" || !Number.isFinite(value.issued_at) || value.issued_at > Date.now() || Date.now() - value.issued_at > 15 * 60 * 1000 || typeof value.date !== "string" || !isValidLocalDate(value.date) || typeof value.key !== "string" || !value.key) return { error: { code: "invalid_cursor", field: "cursor", message: "Cursor is malformed, expired, or does not match the filters" } };
+    sessions = sessions.filter((session) => session.scheduled_date < value.date || (session.scheduled_date === value.date && session.session_key < value.key));
   }
-  const page = sessions.slice(0, limit); const last = page.at(-1); const next = sessions.length > limit && last ? encode({ filters, date: last.scheduled_date, key: last.session_key, issued_at: Date.now() }) : null;
+  const page = sessions.slice(0, limit); const last = page.at(-1); const next = sessions.length > limit && last ? encode({ filters, date: last.scheduled_date, key: last.session_key, issued_at: Date.now(), training_version: state.training_version }) : null;
   return { schema_version: 1, generated_at: now.toISOString(), data_as_of: now.toISOString(), training_updated_at: state.sessions.at(-1)?.updated_at ?? null, training_version: state.training_version, period: from && to ? coachPeriodContext(from, to, state.timezone, now) : { from: null, to: null, timezone: state.timezone, includes_from: false, includes_to: false, includes_current_date: false, current_date_may_be_incomplete: false }, page: { limit, next_cursor: next }, items: page.map(sessionSummary) };
 }
 function encode(value) { return base64UrlEncode(new TextEncoder().encode(JSON.stringify(value))); }

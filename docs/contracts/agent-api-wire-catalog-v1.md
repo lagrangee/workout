@@ -39,7 +39,8 @@ AgentManifest = {
   updated_at: { plan: Instant|null, training: Instant|null },
   training_version: integer,
   query_rules: object,
-  links: { overview: string, plan: string, schedule: string },
+  links: { overview: string, plan: string, schedule: string, sessions: string,
+           progress: string, exercise: string },
   endpoints: object,
   capabilities: ["read", "plan:write"]
 }
@@ -108,6 +109,96 @@ AgentSchedule = {
   prescriptions: { [prescription_ref: string]: Prescription }
 }
 
+AgentSessionIndex = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  training_updated_at: Instant|null,
+  training_version: integer,
+  period: SessionPeriod,
+  page: { limit: integer, next_cursor: string|null },
+  items: SessionSummary[],
+  source_ref: "sessions"
+}
+
+SessionSummary = {
+  session_key: string,
+  scheduled_date: LocalDate,
+  title: string,
+  status: "in_progress"|"completed"|"partial"|"skipped",
+  completion_fraction: number,
+  training_duration_sec: integer,
+  session_rpe: number|null,
+  exercise_keys: string[],
+  updated_at: Instant,
+  source_ref: string
+}
+
+SessionPeriod = {
+  from: LocalDate|null,
+  to: LocalDate|null,
+  timezone: IanaTimezone,
+  includes_from: boolean,
+  includes_to: boolean,
+  includes_current_date: boolean,
+  current_date_may_be_incomplete: boolean
+}
+
+AgentSessionDetail = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  session_key: string,
+  scheduled_date: LocalDate,
+  timezone_at_session: IanaTimezone,
+  title: string,
+  status: "in_progress"|"completed"|"partial"|"skipped",
+  completion_fraction: number,
+  training_duration_sec: integer,
+  session_rpe: number|null,
+  note: string|null,
+  skip_reason: string|null,
+  snapshot: object,
+  completion_results: object[],
+  training_intervals: object[],
+  exercise_feedback: object[],
+  updated_at: Instant,
+  training_version: integer,
+  source_ref: string
+}
+
+AgentProgress = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  metric_semantics_version: 1,
+  period: Period,
+  completion_rate_7d: object,
+  completion_rate_30d: object,
+  current_streak: object,
+  metrics: object,
+  bucket: "day"|"week"|"month",
+  buckets: object[],
+  week_buckets: object[],
+  exercises: object[],
+  training_version: integer,
+  source_ref: "progress"
+}
+
+AgentExerciseHistory = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  period: Period,
+  exercise_key: string,
+  display_name_history: object[],
+  performed_session_count: integer,
+  observations: object[],
+  series: { none: object[], left: object[], right: object[] },
+  training_version: integer,
+  source_ref: string
+}
+
 ScheduleEntry = {
   date: LocalDate,
   weekday: string,
@@ -146,6 +237,21 @@ scoped `block_key`, `exercise_occurrence_key`, and `set_key` values. It does
 not contain `revision_key`, `scheduled_workout_key`, Athlete identifiers, or
 database identities. A schedule response may leave `prescriptions` empty when
 `expand` is absent; entries still carry their safe stable reference.
+
+Session index cursors are opaque and must be sent back byte-for-byte. They are
+bound to `from`, `to`, `status`, `exercise_key`, and `limit`, expire after 15
+minutes, and include `training_version`. If that version changes, traversal
+must stop and restart from page one; the API returns
+`training_version_changed` with HTTP 409. The index has stable newest-first
+ordering by `(scheduled_date, session_key)` and does not promise a
+cross-page snapshot.
+
+Progress evidence keeps empty denominators explicit (`value: null` where a
+rate has no due workouts), and period responses mark a window containing the
+Athlete's current local date as potentially incomplete. Exercise observations
+retain the per-set actual metric, resistance mode and quantities, RIR, side,
+and safe `session:<date>:<session_key>` references; `series.none`, `series.left`,
+and `series.right` never merge sides.
 
 ## Errors
 
