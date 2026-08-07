@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 — Preview future Plan Update Packages.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] `workout_apply_plan_update` accepts only the validated package identity, matching base-plan evidence, an idempotency key, and explicit confirmation.
 - [ ] The server revalidates the package and Current Plan base in one atomic mutation boundary before appending exactly one immutable Plan Revision.
@@ -13,4 +13,3 @@
 - [ ] The apply response identifies the applied effective date and enough evidence for the Agent to perform readback; the MCP flow reads the Current Plan and affected Schedule after success.
 - [ ] The existing Coach Share remains read-only and Session, Athlete Settings, and Coach Share mutations remain outside the Agent API.
 - [ ] Tests cover confirmation gating, stale-plan conflicts, concurrent state changes, atomic failure, idempotent replay and conflict, revision precedence, and post-apply readback.
-
