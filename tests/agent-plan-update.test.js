@@ -23,6 +23,9 @@ test("Agent plan validation returns a complete preview and base evidence without
   assert.equal(manifest.body.links.plan_update_validate, "/api/agent/v1/plan-updates/validate");
   assert.equal(manifest.body.endpoints.plan_update_validate.method, "POST");
   assert.equal(manifest.body.endpoints.plan_update_validate.rules.mutates, false);
+  assert.equal(manifest.body.links.plan_update_apply, "/api/agent/v1/plan-updates/apply");
+  assert.equal(manifest.body.endpoints.plan_update_apply.method, "POST");
+  assert.equal(manifest.body.endpoints.plan_update_apply.rules.requires_confirmation, true);
 
   const getValidation = await agentRequest(handler, token, "/api/agent/v1/plan-updates/validate");
   assert.equal(getValidation.response.status, 405);

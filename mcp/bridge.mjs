@@ -61,6 +61,13 @@ const PLAN_UPDATE_PACKAGE_SCHEMA = exactObject({
   effective_from: { type: "string", format: "date" },
   week: exactObject(Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, PLAN_UPDATE_SLOT_SCHEMA]))),
 });
+const PLAN_UPDATE_APPLY_SCHEMA = exactObject({
+  package: PLAN_UPDATE_PACKAGE_SCHEMA,
+  package_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  base_plan_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  confirmed: { type: "boolean", const: true },
+  idempotency_key: { type: "string", minLength: 1, maxLength: 200 },
+});
 
 const TOOL_DEFINITIONS = [
   {
@@ -111,6 +118,12 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: { package: PLAN_UPDATE_PACKAGE_SCHEMA }, required: ["package"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
+  {
+    name: "workout_apply_plan_update",
+    description: "Apply one previously validated future Plan Update Package after explicit confirmation, then read back the Current Plan and affected seven-day Schedule.",
+    inputSchema: PLAN_UPDATE_APPLY_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
 ];
 
 export class WorkoutApiError extends Error {
@@ -147,6 +160,7 @@ export class WorkoutApiClient {
     if (name === "workout_get_progress") return this.getProgress(args);
     if (name === "workout_get_exercise_history") return this.getExerciseHistory(args);
     if (name === "workout_validate_plan_update") return this.validatePlanUpdate(args);
+    if (name === "workout_apply_plan_update") return this.applyPlanUpdate(args);
     throw new WorkoutApiError("tool_not_found", `Tool is not available: ${name}`, 0);
   }
 
@@ -199,12 +213,42 @@ export class WorkoutApiClient {
     return this.post("/plan-updates/validate", { package_text: JSON.stringify(args.package) });
   }
 
+  async applyPlanUpdate(args = {}) {
+    assertToolArguments("workout_apply_plan_update", args);
+    const applied = await this.post("/plan-updates/apply", {
+      package_text: JSON.stringify(args.package),
+      package_digest: args.package_digest,
+      base_plan_digest: args.base_plan_digest,
+      confirmed: args.confirmed,
+    }, { "Idempotency-Key": args.idempotency_key });
+    try {
+      const [plan, schedule] = await Promise.all([
+        this.get("/plan"),
+        this.getSchedule({ from: applied.effective_from, to: addDays(applied.effective_from, 6), expand: true }),
+      ]);
+      return { ...applied, readback: { status: "verified", plan, schedule } };
+    } catch (error) {
+      return {
+        ...applied,
+        readback: {
+          status: "failed",
+          error: {
+            code: error.code ?? "readback_failed",
+            message: error.message ?? String(error),
+            status: error.status ?? 0,
+            details: error.details ?? [],
+          },
+        },
+      };
+    }
+  }
+
   async get(path) {
     return this.request(path, { method: "GET" });
   }
 
-  async post(path, body) {
-    return this.request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  async post(path, body, headers = {}) {
+    return this.request(path, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
   }
 
   async request(path, options = {}) {
@@ -335,4 +379,10 @@ function isValidDateArgument(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function addDays(value, days) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }

@@ -58,6 +58,7 @@ GET /api/agent/v1/sessions/:session_key
 GET /api/agent/v1/progress[?from=&to=&preset=&range=&bucket=]
 GET /api/agent/v1/exercises/:exercise_key[?from=&to=&preset=&range=]
 POST /api/agent/v1/plan-updates/validate
+POST /api/agent/v1/plan-updates/apply
 ```
 
 The versioned wire shapes are defined in
@@ -106,22 +107,39 @@ history, performed-session count, per-set actuals and resistance semantics,
 side-separated series, and safe Session references. Empty valid windows remain
 successful responses with explicit empty arrays or null denominators.
 
-`plan-updates/validate` is the only current Agent POST and is non-mutating. Its
-request body is exactly `{ "package_text": string }`; the string is the
-canonical Plan Update Package v1 JSON consumed by the existing strict
-validator. The Agent/MCP layer does not parse natural-language coaching
-requests and does not fill missing package fields. A valid response includes
-the complete resulting week, changed weekday count, `package_digest`,
-`base_plan_digest`, explicit current-plan base evidence, `training_version`,
-and safe `source_ref` values; `base_plan` is the effective plan template selected
-for the package's future date, so the preview and base digest refer to the same
-template even when another future revision is already scheduled. An invalid
-outer request body returns
-`invalid_json` or `invalid_request`; malformed `package_text`, unknown fields,
-missing values, past/current effective dates, duplicate members, and semantic
-no-ops return field-addressed `invalid_plan_package` errors without changing
-Plan Revision history or Current Plan state. Confirmation and application are
-separate future capabilities; validation alone never creates a revision.
+`plan-updates/validate` is non-mutating. Its request body is exactly
+`{ "package_text": string }`; the string is the canonical Plan Update Package
+v1 JSON consumed by the existing strict validator. The Agent/MCP layer does
+not parse natural-language coaching requests and does not fill missing package
+fields. A valid response includes the complete resulting week, changed weekday
+count, `package_digest`, `base_plan_digest`, explicit current-plan base
+evidence, `training_version`, and safe `source_ref` values; `base_plan` is the
+effective plan template selected for the package's future date, so the preview
+and base digest refer to the same template even when another future revision is
+already scheduled. An invalid outer request body returns `invalid_json` or
+`invalid_request`; malformed `package_text`, unknown fields, missing values,
+past/current effective dates, duplicate members, and semantic no-ops return
+field-addressed `invalid_plan_package` errors without changing Plan Revision
+history or Current Plan state.
+
+`plan-updates/apply` is the only mutating Agent operation. Its request body is
+exactly `{ "package_text": string, "package_digest": string,
+"base_plan_digest": string, "confirmed": true }` and it additionally
+requires a non-empty `Idempotency-Key` header. The Agent revalidates the
+package, package digest, and effective base inside one mutation boundary
+before appending exactly one immutable Plan Revision. A missing confirmation
+or key returns `confirmation_required` or `idempotency_key_required`; an
+invalid package returns `invalid_plan_package`; changed package identity,
+stale base evidence, or a concurrent state change returns
+`package_digest_mismatch`, `stale_plan`, or `session_state_conflict` without a
+write. Repeating the same key with the same request body returns the original
+successful response; reusing it with a different body returns
+`idempotency_conflict`. A successful `201` response contains the effective
+date, both digests, a safe preview, and no internal revision identity. After a
+successful application, the typed MCP flow reads `/plan` and the inclusive
+seven-day Schedule starting at `effective_from`; if that readback is
+temporarily unavailable, it reports the applied result with a structured
+readback failure rather than retrying or applying again.
 
 ## Response and privacy rules
 
