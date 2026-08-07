@@ -2,6 +2,20 @@
 
 import { isRecord, isValidLocalDate, isValidTimezone, isValidUtcInstant, trimString } from "./util.js";
 
+/** @param {string} value */
+function jsonPointerSegment(value) {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+class StrictJsonParseError extends Error {
+  /** @param {string} path @param {string} message */
+  constructor(path, message) {
+    super(message);
+    this.name = "StrictJsonParseError";
+    this.path = path;
+  }
+}
+
 class StrictJsonParser {
   /** @param {string} text */
   constructor(text) { this.text = text; this.index = 0; }
@@ -37,11 +51,12 @@ class StrictJsonParser {
       this.ws();
       if (this.text[this.index] !== '"') throw new Error(`Expected an object key at ${path} (offset ${this.index})`);
       const key = this.string();
-      if (Object.prototype.hasOwnProperty.call(object, key)) throw new Error(`Duplicate JSON member ${path}/${key}`);
+      const keyPath = `${path}/${jsonPointerSegment(key)}`;
+      if (Object.prototype.hasOwnProperty.call(object, key)) throw new StrictJsonParseError(keyPath, `Duplicate JSON member ${keyPath}`);
       this.ws();
-      if (this.text[this.index] !== ":") throw new Error(`Expected ':' after ${path}/${key}`);
+      if (this.text[this.index] !== ":") throw new Error(`Expected ':' after ${keyPath}`);
       this.index += 1;
-      object[key] = this.value(`${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`);
+      object[key] = this.value(keyPath);
       this.ws();
       if (this.text[this.index] === "}") { this.index += 1; return object; }
       if (this.text[this.index] !== ",") throw new Error(`Expected ',' in ${path}`);
@@ -99,7 +114,15 @@ function requireString(value, path, errors) { if (typeof value !== "string") err
 function requireInteger(value, path, errors) { if (!Number.isInteger(value)) errors.push(`${path}: must be an integer`); return Number.isInteger(value); }
 /** @param {Record<string, any>} object @param {string[]} allowed @param {string} path @param {string[]} errors */
 function exactKeys(object, allowed, path, errors) {
-  for (const key of Object.keys(object)) if (!allowed.includes(key)) errors.push(`${path}/${key}: unknown field`);
+  for (const key of Object.keys(object)) if (!allowed.includes(key)) errors.push(`${path}/${jsonPointerSegment(key)}: unknown field`);
+}
+
+/** @param {string[]} errors */
+function validationErrorDetails(errors) {
+  return errors.map((message) => {
+    const separator = message.lastIndexOf(": ");
+    return { path: separator === -1 ? "$" : message.slice(0, separator), message };
+  });
 }
 
 /** @param {any} value @param {string} path @param {string[]} errors */
@@ -190,19 +213,24 @@ export function validatePlanPackage(text, today) {
   /** @type {string[]} */
   const errors = [];
   let packageValue;
-  try { packageValue = parseStrictJson(text); } catch (error) { return { ok: false, errors: [{ path: "$", message: error instanceof Error ? error.message : "Invalid JSON" }] }; }
-  if (!requireObject(packageValue, "$", errors)) return { ok: false, errors: errors.map((message) => ({ path: "$", message })) };
+  try { packageValue = parseStrictJson(text); } catch (error) {
+    return {
+      ok: false,
+      errors: [{ path: error instanceof StrictJsonParseError ? error.path : "$", message: error instanceof Error ? error.message : "Invalid JSON" }],
+    };
+  }
+  if (!requireObject(packageValue, "$", errors)) return { ok: false, errors: validationErrorDetails(errors) };
   exactKeys(packageValue, ["schema_version", "effective_from", "week"], "$", errors);
   if (packageValue.schema_version !== 1) errors.push("/schema_version: must equal integer 1");
   if (!requireString(packageValue.effective_from, "/effective_from", errors) || !isValidLocalDate(packageValue.effective_from)) errors.push("/effective_from: must be a valid local date");
   else if (packageValue.effective_from <= today) errors.push("/effective_from: must be later than the current local date");
-  if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: errors.map((message) => ({ path: message.split(":")[0], message })) };
+  if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: validationErrorDetails(errors) };
   exactKeys(packageValue.week, ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], "/week", errors);
   for (const weekday of ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]) {
     if (!Object.prototype.hasOwnProperty.call(packageValue.week, weekday)) errors.push(`/week/${weekday}: required`);
     else validateSlot(packageValue.week[weekday], `/week/${weekday}`, errors);
   }
-  return errors.length ? { ok: false, errors: errors.map((message) => ({ path: message.split(":")[0], message })) } : { ok: true, value: packageValue };
+  return errors.length ? { ok: false, errors: validationErrorDetails(errors) } : { ok: true, value: packageValue };
 }
 
 /** @param {any} value @param {string} path @returns {string[]} */

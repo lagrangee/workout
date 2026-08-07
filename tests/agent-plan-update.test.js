@@ -93,6 +93,16 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
   const malformedWeek = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify({ ...valid, week: [] }) });
   assert.equal(malformedWeek.body.error.details[0].path, "/week");
 
+  const duplicateWeekMember = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
+    package_text: `{"schema_version":1,"effective_from":"${addDays(today, 1)}","week":{"monday":null,"monday":null}}`,
+  });
+  assert.equal(duplicateWeekMember.body.error.details[0].path, "$/week/monday");
+
+  const unusualUnknownField = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
+    package_text: JSON.stringify({ ...valid, "odd: field/with~chars": true }),
+  });
+  assert.equal(unusualUnknownField.body.error.details.some((detail) => detail.path === "$/odd: field~1with~0chars"), true);
+
   const after = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(after.plan_revisions.length, before.plan_revisions.length);
   assert.equal(after.training_version, before.training_version);
