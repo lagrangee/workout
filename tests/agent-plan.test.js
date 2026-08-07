@@ -1,14 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, opaqueKey } from "../src/util.js";
-import { agentRequest, appFixture, call, testAgentSecret, today, week, workout } from "./helpers.js";
-
-/** @param {any} handler */
-async function createToken(handler) {
-  const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" });
-  assert.equal(result.response.status, 201);
-  return result.body.token;
-}
+import { agentRequest, appFixture, call, createAgentToken, testAgentSecret, today, week, workout } from "./helpers.js";
 
 /** @param {any} handler @param {string} token @param {string} path @param {Record<string, string>} extraHeaders */
 async function agentGet(handler, token, path, extraHeaders = {}) {
@@ -27,7 +20,7 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   });
   await store.save(stateA);
   const before = await store.getByEmail("athlete-a@example.invalid");
-  const tokenA = await createToken(handler);
+  const tokenA = await createAgentToken(handler);
 
   const manifest = await agentGet(handler, tokenA, "/api/agent/v1");
   assert.equal(manifest.response.status, 200);
@@ -117,8 +110,7 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
 
   const stateB = await store.getByEmail("athlete-b@example.invalid");
   const tokenB = await (async () => {
-    const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, stateB.email);
-    return result.body.token;
+    return createAgentToken(handler, stateB.email);
   })();
   const bPlan = await agentGet(handler, tokenB, "/api/agent/v1/plan");
   assert.equal(bPlan.response.status, 200);

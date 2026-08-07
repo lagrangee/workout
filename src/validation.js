@@ -116,6 +116,13 @@ function requireArray(value, path, errors) { if (!Array.isArray(value)) errors.p
 function requireString(value, path, errors) { if (typeof value !== "string") errors.push(`${path}: must be a string`); return typeof value === "string"; }
 /** @param {any} value @param {string} path @param {string[]} errors */
 function requireInteger(value, path, errors) { if (!Number.isInteger(value)) errors.push(`${path}: must be an integer`); return Number.isInteger(value); }
+/** @param {any} value @param {string} path @param {string[]} errors */
+function requireTrimmedString(value, path, errors) {
+  if (!requireString(value, path, errors)) return false;
+  const trimmed = trimString(value);
+  if (trimmed !== value || trimmed.length < 1 || trimmed.length > 100) errors.push(`${path}: must contain 1-100 trimmed characters`);
+  return true;
+}
 /** @param {Record<string, any>} object @param {string[]} allowed @param {string} path @param {string[]} errors */
 function exactKeys(object, allowed, path, errors) {
   for (const key of Object.keys(object)) if (!allowed.includes(key)) errors.push(`${path}/${jsonPointerSegment(key)}: unknown field`);
@@ -182,17 +189,17 @@ function validateSlot(value, path, errors) {
   if (value.kind === "rest") { exactKeys(value, ["kind"], path, errors); return; }
   exactKeys(value, ["kind", "title", "start_time", "estimated_duration_min", "blocks"], path, errors);
   if (value.kind !== "workout") errors.push(`${path}/kind: must be workout or rest`);
-  if (!requireString(value.title, `${path}/title`, errors) || trimString(value.title).length < 1 || trimString(value.title).length > 100) errors.push(`${path}/title: must contain 1-100 trimmed characters`);
+  requireTrimmedString(value.title, `${path}/title`, errors);
   if (value.start_time !== null && (!requireString(value.start_time, `${path}/start_time`, errors) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.start_time))) errors.push(`${path}/start_time: must be HH:mm or null`);
   if (!requireInteger(value.estimated_duration_min, `${path}/estimated_duration_min`, errors) || value.estimated_duration_min <= 0) errors.push(`${path}/estimated_duration_min: must be a positive integer`);
   if (!requireArray(value.blocks, `${path}/blocks`, errors) || value.blocks.length < 1 || value.blocks.length > 20) { errors.push(`${path}/blocks: must contain 1-20 blocks`); return; }
   let exercises = 0; let completionItems = 0;
-  const keys = new Set();
+  const exerciseKeys = new Set();
   value.blocks.forEach((block, blockIndex) => {
     const blockPath = `${path}/blocks/${blockIndex}`;
     if (!requireObject(block, blockPath, errors)) return;
     exactKeys(block, ["title", "exercises"], blockPath, errors);
-    if (!requireString(block.title, `${blockPath}/title`, errors) || trimString(block.title).length < 1 || trimString(block.title).length > 100) errors.push(`${blockPath}/title: must contain 1-100 trimmed characters`);
+    requireTrimmedString(block.title, `${blockPath}/title`, errors);
     if (!requireArray(block.exercises, `${blockPath}/exercises`, errors) || block.exercises.length < 1) { errors.push(`${blockPath}/exercises: must not be empty`); return; }
     block.exercises.forEach((exercise, exerciseIndex) => {
       exercises += 1;
@@ -200,8 +207,8 @@ function validateSlot(value, path, errors) {
       if (!requireObject(exercise, exercisePath, errors)) return;
       exactKeys(exercise, ["exercise_key", "name", "category", "side_mode", "sets"], exercisePath, errors);
       if (!requireString(exercise.exercise_key, `${exercisePath}/exercise_key`, errors) || !/^[a-z][a-z0-9_]{0,63}$/.test(exercise.exercise_key)) errors.push(`${exercisePath}/exercise_key: invalid key`);
-      if (keys.has(exercise.exercise_key)) errors.push(`${exercisePath}/exercise_key: duplicate in workout slot`); keys.add(exercise.exercise_key);
-      if (!requireString(exercise.name, `${exercisePath}/name`, errors) || trimString(exercise.name).length < 1 || trimString(exercise.name).length > 100) errors.push(`${exercisePath}/name: must contain 1-100 trimmed characters`);
+      if (exerciseKeys.has(exercise.exercise_key)) errors.push(`${exercisePath}/exercise_key: duplicate in workout slot`); exerciseKeys.add(exercise.exercise_key);
+      requireTrimmedString(exercise.name, `${exercisePath}/name`, errors);
       if (!["strength", "endurance", "mobility", "recovery"].includes(exercise.category)) errors.push(`${exercisePath}/category: unsupported category`);
       if (!["none", "left_right"].includes(exercise.side_mode)) errors.push(`${exercisePath}/side_mode: unsupported side mode`);
       if (!requireArray(exercise.sets, `${exercisePath}/sets`, errors) || exercise.sets.length < 1 || exercise.sets.length > 200) { errors.push(`${exercisePath}/sets: must contain 1-200 sets`); return; }

@@ -58,6 +58,13 @@ export async function agentRequest(handler, token, path, options = {}) {
   return { response, body };
 }
 
+/** @param {any} handler @param {string} [email] @returns {Promise<string>} */
+export async function createAgentToken(handler, email = "athlete-a@example.invalid") {
+  const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, email);
+  if (result.response.status !== 201 || typeof result.body.token !== "string") throw new Error("Agent token creation failed");
+  return result.body.token;
+}
+
 /** @returns {any} */
 /** @param {any} options @param {any} body @returns {any} */
 export function json(options = {}, body = {}) { return { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) }, body: JSON.stringify(body) }; }
