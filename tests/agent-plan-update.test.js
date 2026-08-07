@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, deepClone, weekdayKey } from "../src/util.js";
-import { appFixture, call, packageText, testAgentSecret, today, week, workout } from "./helpers.js";
+import { agentRequest, appFixture, call, packageText, testAgentSecret, today, week, workout } from "./helpers.js";
 
 async function createToken(handler, email = "athlete-a@example.invalid") {
   const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, email);
@@ -12,28 +12,15 @@ async function createToken(handler, email = "athlete-a@example.invalid") {
 }
 
 async function agentPost(handler, token, path, body) {
-  const response = await handler.fetch(new Request(`https://workout.example${path}`, {
+  return agentRequest(handler, token, path, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }), {
-    LOCAL_AUTH: "true",
-    PUBLIC_ORIGIN: "https://workout.example",
-    AGENT_TOKEN_SECRET: testAgentSecret,
   });
-  const text = await response.text();
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { parsed = text; }
-  return { response, body: parsed };
 }
 
 async function agentGet(handler, token, path) {
-  const response = await handler.fetch(new Request(`https://workout.example${path}`, { headers: { Authorization: `Bearer ${token}` } }), {
-    LOCAL_AUTH: "true",
-    PUBLIC_ORIGIN: "https://workout.example",
-    AGENT_TOKEN_SECRET: testAgentSecret,
-  });
-  return { response, body: JSON.parse(await response.text()) };
+  return agentRequest(handler, token, path);
 }
 
 test("Agent plan validation returns a complete preview and base evidence without writing", async () => {
@@ -92,6 +79,16 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
   }
   const malformedWeek = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify({ ...valid, week: [] }) });
   assert.equal(malformedWeek.body.error.details[0].path, "/week");
+
+  const rootValue = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: "null" });
+  assert.equal(rootValue.body.error.details[0].path, "");
+
+  const duplicateExerciseWorkout = deepClone(workout("跨 Block 重复"));
+  duplicateExerciseWorkout.blocks.push(deepClone(duplicateExerciseWorkout.blocks[0]));
+  const duplicateExercise = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
+    package_text: packageText(addDays(today, 1), duplicateExerciseWorkout),
+  });
+  assert.equal(duplicateExercise.body.error.details.some((detail) => detail.path === "/week/monday/blocks/1/exercises/0/exercise_key"), true);
 
   const duplicateWeekMember = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: `{"schema_version":1,"effective_from":"${addDays(today, 1)}","week":{"monday":null,"monday":null}}`,
@@ -192,12 +189,12 @@ test("Agent plan validation remains scoped to the bearer Athlete", async () => {
   const tokenA = await createToken(handler, "athlete-a@example.invalid");
   const tokenB = await createToken(handler, "athlete-b@example.invalid");
   const packageValue = JSON.parse(packageText(addDays(today, 1), workout("隔离预览")));
-  const a = await agentPost(handler, tokenA, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
-  const b = await agentPost(handler, tokenB, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
-  assert.equal(a.response.status, 200);
-  assert.equal(b.response.status, 200);
-  assert.notEqual(a.body.base_plan_digest, b.body.base_plan_digest);
-  assert.notEqual(a.body.base_plan.effective_from, b.body.base_plan.effective_from);
+  const athleteAResult = await agentPost(handler, tokenA, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
+  const athleteBResult = await agentPost(handler, tokenB, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(packageValue) });
+  assert.equal(athleteAResult.response.status, 200);
+  assert.equal(athleteBResult.response.status, 200);
+  assert.notEqual(athleteAResult.body.base_plan_digest, athleteBResult.body.base_plan_digest);
+  assert.notEqual(athleteAResult.body.base_plan.effective_from, athleteBResult.body.base_plan.effective_from);
   assert.equal((await store.getByEmail("athlete-a@example.invalid")).plan_revisions.length, 1);
   assert.equal((await store.getByEmail("athlete-b@example.invalid")).plan_revisions.length, 0);
 });
