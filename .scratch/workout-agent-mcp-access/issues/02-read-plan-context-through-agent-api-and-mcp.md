@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Add Agent Token lifecycle and Agent API authentication.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] `workout_get_overview` returns bounded plan context, coverage, freshness, recent evidence, and current-date completeness metadata for the authenticated Athlete.
 - [x] `workout_get_plan` returns the applicable Current Plan and effective future Weekly Templates without exposing internal revision identities.
@@ -17,3 +17,14 @@
 ## Completion
 
 Implemented with the existing Worker projection seams plus a local JSONL stdio MCP bridge. Verified with the Agent API/MCP tests, authentication/core regression tests, `npm run typecheck`, and `npm run mcp:check`.
+
+## Answer
+
+Ticket resolved. The first three typed read tools now retrieve overview,
+Current Plan, and Athlete-local Schedule through the bearer-authenticated Agent
+API. Plan and prescription projections are typed and revision-identity-free;
+period selectors, no-store metadata, stable safe references, MCP argument
+validation, and cross-Athlete isolation are covered at the Worker seam.
+
+Context pointer: the implementation contract is recorded in
+`docs/contracts/agent-api-v1.md` and `docs/contracts/agent-api-wire-catalog-v1.md`.
