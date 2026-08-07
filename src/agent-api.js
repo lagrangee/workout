@@ -1,7 +1,7 @@
 // @ts-nocheck
 
 import { WEEKDAYS, canonicalJson, deepClone, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
-import { planModel, scheduleEntry, validatePlanForState } from "./plan.js";
+import { planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
 import { coachOverview, coachResource, prescriptionProjection } from "./coach.js";
 
 const AGENT_PREFIX = "/api/agent/v1";
@@ -65,8 +65,7 @@ export async function agentValidatePlanUpdate(state, rawBody, now) {
   if (!isRecord(body) || Object.keys(body).length !== 1 || typeof body.package_text !== "string") return { error: { code: "invalid_request", message: "package_text is required and must be a string" } };
   const result = validatePlanForState(state, body.package_text, now);
   if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
-  const basePlan = planModel(state, now);
-  const currentBase = basePlan.current ? { ...deepClone(basePlan.current), source_ref: "plan:base" } : { effective_from: null, week: null, source_ref: "plan:base" };
+  const basePlan = { ...planUpdateBase(state, result.value), source_ref: "plan:base" };
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
@@ -76,7 +75,7 @@ export async function agentValidatePlanUpdate(state, rawBody, now) {
     valid: true,
     package_digest: await sha256Hex(canonicalJson(result.value)),
     base_plan_digest: await sha256Hex(canonicalJson(basePlan)),
-    base_plan: currentBase,
+    base_plan: basePlan,
     preview: { ...result.preview, source_ref: "plan-update:preview" },
   };
 }

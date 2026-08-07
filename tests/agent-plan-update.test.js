@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, deepClone, weekdayKey } from "../src/util.js";
-import { appFixture, call, packageText, testAgentSecret, today, workout } from "./helpers.js";
+import { appFixture, call, packageText, testAgentSecret, today, week, workout } from "./helpers.js";
 
 async function createToken(handler, email = "athlete-a@example.invalid") {
   const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, email);
@@ -98,6 +98,15 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
   });
   assert.equal(duplicateWeekMember.body.error.details[0].path, "$/week/monday");
 
+  const malformedNestedValue = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
+    package_text: `{"schema_version":1,"effective_from":"${addDays(today, 1)}","week":{"monday":{"kind":"rest",},}}`,
+  });
+  assert.equal(malformedNestedValue.body.error.details[0].path, "$/week/monday");
+
+  const prototypeField = JSON.stringify(valid).slice(0, -1) + ',"__proto__":true}';
+  const prototypeResult = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: prototypeField });
+  assert.equal(prototypeResult.body.error.details.some((detail) => detail.path === "$/__proto__"), true);
+
   const unusualUnknownField = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: JSON.stringify({ ...valid, "odd: field/with~chars": true }),
   });
@@ -146,6 +155,28 @@ test("Agent plan preview counts changed and unchanged weekday slots explicitly",
   assert.equal(result.response.status, 200);
   assert.equal(result.body.preview.changed_weekday_slot_count, 1);
   assert.deepEqual(Object.keys(result.body.preview.week).sort(), ["friday", "monday", "saturday", "sunday", "thursday", "tuesday", "wednesday"]);
+});
+
+test("Agent plan validation returns the effective plan base used by the preview", async () => {
+  const { handler, store } = appFixture();
+  const futureEffectiveFrom = addDays(today, 7);
+  const state = await store.getByEmail("athlete-a@example.invalid");
+  state.plan_revisions.push({
+    revision_key: "future-revision-for-preview",
+    revision_sequence: 2,
+    created_at: new Date().toISOString(),
+    effective_from: futureEffectiveFrom,
+    week: week(workout("已有未来基线")),
+  });
+  await store.save(state);
+  const token = await createToken(handler);
+  const result = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
+    package_text: packageText(addDays(futureEffectiveFrom, 1), workout("替换未来基线")),
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.base_plan.effective_from, futureEffectiveFrom);
+  assert.equal(result.body.base_plan.week.monday.title, "已有未来基线");
+  assert.equal(result.body.preview.changed_weekday_slot_count, 1);
 });
 
 test("Agent plan validation remains scoped to the bearer Athlete", async () => {

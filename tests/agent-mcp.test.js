@@ -144,4 +144,16 @@ test("workout MCP serializes a typed Plan Update Package for non-mutating valida
   const incomplete = await bridge.handleMessage({ jsonrpc: "2.0", id: 16, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: {} } } });
   assert.equal(incomplete.error.code, -32602);
   assert.equal(requests.length, 1);
+
+  const nestedUnknown = JSON.parse(JSON.stringify(packageValue));
+  nestedUnknown.week.monday = { kind: "rest", unexpected: true };
+  const nestedUnknownResult = await bridge.handleMessage({ jsonrpc: "2.0", id: 17, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: nestedUnknown } } });
+  assert.equal(nestedUnknownResult.error.code, -32602);
+  assert.equal(requests.length, 1);
+
+  const incompleteWorkout = JSON.parse(JSON.stringify(packageValue));
+  incompleteWorkout.week.monday = { kind: "workout" };
+  const incompleteWorkoutResult = await bridge.handleMessage({ jsonrpc: "2.0", id: 18, method: "tools/call", params: { name: "workout_validate_plan_update", arguments: { package: incompleteWorkout } } });
+  assert.equal(incompleteWorkoutResult.error.code, -32602);
+  assert.equal(requests.length, 1);
 });

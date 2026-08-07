@@ -287,8 +287,10 @@ as its canonical package contract. The MCP tool accepts a structured `package`
 object and serializes it to the Agent request's exact `package_text` field;
 the Worker then runs the strict text validator. The response digest is over
 the canonical package value and the base-plan digest is over the public
-plan-model evidence used for the preview. This route is non-mutating and does
-not accept confirmation, idempotency, or application fields.
+effective base evidence selected for the package's future date. This is the
+template the preview compares against, including an already-effective future
+revision when one wins at that date. This route is non-mutating and does not
+accept confirmation, idempotency, or application fields.
 
 ## Errors
 
