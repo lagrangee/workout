@@ -46,6 +46,12 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: { exercise_key: { type: "string" }, from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, preset: { type: "string", enum: ["7d", "30d", "12w", "all"] }, range: { type: "string", enum: ["7d", "30d", "12w", "all"] } }, required: ["exercise_key"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
+  {
+    name: "workout_validate_plan_update",
+    description: "Validate a complete future Plan Update Package and return its non-mutating preview and base evidence.",
+    inputSchema: { type: "object", properties: { package: { type: "object" } }, required: ["package"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
 ];
 
 export class WorkoutApiError extends Error {
@@ -81,6 +87,7 @@ export class WorkoutApiClient {
     if (name === "workout_get_session") return this.getSession(args);
     if (name === "workout_get_progress") return this.getProgress(args);
     if (name === "workout_get_exercise_history") return this.getExerciseHistory(args);
+    if (name === "workout_validate_plan_update") return this.validatePlanUpdate(args);
     throw new WorkoutApiError("tool_not_found", `Tool is not available: ${name}`, 0);
   }
 
@@ -128,10 +135,23 @@ export class WorkoutApiClient {
     return this.get(`/exercises/${encodeURIComponent(args.exercise_key)}${query.size ? `?${query}` : ""}`);
   }
 
+  async validatePlanUpdate(args = {}) {
+    assertToolArguments("workout_validate_plan_update", args);
+    return this.post("/plan-updates/validate", { package_text: JSON.stringify(args.package) });
+  }
+
   async get(path) {
+    return this.request(path, { method: "GET" });
+  }
+
+  async post(path, body) {
+    return this.request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  }
+
+  async request(path, options = {}) {
     let response;
     try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: "GET", headers: { Accept: "application/json", Authorization: `Bearer ${this.token}` } });
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, { ...options, headers: { Accept: "application/json", Authorization: `Bearer ${this.token}`, ...(options.headers ?? {}) } });
     } catch (error) {
       throw new WorkoutApiError("transport_error", error instanceof Error ? error.message : "Agent API request failed");
     }
@@ -198,6 +218,7 @@ function validateToolArguments(tool, args) {
     if (!property) return `Unknown argument: ${key}`;
     const value = args[key];
     if (property.type === "string" && typeof value !== "string") return `Argument ${key} must be a string`;
+    if (property.type === "object" && (!value || typeof value !== "object" || Array.isArray(value))) return `Argument ${key} must be an object`;
     if (property.type === "boolean" && typeof value !== "boolean") return `Argument ${key} must be a boolean`;
     if (property.type === "integer" && !Number.isInteger(value)) return `Argument ${key} must be an integer`;
     if (property.minimum !== undefined && value < property.minimum) return `Argument ${key} is below the minimum`;
