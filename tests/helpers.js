@@ -3,6 +3,7 @@ import { emptyAthlete, MemoryStore } from "../src/store.js";
 import { createHandler } from "../src/http.js";
 
 export const today = localDate(new Date(), "Asia/Shanghai");
+export const testAgentSecret = "test-only-agent-token-secret";
 
 /** @returns {any} */
 export function workout(title = "下肢力量") {
@@ -30,13 +31,13 @@ export function fixture() {
 }
 
 /** @returns {any} */
-export function appFixture() { const value = fixture(); return { ...value, handler: createHandler({ STORE: value.store, LOCAL_AUTH: "true", DEFAULT_TIMEZONE: "Asia/Shanghai", PUBLIC_ORIGIN: "https://workout.example" }) }; }
+export function appFixture() { const value = fixture(); return { ...value, handler: createHandler({ STORE: value.store, LOCAL_AUTH: "true", DEFAULT_TIMEZONE: "Asia/Shanghai", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret }) }; }
 
 /** @param {any} handler @param {string} path @param {any} options @param {string} email @returns {Promise<any>} */
 export async function call(handler, path, options = {}, email = "athlete-a@example.invalid") {
   const headers = { "x-athlete-email": email, ...(options.headers || {}) };
   const request = new Request(`https://workout.example${path}`, { ...options, headers });
-  const response = await handler.fetch(request, { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example" });
+  const response = await handler.fetch(request, { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
   const text = await response.text();
   let body; try { body = JSON.parse(text); } catch { body = text; }
   return { response, body };

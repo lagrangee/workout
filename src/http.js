@@ -45,8 +45,6 @@ async function route(request, env, getStore, ctx) {
 }
 
 async function agentRoute(request, env, getStore, url) {
-  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...securityHeaders("text/plain; charset=utf-8"), Allow: "GET, HEAD" } });
-  if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
   const authorization = request.headers.get("Authorization");
   const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
   const store = await getStore();
@@ -54,6 +52,8 @@ async function agentRoute(request, env, getStore, url) {
   try { state = bearer ? await findAgentInStore(store, bearer, env) : null; }
   catch (error) { if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "Agent authentication is not configured", [], 503); throw error; }
   if (!state) return agentUnauthorized();
+  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...securityHeaders("text/plain; charset=utf-8"), Allow: "GET, HEAD" } });
+  if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
   const now = new Date();
   const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write"] } : agentResource(state, url.pathname, url, now);
   if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));

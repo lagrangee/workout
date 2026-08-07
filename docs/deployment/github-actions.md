@@ -7,7 +7,7 @@
 
 PR 校验不需要 Cloudflare 部署 Secret；生产发布由本机 Wrangler 身份执行。
 
-应用身份不通过 GitHub Actions Secret 注入。生产 Cloudflare Worker 还需要在 Cloudflare 端配置以下 Worker Secrets：`ATHLETE_A_EMAIL`、`ATHLETE_B_EMAIL`、`AUTH_A_PASSWORD`、`AUTH_B_PASSWORD`、`AUTH_SESSION_SECRET`。密码和签名 Secret 只能通过 `wrangler secret put` 的交互输入设置，不能出现在命令参数、仓库或日志中。
+应用身份不通过 GitHub Actions Secret 注入。生产 Cloudflare Worker 还需要在 Cloudflare 端配置以下 Worker Secrets：`ATHLETE_A_EMAIL`、`ATHLETE_B_EMAIL`、`AUTH_A_PASSWORD`、`AUTH_B_PASSWORD`、`AUTH_SESSION_SECRET`、`AGENT_TOKEN_SECRET`。密码、签名 Secret 和 Agent Token lookup Secret 只能通过 `wrangler secret put` 的交互输入设置，不能出现在命令参数、仓库或日志中。
 
 生产部署不再由 GitHub Actions 触发，也不需要配置 GitHub 的生产 Environment、部署保护规则或部署并发组。发布前在本机完成 release check，再由有权限的操作员执行 Wrangler 部署。生产域名固定为 `https://workout.lagrangee.xyz`，`workers.dev` 和 Preview URL 仍由 `wrangler.toml` 的生产配置关闭。
 

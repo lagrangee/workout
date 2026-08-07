@@ -5,8 +5,8 @@ import { base64UrlEncode, constantTimeEqual } from "./util.js";
 const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,60}$/;
 
 /** @param {Record<string, any>} env */
-async function secretBytes(env) {
-  const value = env.AGENT_TOKEN_SECRET ?? (env.LOCAL_AUTH === "true" ? "local-only-agent-token-change-me" : null);
+async function deriveHmacKeyBytes(env) {
+  const value = env.AGENT_TOKEN_SECRET;
   if (!value) throw new Error("Missing required secret AGENT_TOKEN_SECRET");
   const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return new Uint8Array(digest);
@@ -14,7 +14,7 @@ async function secretBytes(env) {
 
 /** @param {string} token @param {Record<string, any>} env */
 export async function agentTokenDigest(token, env) {
-  const key = await secretBytes(env);
+  const key = await deriveHmacKeyBytes(env);
   const cryptoKey = await globalThis.crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const digest = await globalThis.crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(token));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");

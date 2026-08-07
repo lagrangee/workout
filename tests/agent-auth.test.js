@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appFixture, call } from "./helpers.js";
+import { appFixture, call, testAgentSecret } from "./helpers.js";
 
 /** @param {any} handler @param {string|null} token @param {string} [path] @param {Record<string, string>} [headers] */
 async function agentRequest(handler, token, path = "/api/agent/v1", headers = {}) {
@@ -10,6 +10,7 @@ async function agentRequest(handler, token, path = "/api/agent/v1", headers = {}
   const response = await handler.fetch(new Request(`https://workout.example${path}`, { headers: requestHeaders }), {
     LOCAL_AUTH: "true",
     PUBLIC_ORIGIN: "https://workout.example",
+    AGENT_TOKEN_SECRET: testAgentSecret,
   });
   const text = await response.text();
   let body;
@@ -27,6 +28,12 @@ test("Agent Token lifecycle is isolated and cannot cross existing auth boundarie
     message: "A valid Agent Token is required",
     details: [],
   });
+
+  const missingMethod = await handler.fetch(new Request("https://workout.example/api/agent/v1", { method: "POST" }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
+  assert.equal(missingMethod.status, 401);
+
+  const missingSelector = await agentRequest(handler, null, "/api/agent/v1?athlete=athlete-b@example.invalid");
+  assert.equal(missingSelector.response.status, 401);
 
   const tampered = await agentRequest(handler, "A".repeat(43));
   assert.equal(tampered.response.status, 401);
@@ -64,7 +71,7 @@ test("Agent Token lifecycle is isolated and cannot cross existing auth boundarie
 
   await call(handler, "/api/private/coach-share", { method: "POST", headers: { "Idempotency-Key": "coach-share-agent-test" }, body: "{}" });
   const coachShare = await call(handler, "/api/private/coach-share");
-  const coachResponse = await handler.fetch(new Request(coachShare.body.url), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example" });
+  const coachResponse = await handler.fetch(new Request(coachShare.body.url), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
   assert.equal(coachResponse.status, 200);
 
   const athleteBCreated = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, "athlete-b@example.invalid");
