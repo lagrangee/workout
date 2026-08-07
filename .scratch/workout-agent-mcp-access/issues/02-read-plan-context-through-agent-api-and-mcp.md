@@ -4,6 +4,8 @@
 
 **Blocked by:** 01 — Add Agent Token lifecycle and Agent API authentication.
 
+**Type:** task
+
 **Status:** resolved
 
 - [x] `workout_get_overview` returns bounded plan context, coverage, freshness, recent evidence, and current-date completeness metadata for the authenticated Athlete.

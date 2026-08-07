@@ -120,12 +120,12 @@ function stablePrescriptionRef(slot, weekday) { return `prescription:${weekday}:
 
 /** @param {any} value */
 function stableFingerprint(value) {
-  let hash = 2166136261;
+  let hash = 14695981039346656037n;
   for (const character of canonicalJson(value)) {
-    hash ^= character.codePointAt(0);
-    hash = Math.imul(hash, 16777619);
+    hash ^= BigInt(character.codePointAt(0));
+    hash = BigInt.asUintN(64, hash * 1099511628211n);
   }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  return hash.toString(16).padStart(16, "0");
 }
 
 /** @param {any} state @param {string} pathname @param {URL} url @param {Date} now */

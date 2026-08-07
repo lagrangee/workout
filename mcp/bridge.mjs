@@ -87,6 +87,7 @@ export class WorkoutApiClient {
       const error = payload?.error ?? {};
       throw new WorkoutApiError(error.code ?? `http_${response.status}`, error.message ?? "Agent API request failed", response.status, error.details ?? []);
     }
+    if (payload === null) throw new WorkoutApiError("invalid_response", "Agent API returned invalid JSON", response.status);
     return payload;
   }
 }
