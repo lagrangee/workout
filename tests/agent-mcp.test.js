@@ -181,7 +181,7 @@ test("workout MCP applies a confirmed package and verifies plan and schedule rea
       requests.push({ url: String(url), options });
       if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ schema_version: 1, applied: true, effective_from: "2026-08-09", package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
       if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ source_ref: "plan", future: [{ effective_from: "2026-08-09" }] }), { headers: { "Content-Type": "application/json" } });
-      return new Response(JSON.stringify({ source_ref: "schedule", entries: [] }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ source_ref: "schedule", from: "2026-08-09", to: "2026-08-15", entries: ["2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14", "2026-08-15"].map((date) => ({ date })) }), { headers: { "Content-Type": "application/json" } });
     },
   });
   const bridge = new McpBridge({ client });
@@ -222,4 +222,21 @@ test("workout MCP preserves a successful apply when post-apply readback fails", 
   assert.equal(result.readback.status, "failed");
   assert.equal(result.readback.error.code, "readback_unavailable");
   assert.equal(calls, 3);
+});
+
+test("workout MCP reports a readback mismatch instead of claiming verification", async () => {
+  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ applied: true, effective_from: "2026-08-09" }), { headers: { "Content-Type": "application/json" } });
+      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ source_ref: "plan", future: [] }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ source_ref: "schedule", from: "2026-08-09", to: "2026-08-15", entries: ["2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14", "2026-08-15"].map((date) => ({ date })) }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const result = await client.applyPlanUpdate({ package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-mismatch" });
+  assert.equal(result.applied, true);
+  assert.equal(result.readback.status, "failed");
+  assert.equal(result.readback.error.code, "readback_mismatch");
 });

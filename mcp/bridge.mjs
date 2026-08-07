@@ -221,11 +221,15 @@ export class WorkoutApiClient {
       base_plan_digest: args.base_plan_digest,
       confirmed: args.confirmed,
     }, { "Idempotency-Key": args.idempotency_key });
+    const readbackFrom = applied.effective_from;
+    const readbackTo = addDays(readbackFrom, 6);
     try {
       const [plan, schedule] = await Promise.all([
         this.get("/plan"),
-        this.getSchedule({ from: applied.effective_from, to: addDays(applied.effective_from, 6), expand: true }),
+        this.getSchedule({ from: readbackFrom, to: readbackTo, expand: true }),
       ]);
+      verifyPlanReadback(plan, readbackFrom);
+      verifyScheduleReadback(schedule, readbackFrom, readbackTo);
       return { ...applied, readback: { status: "verified", plan, schedule } };
     } catch (error) {
       return {
@@ -385,4 +389,14 @@ function addDays(value, days) {
   const date = new Date(`${value}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function verifyPlanReadback(plan, effectiveFrom) {
+  if (!plan || !Array.isArray(plan.future) || !plan.future.some((revision) => revision?.effective_from === effectiveFrom)) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not contain the applied effective date");
+}
+
+function verifyScheduleReadback(schedule, from, to) {
+  const entries = schedule?.entries;
+  const expectedDates = Array.from({ length: 7 }, (_, index) => addDays(from, index));
+  if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied seven-day window");
 }

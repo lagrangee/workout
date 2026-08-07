@@ -63,8 +63,9 @@ export function agentOverview(state, url, now) {
 
 /** @param {any} state @param {string} rawBody @param {Date} now */
 export async function agentValidatePlanUpdate(state, rawBody, now) {
-  let body;
-  try { body = parseStrictJson(rawBody, 512 * 1024); } catch { return { error: { code: "invalid_json", message: "Request body must be valid JSON" } }; }
+  const parsed = parseAgentJson(rawBody);
+  if (!parsed.ok) return parsed.error;
+  const body = parsed.value;
   if (!isRecord(body) || Object.keys(body).length !== 1 || typeof body.package_text !== "string") return { error: { code: "invalid_request", message: "package_text is required and must be a string" } };
   const result = validatePlanForState(state, body.package_text, now);
   if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
@@ -85,8 +86,9 @@ export async function agentValidatePlanUpdate(state, rawBody, now) {
 
 /** @param {any} state @param {string} rawBody @param {Date} now */
 export async function agentApplyPlanUpdate(state, rawBody, now) {
-  let body;
-  try { body = parseStrictJson(rawBody, 512 * 1024); } catch { return { error: { code: "invalid_json", message: "Request body must be valid JSON" } }; }
+  const parsed = parseAgentJson(rawBody);
+  if (!parsed.ok) return parsed.error;
+  const body = parsed.value;
   if (!isRecord(body) || Object.keys(body).length !== 4 || typeof body.package_text !== "string" || !isSha256(body.package_digest) || !isSha256(body.base_plan_digest) || body.confirmed !== true) {
     return { error: { code: body?.confirmed !== true ? "confirmation_required" : "invalid_request", message: body?.confirmed !== true ? "confirmed must be true" : "package_text, package_digest, base_plan_digest, and confirmed are required" } };
   }
@@ -100,6 +102,7 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
   const result = validatePlanForState(state, body.package_text, now);
   if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
   appendPlanRevision(state, result.value, now);
+  state.training_version += 1;
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
@@ -121,6 +124,12 @@ function planUpdateBaseEvidence(state, packageValue) {
 
 /** @param {any} value */
 function isSha256(value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); }
+
+/** @param {string} rawBody */
+function parseAgentJson(rawBody) {
+  try { return { ok: true, value: parseStrictJson(rawBody, 512 * 1024) }; }
+  catch { return { ok: false, error: { error: { code: "invalid_json", message: "Request body must be valid JSON" } } }; }
+}
 
 /** @param {any} state @param {Date} now */
 export function agentPlan(state, now) {
