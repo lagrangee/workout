@@ -8,6 +8,7 @@ test("workout MCP exposes exactly the first three typed read tools", async () =>
   assert.throws(() => new WorkoutApiClient({ origin: "http://workout.example", token: "local-test-token" }), /HTTPS/);
   assert.throws(() => new WorkoutApiClient({ origin: "https://workout.example?unexpected=1", token: "local-test-token" }), /query or hash/);
   const client = new WorkoutApiClient({ origin: "https://workout.example", token: "local-test-token", fetchImpl: async () => new Response(JSON.stringify({ ok: true })) });
+  await assert.rejects(() => client.getSchedule({ expand: "" }), /** @param {any} error */ (error) => error.code === "invalid_arguments");
   const bridge = new McpBridge({ client });
   const listed = await bridge.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" });
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule"]);

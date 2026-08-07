@@ -51,20 +51,22 @@ export class WorkoutApiClient {
 
   async callTool(name, args = {}) {
     if (name === "workout_get_overview") return this.getOverview(args);
-    if (name === "workout_get_plan") return this.getPlan();
+    if (name === "workout_get_plan") return this.getPlan(args);
     if (name === "workout_get_schedule") return this.getSchedule(args);
     throw new WorkoutApiError("tool_not_found", `Tool is not available: ${name}`, 0);
   }
 
   async getOverview(args = {}) {
+    assertToolArguments("workout_get_overview", args);
     const query = new URLSearchParams();
     for (const field of ["from", "to", "preset", "range"]) if (typeof args[field] === "string") query.set(field, args[field]);
     return this.get(`/overview${query.size ? `?${query}` : ""}`);
   }
 
-  async getPlan() { return this.get("/plan"); }
+  async getPlan(args = {}) { assertToolArguments("workout_get_plan", args); return this.get("/plan"); }
 
   async getSchedule(args = {}) {
+    assertToolArguments("workout_get_schedule", args);
     const query = new URLSearchParams();
     if (typeof args.from === "string") query.set("from", args.from);
     if (typeof args.to === "string") query.set("to", args.to);
@@ -147,6 +149,13 @@ function validateToolArguments(tool, args) {
     if (property.format === "date" && !isValidDateArgument(value)) return `Argument ${key} must be a valid YYYY-MM-DD date`;
   }
   return null;
+}
+
+function assertToolArguments(name, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw new WorkoutApiError("invalid_arguments", "Tool arguments must be an object");
+  const tool = TOOL_DEFINITIONS.find((candidate) => candidate.name === name);
+  const validationError = validateToolArguments(tool, args);
+  if (validationError) throw new WorkoutApiError("invalid_arguments", validationError);
 }
 
 function isValidDateArgument(value) {
