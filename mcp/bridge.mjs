@@ -39,7 +39,7 @@ export class WorkoutApiClient {
     if (typeof origin !== "string" || !origin) throw new Error("WORKOUT_AGENT_API_ORIGIN is required");
     if (typeof token !== "string" || !token) throw new Error("WORKOUT_AGENT_TOKEN is required");
     const parsed = new URL(origin);
-    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("WORKOUT_AGENT_API_ORIGIN must use HTTP or HTTPS");
+    if (parsed.protocol !== "https:") throw new Error("WORKOUT_AGENT_API_ORIGIN must use HTTPS");
     parsed.pathname = parsed.pathname.replace(/\/+$/, "");
     parsed.search = "";
     parsed.hash = "";

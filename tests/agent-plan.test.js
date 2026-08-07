@@ -37,6 +37,14 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   const before = await store.getByEmail("athlete-a@example.invalid");
   const tokenA = await createToken(handler);
 
+  const manifest = await agentGet(handler, tokenA, "/api/agent/v1");
+  assert.equal(manifest.response.status, 200);
+  assert.equal(manifest.body.query_rules.overview.default_period, "30d");
+  assert.equal(manifest.body.query_rules.overview.from_to_must_be_together, true);
+  assert.equal(manifest.body.query_rules.overview.preset_range_mutually_exclusive, true);
+  assert.equal(manifest.body.query_rules.overview.from_to_conflicts_with_selector, true);
+  assert.equal(manifest.body.query_rules.overview.max_days, 3660);
+
   const overview = await agentGet(handler, tokenA, "/api/agent/v1/overview");
   assert.equal(overview.response.status, 200);
   assert.equal(overview.body.metric_semantics_version, 1);
@@ -54,11 +62,18 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   const invalidOverview = await agentGet(handler, tokenA, "/api/agent/v1/overview?range=quarter");
   assert.equal(invalidOverview.response.status, 400);
   assert.equal(invalidOverview.body.error.code, "invalid_period");
+  const unknownOverview = await agentGet(handler, tokenA, "/api/agent/v1/overview?unexpected=1");
+  assert.equal(unknownOverview.response.status, 400);
+  assert.equal(unknownOverview.body.error.code, "invalid_request");
+  const duplicateOverview = await agentGet(handler, tokenA, "/api/agent/v1/overview?range=7d&range=30d");
+  assert.equal(duplicateOverview.response.status, 400);
+  assert.equal(duplicateOverview.body.error.code, "invalid_request");
 
   const plan = await agentGet(handler, tokenA, "/api/agent/v1/plan");
   assert.equal(plan.response.status, 200);
   assert.equal(plan.body.current.effective_from, before.plan_revisions[0].effective_from);
   assert.equal(plan.body.future[0].effective_from, addDays(today, 7));
+  assert.deepEqual(Object.keys(plan.body.current.week).sort(), ["friday", "monday", "saturday", "sunday", "thursday", "tuesday", "wednesday"]);
   assert.equal(typeof plan.body.current.source_ref, "string");
   assert.equal(typeof plan.body.future[0].source_ref, "string");
   assert.doesNotMatch(JSON.stringify(plan.body), /revision_key|athlete_key/);
@@ -93,6 +108,13 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   assert.doesNotMatch(JSON.stringify(prescription), /revision_key|scheduled_workout_key/);
   assert.ok(schedule.body.entries.every(/** @param {any} entry */ (entry) => !Object.hasOwn(entry, "revision_key") && !Object.hasOwn(entry, "scheduled_workout_key")));
   assert.ok(schedule.body.entries.every(/** @param {any} entry */ (entry) => /^schedule:\d{4}-\d{2}-\d{2}:(workout|rest|no_plan)$/.test(entry.source_ref)));
+
+  const validBoundary = await agentGet(handler, tokenA, "/api/agent/v1/schedule?from=2026-01-01&to=2027-01-01");
+  assert.equal(validBoundary.response.status, 200);
+  assert.equal(validBoundary.body.entries.length, 366);
+  const invalidBoundary = await agentGet(handler, tokenA, "/api/agent/v1/schedule?from=2026-01-01&to=2027-01-02");
+  assert.equal(invalidBoundary.response.status, 400);
+  assert.equal(invalidBoundary.body.error.code, "invalid_period");
 
   const after = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(after.training_version, before.training_version);

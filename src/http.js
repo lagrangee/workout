@@ -8,7 +8,7 @@ import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
-import { agentManifest, agentResource } from "./agent-api.js";
+import { agentManifest, agentQueryError, agentResource } from "./agent-api.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -55,6 +55,8 @@ async function agentRoute(request, env, getStore, url) {
   if (!state) return agentUnauthorized();
   if (request.method !== "GET" && request.method !== "HEAD") return agentMethodNotAllowed();
   if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
+  const queryError = agentQueryError(url.pathname, url);
+  if (queryError) return jsonError(queryError.code, queryError.message, [], 400);
   const now = new Date();
   const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write"] } : agentResource(state, url.pathname, url, now);
   if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
