@@ -15,3 +15,27 @@
 - [ ] Release evidence separates automated tests, local MCP smoke, deployed smoke, and human acceptance; none is reported as a Gate Passage without the corresponding evidence.
 - [ ] The Agent API contract, schema catalog, state/migration notes, Skill onboarding, and release acceptance documentation agree with the shipped behavior.
 - [ ] The final handoff records exact remaining blockers or confirms that all required branches, outputs, and acceptance evidence are complete.
+
+## Comments
+
+2026-08-08 — Repository-side onboarding is implemented in commit `14c9d53`:
+`mcp/launch.mjs` reads an owner-only user config outside the repository, the
+Codex registration path is documented, and the acceptance receipt separates
+automated, local MCP, deployed, and human evidence. `npm test` passes 62 tests;
+typecheck, MCP syntax, and the release artifact check pass.
+
+Live acceptance is blocked at external prerequisites. The production health
+endpoint is `200`, but `/api/agent/v1` is `404`; Wrangler lists the latest
+deployment on 2026-08-03, remote D1 reports
+`0005_agent_token_lookup.sql` unapplied, and the Worker Secret list has no
+`AGENT_TOKEN_SECRET`. The shell has no local Agent API configuration, and the
+Codex MCP list has no `workout` registration. No Token was requested, read, or
+written by this task. No production plan mutation was attempted.
+
+The Ticket 07 Standards/Spec review was started against fixed point `ab03aa1`,
+but both review threads failed to return terminal reports after bounded waits
+and were closed. No review PASS is claimed; the local audit is recorded only as
+supporting evidence. Remaining handoff requires an authorized production
+deploy/migration/Secret write, user-owned App login to create or rotate the
+Token, local MCP registration in a fresh Codex process, and a separately
+confirmed future plan change for the live apply/readback branch.
