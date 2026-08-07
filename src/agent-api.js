@@ -2,7 +2,7 @@
 
 import { WEEKDAYS, canonicalJson, deepClone, dateRange, dateSpan, isValidLocalDate, localDate } from "./util.js";
 import { scheduleEntry } from "./plan.js";
-import { coachOverview, prescriptionProjection } from "./coach.js";
+import { coachOverview, coachResource, prescriptionProjection } from "./coach.js";
 
 const AGENT_PREFIX = "/api/agent/v1";
 
@@ -26,17 +26,27 @@ export function agentManifest(state, now) {
       date_ranges_inclusive: true,
       overview: { default_period: "30d", selectors: ["preset", "range"], values: ["7d", "30d", "12w", "all"], from_to_must_be_together: true, preset_range_mutually_exclusive: true, from_to_conflicts_with_selector: true, max_days: 3660 },
       schedule_range_required: true,
-      max_days: { schedule: 366 },
+      sessions_date_range_optional: true,
+      progress_date_range_optional: true,
+      exercise_date_range_optional: true,
+      max_days: { schedule: 366, sessions: 3660, progress: 3660, exercise: 3660 },
     },
     links: {
       overview: `${AGENT_PREFIX}/overview`,
       plan: `${AGENT_PREFIX}/plan`,
       schedule: `${AGENT_PREFIX}/schedule`,
+      sessions: `${AGENT_PREFIX}/sessions`,
+      progress: `${AGENT_PREFIX}/progress`,
+      exercise: `${AGENT_PREFIX}/exercises/{exercise_key}`,
     },
     endpoints: {
       overview: { method: "GET", path: `${AGENT_PREFIX}/overview`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] } },
       plan: { method: "GET", path: `${AGENT_PREFIX}/plan`, parameters: {} },
       schedule: { method: "GET", path: `${AGENT_PREFIX}/schedule`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", expand: ["prescription"] }, rules: { from_to_required: true, max_days: 366 } },
+      sessions: { method: "GET", path: `${AGENT_PREFIX}/sessions`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string", format: "opaque" }, status: ["in_progress", "completed", "partial", "skipped"], exercise_key: "string" }, rules: { max_days: 3660, date_window_optional: true, cursor_ttl_minutes: 15 } },
+      session_detail: { method: "GET", path: `${AGENT_PREFIX}/sessions/{session_key}`, parameters: { session_key: { type: "string", location: "path" } } },
+      progress: { method: "GET", path: `${AGENT_PREFIX}/progress`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"], bucket: ["day", "week", "month"] }, rules: { max_days: 3660, date_window_optional: true } },
+      exercise_history: { method: "GET", path: `${AGENT_PREFIX}/exercises/{exercise_key}`, parameters: { exercise_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] }, rules: { max_days: 3660, date_window_optional: true } },
     },
   };
 }
@@ -133,12 +143,26 @@ export function agentResource(state, pathname, url, now) {
   if (pathname === `${AGENT_PREFIX}/overview`) return agentOverview(state, url, now);
   if (pathname === `${AGENT_PREFIX}/plan`) return agentPlan(state, now);
   if (pathname === `${AGENT_PREFIX}/schedule`) return agentSchedule(state, url, now);
+  if (pathname === `${AGENT_PREFIX}/sessions`) return { ...coachResource(state, pathname, url, now), source_ref: "sessions" };
+  if (pathname.startsWith(`${AGENT_PREFIX}/sessions/`)) {
+    const resource = coachResource(state, pathname, url, now);
+    return resource.error ? resource : { ...resource, training_version: state.training_version };
+  }
+  if (pathname === `${AGENT_PREFIX}/progress`) {
+    const resource = coachResource(state, pathname, url, now);
+    return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: "progress" };
+  }
+  if (pathname.startsWith(`${AGENT_PREFIX}/exercises/`)) {
+    const resource = coachResource(state, pathname, url, now);
+    const exerciseKey = decodeURIComponent(pathname.split(`${AGENT_PREFIX}/exercises/`)[1]);
+    return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: `exercise:${exerciseKey}` };
+  }
   return { error: { code: "not_found", message: "Resource not found" } };
 }
 
 /** @param {string} pathname @param {URL} url */
 export function agentQueryError(pathname, url) {
-  const allowed = pathname === AGENT_PREFIX ? [] : pathname === `${AGENT_PREFIX}/overview` ? ["from", "to", "preset", "range"] : pathname === `${AGENT_PREFIX}/plan` ? [] : pathname === `${AGENT_PREFIX}/schedule` ? ["from", "to", "expand"] : [];
+  const allowed = pathname === AGENT_PREFIX ? [] : pathname === `${AGENT_PREFIX}/overview` ? ["from", "to", "preset", "range"] : pathname === `${AGENT_PREFIX}/plan` ? [] : pathname === `${AGENT_PREFIX}/schedule` ? ["from", "to", "expand"] : pathname === `${AGENT_PREFIX}/sessions` ? ["from", "to", "limit", "cursor", "status", "exercise_key"] : pathname === `${AGENT_PREFIX}/progress` ? ["from", "to", "preset", "range", "bucket"] : pathname.startsWith(`${AGENT_PREFIX}/exercises/`) ? ["from", "to", "preset", "range"] : [];
   const seen = new Set();
   for (const key of url.searchParams.keys()) {
     if (!allowed.includes(key)) return { code: "invalid_request", field: key, message: `Unsupported query parameter: ${key}` };
