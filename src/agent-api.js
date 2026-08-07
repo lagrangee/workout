@@ -62,7 +62,7 @@ export function agentOverview(state, url, now) {
 /** @param {any} state @param {string} rawBody @param {Date} now */
 export async function agentValidatePlanUpdate(state, rawBody, now) {
   let body;
-  try { body = parseStrictJson(rawBody); } catch { return { error: { code: "invalid_json", message: "Request body must be valid JSON" } }; }
+  try { body = parseStrictJson(rawBody, 512 * 1024); } catch { return { error: { code: "invalid_json", message: "Request body must be valid JSON" } }; }
   if (!isRecord(body) || Object.keys(body).length !== 1 || typeof body.package_text !== "string") return { error: { code: "invalid_request", message: "package_text is required and must be a string" } };
   const result = validatePlanForState(state, body.package_text, now);
   if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
