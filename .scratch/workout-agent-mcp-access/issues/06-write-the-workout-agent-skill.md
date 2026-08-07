@@ -4,7 +4,9 @@
 
 **Blocked by:** 03 — Read Sessions and progress history through Agent API and MCP; 05 — Confirm and apply future Plan Updates.
 
-**Status:** ready-for-agent
+**Type:** task
+
+**Status:** claimed
 
 - [ ] The Skill uses model-invoked frontmatter because the Agent must reach it when the user asks about Workout data or future plan changes; its description is a sharp context pointer naming the real trigger branches.
 - [ ] The Skill’s in-file steps specify a repeatable read-first process, bounded date and pagination handling, evidence/provenance use, and the separate confirmation gate for plan application.
@@ -13,4 +15,3 @@
 - [ ] Each step ends with a clear, checkable completion criterion, and the Skill’s positive instructions avoid no-op prose, sediment, sprawl, and negation-based steering.
 - [ ] The Skill is reviewed against `writing-for-agents` and `writing-great-skills`, including invocation choice, information hierarchy, progressive disclosure, co-location, leading words, single source of truth, and pruning.
 - [ ] A focused agent-facing review verifies that read, pagination, validation, confirmation, apply, stale-plan, error, and readback branches are all represented and that no branch silently authorizes an excluded mutation.
-
