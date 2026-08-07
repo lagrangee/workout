@@ -37,7 +37,7 @@ export async function createAgentAccess(state, env, now) {
     rotated_at: previous ? nowIso : null,
     revoked_at: null,
   };
-  return { active: true, token, created_at: state.agent_access.created_at, rotated_at: state.agent_access.rotated_at, copy_available: true };
+  return { active: true, token, created_at: state.agent_access.created_at, rotated_at: state.agent_access.rotated_at, revoked_at: null, copy_available: true };
 }
 
 /** @param {any} state @param {Date} now */
