@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, opaqueKey } from "../src/util.js";
-import { appFixture, call, testAgentSecret, today, week, workout } from "./helpers.js";
+import { agentRequest, appFixture, call, testAgentSecret, today, week, workout } from "./helpers.js";
 
 /** @param {any} handler */
 async function createToken(handler) {
@@ -12,15 +12,7 @@ async function createToken(handler) {
 
 /** @param {any} handler @param {string} token @param {string} path @param {Record<string, string>} extraHeaders */
 async function agentGet(handler, token, path, extraHeaders = {}) {
-  const response = await handler.fetch(new Request(`https://workout.example${path}`, { headers: { Authorization: `Bearer ${token}`, ...extraHeaders } }), {
-    LOCAL_AUTH: "true",
-    PUBLIC_ORIGIN: "https://workout.example",
-    AGENT_TOKEN_SECRET: testAgentSecret,
-  });
-  const text = await response.text();
-  let body;
-  try { body = JSON.parse(text); } catch { body = text; }
-  return { response, body };
+  return agentRequest(handler, token, path, { headers: extraHeaders });
 }
 
 test("Agent plan reads preserve bounded projections and Athlete-local schedule rules", async () => {

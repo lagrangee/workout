@@ -43,6 +43,21 @@ export async function call(handler, path, options = {}, email = "athlete-a@examp
   return { response, body };
 }
 
+/** @param {any} handler @param {string} token @param {string} path @param {any} [options] @returns {Promise<any>} */
+export async function agentRequest(handler, token, path, options = {}) {
+  const response = await handler.fetch(new Request(`https://workout.example${path}`, {
+    ...options,
+    headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) },
+  }), {
+    LOCAL_AUTH: "true",
+    PUBLIC_ORIGIN: "https://workout.example",
+    AGENT_TOKEN_SECRET: testAgentSecret,
+  });
+  const text = await response.text();
+  let body; try { body = JSON.parse(text); } catch { body = text; }
+  return { response, body };
+}
+
 /** @returns {any} */
 /** @param {any} options @param {any} body @returns {any} */
 export function json(options = {}, body = {}) { return { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) }, body: JSON.stringify(body) }; }
