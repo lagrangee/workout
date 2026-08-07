@@ -56,6 +56,13 @@ test("Workout Agent Skill makes plan writes a validate-confirm-apply-readback fl
   assert.match(skill, /stale-plan/i);
   assert.match(skill, /readback failure/i);
   assert.match(skill, /rate-limit/i);
+  assert.match(skill, /invalid_cursor/);
+  assert.match(skill, /idempotency_conflict/);
+  assert.match(skill, /confirmation_required/);
+  assert.match(skill, /unsupported_operation/);
+  assert.match(skill, /Session lifecycle/i);
+  assert.match(skill, /account-settings/i);
+  assert.match(skill, /share-management/i);
   assert.match(skill, /authentication/i);
   assert.equal((skill.match(/Completion:/g) ?? []).length, 8);
 });
