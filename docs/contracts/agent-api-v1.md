@@ -113,7 +113,10 @@ validator. The Agent/MCP layer does not parse natural-language coaching
 requests and does not fill missing package fields. A valid response includes
 the complete resulting week, changed weekday count, `package_digest`,
 `base_plan_digest`, explicit current-plan base evidence, `training_version`,
-and safe `source_ref` values. An invalid outer request body returns
+and safe `source_ref` values; `base_plan` is the effective plan template selected
+for the package's future date, so the preview and base digest refer to the same
+template even when another future revision is already scheduled. An invalid
+outer request body returns
 `invalid_json` or `invalid_request`; malformed `package_text`, unknown fields,
 missing values, past/current effective dates, duplicate members, and semantic
 no-ops return field-addressed `invalid_plan_package` errors without changing

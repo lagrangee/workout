@@ -22,7 +22,7 @@ class StrictJsonParser {
   parse() {
     const value = this.value("$");
     this.ws();
-    if (this.index !== this.text.length) throw new Error(`Unexpected character at offset ${this.index}`);
+    if (this.index !== this.text.length) throw new StrictJsonParseError("$", `Unexpected character at offset ${this.index}`);
     return value;
   }
   ws() { while (/\s/.test(this.text[this.index] ?? "")) this.index += 1; }
@@ -32,37 +32,37 @@ class StrictJsonParser {
     const char = this.text[this.index];
     if (char === "{") return this.object(path);
     if (char === "[") return this.array(path);
-    if (char === '"') return this.string();
-    if (char === "-" || /\d/.test(char ?? "")) return this.number();
+    if (char === '"') return this.string(path);
+    if (char === "-" || /\d/.test(char ?? "")) return this.number(path);
     /** @type {Array<[string, any]>} */
     const literals = [["true", true], ["false", false], ["null", null]];
     for (const [literal, value] of literals) {
       if (this.text.startsWith(literal, this.index)) { this.index += literal.length; return value; }
     }
-    throw new Error(`Expected a JSON value at ${path} (offset ${this.index})`);
+    throw new StrictJsonParseError(path, `Expected a JSON value at ${path} (offset ${this.index})`);
   }
   /** @param {string} path @returns {Record<string, any>} */
   object(path) {
     this.index += 1; this.ws();
     /** @type {Record<string, any>} */
-    const object = {};
+    const object = Object.create(null);
     if (this.text[this.index] === "}") { this.index += 1; return object; }
     while (this.index < this.text.length) {
       this.ws();
-      if (this.text[this.index] !== '"') throw new Error(`Expected an object key at ${path} (offset ${this.index})`);
-      const key = this.string();
+      if (this.text[this.index] !== '"') throw new StrictJsonParseError(path, `Expected an object key at ${path} (offset ${this.index})`);
+      const key = this.string(path);
       const keyPath = `${path}/${jsonPointerSegment(key)}`;
       if (Object.prototype.hasOwnProperty.call(object, key)) throw new StrictJsonParseError(keyPath, `Duplicate JSON member ${keyPath}`);
       this.ws();
-      if (this.text[this.index] !== ":") throw new Error(`Expected ':' after ${keyPath}`);
+      if (this.text[this.index] !== ":") throw new StrictJsonParseError(keyPath, `Expected ':' after ${keyPath}`);
       this.index += 1;
       object[key] = this.value(keyPath);
       this.ws();
       if (this.text[this.index] === "}") { this.index += 1; return object; }
-      if (this.text[this.index] !== ",") throw new Error(`Expected ',' in ${path}`);
+      if (this.text[this.index] !== ",") throw new StrictJsonParseError(path, `Expected ',' in ${path}`);
       this.index += 1;
     }
-    throw new Error(`Unterminated object at ${path}`);
+    throw new StrictJsonParseError(path, `Unterminated object at ${path}`);
   }
   /** @param {string} path @returns {any[]} */
   array(path) {
@@ -74,33 +74,37 @@ class StrictJsonParser {
       array.push(this.value(`${path}/${array.length}`));
       this.ws();
       if (this.text[this.index] === "]") { this.index += 1; return array; }
-      if (this.text[this.index] !== ",") throw new Error(`Expected ',' in ${path}`);
+      if (this.text[this.index] !== ",") throw new StrictJsonParseError(path, `Expected ',' in ${path}`);
       this.index += 1;
     }
-    throw new Error(`Unterminated array at ${path}`);
+    throw new StrictJsonParseError(path, `Unterminated array at ${path}`);
   }
-  string() {
+  /** @param {string} [path] */
+  string(path = "$") {
     const start = this.index; this.index += 1;
     while (this.index < this.text.length) {
       const char = this.text[this.index++];
-      if (char === '"') return JSON.parse(this.text.slice(start, this.index));
+      if (char === '"') {
+        try { return JSON.parse(this.text.slice(start, this.index)); } catch { throw new StrictJsonParseError(path, `Invalid JSON string at ${path}`); }
+      }
       if (char === "\\") this.index += 1;
     }
-    throw new Error(`Unterminated string at offset ${start}`);
+    throw new StrictJsonParseError(path, `Unterminated string at ${path}`);
   }
-  number() {
+  /** @param {string} [path] */
+  number(path = "$") {
     const match = this.text.slice(this.index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
-    if (!match) throw new Error(`Invalid number at offset ${this.index}`);
+    if (!match) throw new StrictJsonParseError(path, `Invalid number at ${path}`);
     this.index += match[0].length;
     const value = Number(match[0]);
-    if (!Number.isFinite(value)) throw new Error(`Non-finite number at offset ${this.index}`);
+    if (!Number.isFinite(value)) throw new StrictJsonParseError(path, `Non-finite number at ${path}`);
     return value;
   }
 }
 
 /** @param {string} text */
 export function parseStrictJson(text) {
-  if (new TextEncoder().encode(text).byteLength > 256 * 1024) throw new Error("Package exceeds the 256 KiB limit");
+  if (new TextEncoder().encode(text).byteLength > 256 * 1024) throw new StrictJsonParseError("$", "Package exceeds the 256 KiB limit");
   return new StrictJsonParser(text).parse();
 }
 

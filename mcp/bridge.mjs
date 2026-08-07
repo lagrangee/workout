@@ -3,16 +3,64 @@
 const BRIDGE_PROTOCOL_VERSION = "2025-06-18";
 const BRIDGE_SERVER_INFO = { name: "workout-agent-mcp", version: "0.1.0" };
 const PLAN_UPDATE_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-const PLAN_UPDATE_PACKAGE_SCHEMA = {
-  type: "object",
-  properties: {
-    schema_version: { type: "integer", const: 1 },
-    effective_from: { type: "string", format: "date" },
-    week: { type: "object", properties: Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, {}])), required: PLAN_UPDATE_WEEKDAYS, additionalProperties: false },
-  },
-  required: ["schema_version", "effective_from", "week"],
-  additionalProperties: false,
+const exactObject = (properties) => ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
+const nullable = (schema) => ({ oneOf: [{ type: "null" }, schema] });
+const arrayOf = (items, minItems, maxItems) => ({ type: "array", items, minItems, ...(maxItems === undefined ? {} : { maxItems }) });
+const PLAN_UPDATE_TARGET_SCHEMA = exactObject({
+  metric: { type: "string", enum: ["reps", "duration_sec"] },
+  min: { type: "integer", minimum: 1 },
+  max: { type: "integer", minimum: 1 },
+});
+const PLAN_UPDATE_RESISTANCE_SCHEMA = nullable(exactObject({
+  mode: { type: "string", enum: ["bodyweight", "external_weight", "assisted_weight"] },
+  load_kg: nullable({ type: "number", minimum: 0 }),
+  quantity: nullable({ type: "integer", minimum: 1 }),
+}));
+const PLAN_UPDATE_TEMPO_SCHEMA = nullable(exactObject({
+  eccentric_sec: nullable({ type: "integer", minimum: 0 }),
+  bottom_hold_sec: nullable({ type: "integer", minimum: 0 }),
+  concentric_sec: nullable({ type: "integer", minimum: 0 }),
+  top_hold_sec: nullable({ type: "integer", minimum: 0 }),
+}));
+const PLAN_UPDATE_SET_SCHEMA = exactObject({
+  target: PLAN_UPDATE_TARGET_SCHEMA,
+  resistance: PLAN_UPDATE_RESISTANCE_SCHEMA,
+  target_rir: nullable({ type: "integer", minimum: 0, maximum: 10 }),
+  target_rpe: nullable({ type: "number", minimum: 0, maximum: 10 }),
+  tempo: PLAN_UPDATE_TEMPO_SCHEMA,
+  rest_after_sec: nullable({ type: "integer", minimum: 0 }),
+  target_incline_percent: nullable({ type: "number", minimum: 0, maximum: 100 }),
+});
+const PLAN_UPDATE_EXERCISE_SCHEMA = exactObject({
+  exercise_key: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+  name: { type: "string", minLength: 1, maxLength: 100 },
+  category: { type: "string", enum: ["strength", "endurance", "mobility", "recovery"] },
+  side_mode: { type: "string", enum: ["none", "left_right"] },
+  sets: arrayOf(PLAN_UPDATE_SET_SCHEMA, 1, 200),
+});
+const PLAN_UPDATE_BLOCK_SCHEMA = exactObject({
+  title: { type: "string", minLength: 1, maxLength: 100 },
+  exercises: arrayOf(PLAN_UPDATE_EXERCISE_SCHEMA, 1),
+});
+const PLAN_UPDATE_WORKOUT_SCHEMA = exactObject({
+  kind: { const: "workout" },
+  title: { type: "string", minLength: 1, maxLength: 100 },
+  start_time: nullable({ type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }),
+  estimated_duration_min: { type: "integer", minimum: 1 },
+  blocks: arrayOf(PLAN_UPDATE_BLOCK_SCHEMA, 1, 20),
+});
+const PLAN_UPDATE_SLOT_SCHEMA = {
+  oneOf: [
+    { type: "null" },
+    exactObject({ kind: { const: "rest" } }),
+    PLAN_UPDATE_WORKOUT_SCHEMA,
+  ],
 };
+const PLAN_UPDATE_PACKAGE_SCHEMA = exactObject({
+  schema_version: { type: "integer", const: 1 },
+  effective_from: { type: "string", format: "date" },
+  week: exactObject(Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, PLAN_UPDATE_SLOT_SCHEMA]))),
+});
 
 const TOOL_DEFINITIONS = [
   {
@@ -234,7 +282,15 @@ function validateToolArguments(tool, args) {
 }
 
 function validateArgumentValue(property, value, label) {
+  if (property.oneOf) {
+    if (property.oneOf.some((candidate) => !validateArgumentValue(candidate, value, label))) return null;
+    return `${label} does not match the expected shape`;
+  }
+  if (property.type === "null") return value === null ? null : `${label} must be null`;
   if (property.type === "string" && typeof value !== "string") return `${label} must be a string`;
+  if (property.type === "string" && property.pattern && !new RegExp(property.pattern).test(value)) return `${label} has an invalid format`;
+  if (property.type === "string" && property.minLength !== undefined && value.length < property.minLength) return `${label} is too short`;
+  if (property.type === "string" && property.maxLength !== undefined && value.length > property.maxLength) return `${label} is too long`;
   if (property.type === "object") {
     if (!value || typeof value !== "object" || Array.isArray(value)) return `${label} must be an object`;
     for (const required of property.required ?? []) if (!Object.hasOwn(value, required)) return `Missing required argument: ${label}.${required}`;
@@ -247,8 +303,18 @@ function validateArgumentValue(property, value, label) {
       }
     }
   }
+  if (property.type === "array") {
+    if (!Array.isArray(value)) return `${label} must be an array`;
+    if (property.minItems !== undefined && value.length < property.minItems) return `${label} must contain at least ${property.minItems} items`;
+    if (property.maxItems !== undefined && value.length > property.maxItems) return `${label} must contain at most ${property.maxItems} items`;
+    for (let index = 0; index < value.length; index += 1) {
+      const error = validateArgumentValue(property.items, value[index], `${label}.${index}`);
+      if (error) return error;
+    }
+  }
   if (property.type === "boolean" && typeof value !== "boolean") return `${label} must be a boolean`;
   if (property.type === "integer" && !Number.isInteger(value)) return `${label} must be an integer`;
+  if (property.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) return `${label} must be a number`;
   if (property.const !== undefined && value !== property.const) return `${label} is unsupported`;
   if (property.minimum !== undefined && value < property.minimum) return `${label} is below the minimum`;
   if (property.maximum !== undefined && value > property.maximum) return `${label} is above the maximum`;
