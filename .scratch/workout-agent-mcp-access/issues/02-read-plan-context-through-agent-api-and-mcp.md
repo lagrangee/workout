@@ -31,3 +31,10 @@ validation, and cross-Athlete isolation are covered at the Worker seam.
 Context pointer: the implementation contract is recorded in
 `docs/contracts/agent-api-v1.md` and `docs/contracts/agent-api-wire-catalog-v1.md`;
 the shared decision is indexed in [`map.md`](../map.md#decisions-so-far).
+
+## Review
+
+- Spec review: PASS — no missing requirement, scope creep, or behavior error found.
+- Standards review: PASS — no documented-standard violation found. The repeated
+  Agent/Coach projection logic is an accepted judgment call because the two
+  surfaces have different privacy and identity boundaries.
