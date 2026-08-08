@@ -24,6 +24,10 @@ _Avoid_: Coach Viewer, coach account, administrator
 One permanent, read-only bearer capability owned by an Athlete, consisting of a self-describing README endpoint and its linked JSON API. It remains valid until that Athlete revokes or regenerates it, and only one Coach Share may be active per Athlete.
 _Avoid_: Coach dashboard, coach login, expiring invitation
 
+**Agent Token**:
+One personal, revocable bearer capability owned by an Athlete and sent in the `Authorization` header to the versioned Agent API. It resolves exactly one Athlete and is separate from Coach Share; it is never placed in a URL or returned by status reads.
+_Avoid_: Coach Share, session token, Athlete selector
+
 **Current Plan**:
 The sole plan belonging to one Athlete, consisting of the applicable Weekly Template and internal revision history.
 _Avoid_: Plan library, shared plan

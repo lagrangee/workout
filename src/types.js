@@ -54,9 +54,11 @@
 
 /** @typedef {{ session_key: string, scheduled_workout_key: string | null, scheduled_date: string, timezone_at_session: string, title: string, status: SessionStatus, snapshot: SessionSnapshot, completion_results: CompletionResult[], training_intervals: TrainingInterval[], session_rpe: number | null, note: string | null, skip_reason: string | null, exercise_feedback: ExerciseFeedback[], created_at: string, updated_at: string }} WorkoutSession */
 
-/** @typedef {{ athlete_key: string, email: string, display_name: string, timezone: string, plan_revisions: PlanRevision[], sessions: WorkoutSession[] }} AthleteState */
+/** @typedef {{ token_digest: string, created_at: string, rotated_at: string | null, revoked_at: string | null }} AgentAccess */
 
-/** @typedef {{ DB?: unknown, ASSETS?: unknown, STORE?: unknown, ENVIRONMENT?: string, PRODUCTION_HOST?: string, PUBLIC_ORIGIN?: string, DEFAULT_TIMEZONE?: string, ATHLETE_A_EMAIL?: string, ATHLETE_B_EMAIL?: string, ATHLETE_A_DISPLAY_NAME?: string, ATHLETE_B_DISPLAY_NAME?: string, LOCAL_AUTH?: string, AUTH_A_PASSWORD?: string, AUTH_B_PASSWORD?: string, AUTH_SESSION_SECRET?: string }} WorkerEnv */
+/** @typedef {{ athlete_key: string, email: string, display_name: string, timezone: string, plan_revisions: PlanRevision[], sessions: WorkoutSession[], agent_access: AgentAccess | null }} AthleteState */
+
+/** @typedef {{ DB?: unknown, ASSETS?: unknown, STORE?: unknown, ENVIRONMENT?: string, PRODUCTION_HOST?: string, PUBLIC_ORIGIN?: string, DEFAULT_TIMEZONE?: string, ATHLETE_A_EMAIL?: string, ATHLETE_B_EMAIL?: string, ATHLETE_A_DISPLAY_NAME?: string, ATHLETE_B_DISPLAY_NAME?: string, LOCAL_AUTH?: string, AUTH_A_PASSWORD?: string, AUTH_B_PASSWORD?: string, AUTH_SESSION_SECRET?: string, AGENT_TOKEN_SECRET?: string }} WorkerEnv */
 
 /** @typedef {{ waitUntil(promise: Promise<unknown>): void, passThroughOnException(): void }} WorkerExecutionContext */
 

@@ -7,6 +7,8 @@ import { createSession, replaceRecord, endSession, continueOrRestart, findSessio
 import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
+import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
+import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -31,6 +33,7 @@ async function route(request, env, getStore, ctx) {
     const schema = schemaResource(url.pathname.split("/").at(-1));
     return schema ? maybeHead(new Response(JSON.stringify(schema, null, 2), { status: 200, headers: securityHeaders("application/schema+json") }), request) : jsonError("not_found", "Schema not found", [], 404);
   }
+  if (url.pathname === "/api/agent/v1" || url.pathname.startsWith("/api/agent/v1/")) return agentRoute(request, env, getStore, url);
   if (url.pathname.startsWith("/coach/") || url.pathname.startsWith("/api/coach/v1/")) return coachRoute(request, env, getStore, url);
   if (url.pathname === "/app" && env.ENVIRONMENT === "production") {
     const auth = await authenticate(request, env);
@@ -39,6 +42,64 @@ async function route(request, env, getStore, ctx) {
   if (url.pathname === "/" || url.pathname === "/app" || url.pathname.startsWith("/assets/") || url.pathname.endsWith(".js") || url.pathname.endsWith(".css") || url.pathname.endsWith(".png") || url.pathname.endsWith(".webmanifest")) return staticRoute(request, env);
   if (url.pathname.startsWith(PRIVATE_PREFIX)) return privateRoute(request, env, getStore, url);
   return textResponse("Not found", 404);
+}
+
+async function agentRoute(request, env, getStore, url) {
+  if (env.ENVIRONMENT === "production" && !env.AGENT_TOKEN_SECRET) return jsonError("service_not_configured", "Agent authentication is not configured", [], 503);
+  const authorization = request.headers.get("Authorization");
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
+  const store = await getStore();
+  let state = null;
+  try { state = bearer ? await findAgentInStore(store, bearer, env) : null; }
+  catch (error) { if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "Agent authentication is not configured", [], 503); throw error; }
+  if (!state) return agentUnauthorized();
+  const isPlanValidationPath = url.pathname === "/api/agent/v1/plan-updates/validate";
+  const isPlanApplyPath = url.pathname === "/api/agent/v1/plan-updates/apply";
+  const isPlanValidation = request.method === "POST" && isPlanValidationPath;
+  const isPlanApply = request.method === "POST" && isPlanApplyPath;
+  if ((isPlanValidationPath || isPlanApplyPath) && request.method !== "POST") return agentMethodNotAllowed("POST");
+  if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation && !isPlanApply) return agentMethodNotAllowed();
+  if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
+  const queryError = agentQueryError(url.pathname, url);
+  if (queryError) return jsonError(queryError.code, queryError.message, [], 400);
+  const now = new Date();
+  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write"] } : isPlanValidation ? await agentValidatePlanUpdate(state, await request.text(), now) : isPlanApply ? await agentApplyRoute(request, store, state, now) : agentResource(state, url.pathname, url, now);
+  if (resource instanceof Response) return resource;
+  if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
+  return maybeHead(jsonResponse(resource), request);
+}
+
+function agentUnauthorized() { return jsonError("agent_unauthorized", "A valid Agent Token is required", [], 401); }
+function agentMethodNotAllowed(allow = "GET, HEAD") { const response = jsonError("method_not_allowed", "Method not allowed", [], 405); response.headers.set("Allow", allow); return response; }
+
+/** @param {Request} request @param {any} store @param {any} authenticatedState @param {Date} now */
+async function agentApplyRoute(request, store, authenticatedState, now) {
+  const key = request.headers.get("Idempotency-Key") ?? "";
+  if (!key || key.length > 200 || key.trim().length === 0) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
+  const rawBody = await request.text();
+  const bodyDigest = await sha256Hex(rawBody);
+  const execute = async (transactionStore) => {
+    const state = transactionStore === store ? authenticatedState : await transactionStore.getByEmail(authenticatedState.email);
+    if (!state) return jsonError("forbidden", "Identity is not configured", [], 403);
+    state.idempotency_records ??= [];
+    const existing = findIdempotencyRecord(state, key, request.method, "/api/agent/v1/plan-updates/apply", now);
+    if (existing) {
+      if (existing.body_digest !== bodyDigest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
+      return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
+    }
+    const resource = await agentApplyPlanUpdate(state, rawBody, now);
+    if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
+    const response = jsonResponse(resource, 201);
+    await rememberIdempotencyResponse(state, key, request.method, "/api/agent/v1/plan-updates/apply", bodyDigest, response, now);
+    await transactionStore.save(state);
+    return response;
+  };
+  try {
+    return store.transaction ? await store.transaction(execute) : await execute(store);
+  } catch (error) {
+    if (error?.code === "D1_CONCURRENCY_CONFLICT") return jsonError("session_state_conflict", "The Athlete state changed concurrently; retry the mutation", [], 409);
+    throw error;
+  }
 }
 
 async function staticRoute(request, env) {
@@ -90,6 +151,7 @@ async function privateRoute(request, env, getStore, url) {
 
 async function privateGet(state, path, url, now, env) {
   if (path === "/api/private/me") return jsonResponse({ athlete_key: state.athlete_key, display_name: state.display_name, timezone: state.timezone });
+  if (path === "/api/private/agent-access") return jsonResponse(agentAccessStatus(state));
   if (path === "/api/private/today") return jsonResponse(todayModel(state, now));
   if (path === "/api/private/plan") return jsonResponse(planModel(state, now));
   if (path === "/api/private/plan/update-package") {
@@ -127,17 +189,19 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (request.method === "PUT" && path.match(/^\/api\/private\/sessions\/[^/]+\/record$/)) return correctRecord(state, path, rawBody, now);
     if (request.method === "POST" && path === "/api/private/coach-share") return shareCommand(state, env, now, false);
     if (request.method === "POST" && path === "/api/private/coach-share/regenerate") return shareCommand(state, env, now, true);
+    if (request.method === "POST" && path === "/api/private/agent-access") return agentAccessCommand(state, env, rawBody, now);
+    if (request.method === "DELETE" && path === "/api/private/agent-access") { const result = revokeAgentAccess(state, now); return { body: { active: result.active, revoked: result.revoked }, status: 200, persist: result.persist }; }
     if (request.method === "DELETE" && path === "/api/private/coach-share") { if (state.coach_share) { state.coach_share.revoked_at = now.toISOString(); state.training_version += 1; } return { body: { active: false, revoked: true }, status: 200, persist: true }; }
     return { body: { error: { code: "not_found", message: "Resource not found", details: [] } }, status: 404, persist: false };
     };
-    const requiresKey = request.method === "POST" && path !== "/api/private/plan-updates/validate";
+    const requiresKey = request.method === "POST" && path !== "/api/private/plan-updates/validate" && path !== "/api/private/agent-access";
     if (!requiresKey) {
       const result = await mutation(); if (result.persist !== false) await transactionStore.save(state); return responseFromResult(result);
     }
     const key = request.headers.get("Idempotency-Key");
-    if (!key || key.length > 200) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
+    if (!key || key.length > 200 || key.trim().length === 0) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
     const digest = await sha256Hex(rawBody);
-    const existing = state.idempotency_records.find((record) => record.key === key && record.method === request.method && record.path === path && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+    const existing = findIdempotencyRecord(state, key, request.method, path, now);
     if (existing) {
       if (existing.body_digest !== digest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
       return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
@@ -145,8 +209,7 @@ async function privateMutation(request, env, store, originalState, path, url, no
     const result = await mutation();
     if (result.persist !== false) await transactionStore.save(state);
     const response = responseFromResult(result);
-    state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
-    state.idempotency_records.push({ key, method: request.method, path, body_digest: digest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
+    await rememberIdempotencyResponse(state, key, request.method, path, digest, response, now);
     await transactionStore.save(state);
     return response;
   };
@@ -157,6 +220,21 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (error?.message?.startsWith("Missing required secret")) return jsonError("service_not_configured", "The requested capability is not configured", [], 503);
     throw error;
   }
+}
+
+function findIdempotencyRecord(state, key, method, path, now) {
+  return state.idempotency_records.find((record) => record.key === key && record.method === method && record.path === path && Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+}
+
+async function rememberIdempotencyResponse(state, key, method, path, bodyDigest, response, now) {
+  state.idempotency_records = state.idempotency_records.filter((record) => Date.parse(record.created_at) > now.getTime() - 24 * 60 * 60 * 1000);
+  state.idempotency_records.push({ key, method, path, body_digest: bodyDigest, created_at: now.toISOString(), status: response.status, body: await response.clone().text() });
+}
+
+async function agentAccessCommand(state, env, rawBody, now) {
+  const body = parseJsonBody(rawBody); if (body.error) return body;
+  if (!isRecord(body.value) || Object.keys(body.value).length !== 0) return { body: errorBody("invalid_request", "Agent access accepts an empty object", []), status: 400, persist: false };
+  return { body: await createAgentAccess(state, env, now), status: 201, persist: true };
 }
 
 function updateSettings(state, rawBody, now) {
@@ -347,7 +425,7 @@ async function coachRateLimit(env, state, now) {
   }
 }
 function errorBody(code, message, details) { return { error: { code, message, details } }; }
-function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "timezone_revision_boundary"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
+function errorStatus(code) { return ["not_found"].includes(code) ? 404 : ["unauthorized"].includes(code) ? 401 : ["forbidden"].includes(code) ? 403 : ["session_state_conflict", "idempotency_conflict", "package_digest_mismatch", "stale_plan", "timezone_revision_boundary", "training_version_changed"].includes(code) ? 409 : ["export_capacity_exceeded"].includes(code) ? 503 : 400; }
 function securityHeaders(contentType, csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") { return { "Content-Type": contentType, "Cache-Control": "private, no-store", "CDN-Cache-Control": "no-store", "Content-Security-Policy": csp, "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }; }
 function maybeHead(response, request) { return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response; }
 

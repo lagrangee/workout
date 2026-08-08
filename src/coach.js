@@ -144,7 +144,8 @@ export function coachSchedule(state, url, now) {
 }
 
 /** @param {any} state @param {URL} url @param {Date} now */
-export function coachSessions(state, url, now) {
+export function coachSessions(state, url, now, options = {}) {
+  const requireTrainingVersion = options.requireTrainingVersion === true;
   const rawLimit = url.searchParams.get("limit");
   const limit = rawLimit === null ? 50 : Number(rawLimit);
   if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || !Number.isInteger(limit) || limit < 1 || limit > 200)) return { error: { code: "invalid_request", field: "limit", message: "limit must be an integer between 1 and 200" } };
@@ -156,15 +157,23 @@ export function coachSessions(state, url, now) {
   const filters = `${from ?? ""}|${to ?? ""}|${status ?? ""}|${exerciseKey ?? ""}|${limit}`;
   let sessions = state.sessions.filter((session) => (!from || session.scheduled_date >= from) && (!to || session.scheduled_date <= to) && (!status || session.status === status) && (!exerciseKey || session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey))));
   sessions.sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date) || b.session_key.localeCompare(a.session_key));
+  const hasCursor = url.searchParams.has("cursor");
   const cursor = url.searchParams.get("cursor");
-  if (cursor) {
+  if (hasCursor && requireTrainingVersion && !cursor) return { error: { code: "invalid_cursor", field: "cursor", message: "Cursor is malformed, expired, or does not match the filters" } };
+  if (hasCursor && cursor) {
+    let value;
     try {
-      const value = JSON.parse(new TextDecoder().decode(decode(cursor)));
-      if (value.filters !== filters || typeof value.issued_at !== "number" || !Number.isFinite(value.issued_at) || value.issued_at > Date.now() || Date.now() - value.issued_at > 15 * 60 * 1000 || typeof value.date !== "string" || !isValidLocalDate(value.date) || typeof value.key !== "string" || !value.key) throw new Error("bad cursor");
-      sessions = sessions.filter((session) => session.scheduled_date < value.date || (session.scheduled_date === value.date && session.session_key < value.key));
+      value = JSON.parse(new TextDecoder().decode(decode(cursor)));
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("bad cursor");
     } catch { return { error: { code: "invalid_cursor", field: "cursor", message: "Cursor is malformed, expired, or does not match the filters" } }; }
+    if (requireTrainingVersion && (typeof value.training_version !== "number" || !Number.isInteger(value.training_version))) return { error: { code: "invalid_cursor", field: "cursor", message: "Cursor is malformed, expired, or does not match the filters" } };
+    if (requireTrainingVersion && value.training_version !== state.training_version) return { error: { code: "training_version_changed", field: "cursor", message: "Training data changed; restart from page one" } };
+    if (value.filters !== filters || typeof value.issued_at !== "number" || !Number.isFinite(value.issued_at) || value.issued_at > Date.now() || Date.now() - value.issued_at > 15 * 60 * 1000 || typeof value.date !== "string" || !isValidLocalDate(value.date) || typeof value.key !== "string" || !value.key) return { error: { code: "invalid_cursor", field: "cursor", message: "Cursor is malformed, expired, or does not match the filters" } };
+    sessions = sessions.filter((session) => session.scheduled_date < value.date || (session.scheduled_date === value.date && session.session_key < value.key));
   }
-  const page = sessions.slice(0, limit); const last = page.at(-1); const next = sessions.length > limit && last ? encode({ filters, date: last.scheduled_date, key: last.session_key, issued_at: Date.now() }) : null;
+  const page = sessions.slice(0, limit); const last = page.at(-1);
+  const nextValue = last ? { filters, date: last.scheduled_date, key: last.session_key, issued_at: Date.now(), ...(requireTrainingVersion ? { training_version: state.training_version } : {}) } : null;
+  const next = sessions.length > limit && nextValue ? encode(nextValue) : null;
   return { schema_version: 1, generated_at: now.toISOString(), data_as_of: now.toISOString(), training_updated_at: state.sessions.at(-1)?.updated_at ?? null, training_version: state.training_version, period: from && to ? coachPeriodContext(from, to, state.timezone, now) : { from: null, to: null, timezone: state.timezone, includes_from: false, includes_to: false, includes_current_date: false, current_date_may_be_incomplete: false }, page: { limit, next_cursor: next }, items: page.map(sessionSummary) };
 }
 function encode(value) { return base64UrlEncode(new TextEncoder().encode(JSON.stringify(value))); }
@@ -303,14 +312,18 @@ export function schemaResource(name) {
 }
 
 /** @param {any} state @param {string} pathname @param {URL} url @param {Date} now @param {string} token */
-export function coachResource(state, pathname, url, now, token) {
+export function coachResource(state, pathname, url, now, token, options = {}) {
   if (pathname.endsWith("/overview")) return coachOverview(state, url, now, token);
   if (pathname.endsWith("/plan")) return coachPlan(state, now);
   if (pathname.endsWith("/schedule")) return coachSchedule(state, url, now);
-  if (pathname.endsWith("/sessions")) return coachSessions(state, url, now);
+  if (pathname.endsWith("/sessions")) return coachSessions(state, url, now, options);
   if (pathname.includes("/sessions/")) { const key = pathname.split("/sessions/")[1]; const session = state.sessions.find((item) => item.session_key === key); return session ? coachSessionDetail(session, now) : { error: { code: "not_found", message: "Not found" } }; }
   if (pathname.endsWith("/progress")) return progressModel(state, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined, url.searchParams.get("bucket") ?? "week", url.searchParams.get("range") ?? undefined);
-  if (pathname.includes("/exercises/")) return exerciseDetail(state, decodeURIComponent(pathname.split("/exercises/")[1]), now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined, url.searchParams.get("range") ?? undefined);
+  if (pathname.includes("/exercises/")) {
+    let exerciseKey;
+    try { exerciseKey = decodeURIComponent(pathname.split("/exercises/")[1]); } catch { return { error: { code: "invalid_request", field: "exercise_key", message: "exercise_key must be a valid path segment" } }; }
+    return exerciseDetail(state, exerciseKey, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined, url.searchParams.get("range") ?? undefined);
+  }
   return { error: { code: "not_found", message: "Not found" } };
 }
 
@@ -322,6 +335,15 @@ function coachSessionDetail(session, now) {
   return { schema_version: 1, generated_at: now.toISOString(), data_as_of: now.toISOString(), session_key: detail.session_key, scheduled_date: detail.scheduled_date, timezone_at_session: detail.timezone_at_session, title: detail.title, status: detail.status, completion_fraction: detail.completion_fraction, training_duration_sec: detail.training_duration_sec, session_rpe: detail.session_rpe, note: detail.note, skip_reason: detail.skip_reason, snapshot, completion_results: detail.completion_results.map((result) => ({ completion_item_key: result.completion_item_key, actual: result.actual, resistance: result.resistance, rir: result.rir, completed_at: result.completed_at })), training_intervals: detail.training_intervals, exercise_feedback: detail.exercise_feedback, updated_at: detail.updated_at, source_ref: detail.source_ref };
 }
 
-function coachPrescription(slot, revisionKey, weekday) {
-  return { prescription_ref: `prescription:${revisionKey}:${weekday}`, title: slot.title, start_time: slot.start_time, estimated_duration_min: slot.estimated_duration_min, blocks: slot.blocks.map((block, blockIndex) => ({ block_key: `cb_${revisionKey}_${weekday}_${blockIndex + 1}`, title: block.title, exercises: block.exercises.map((exercise, exerciseIndex) => ({ exercise_occurrence_key: `ce_${revisionKey}_${weekday}_${blockIndex + 1}_${exerciseIndex + 1}`, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: exercise.sets.map((set, setIndex) => ({ set_key: `cs_${revisionKey}_${weekday}_${blockIndex + 1}_${exerciseIndex + 1}_${setIndex + 1}`, ...deepClone(set) })) })) })) };
+export function coachPrescription(slot, revisionKey, weekday) {
+  return prescriptionProjection(slot, `prescription:${revisionKey}:${weekday}`, {
+    block: (blockIndex) => `cb_${revisionKey}_${weekday}_${blockIndex + 1}`,
+    exercise: (blockIndex, exerciseIndex) => `ce_${revisionKey}_${weekday}_${blockIndex + 1}_${exerciseIndex + 1}`,
+    set: (blockIndex, exerciseIndex, setIndex) => `cs_${revisionKey}_${weekday}_${blockIndex + 1}_${exerciseIndex + 1}_${setIndex + 1}`,
+  });
+}
+
+/** @param {any} slot @param {string} prescriptionRef @param {any} keys */
+export function prescriptionProjection(slot, prescriptionRef, keys) {
+  return { prescription_ref: prescriptionRef, title: slot.title, start_time: slot.start_time, estimated_duration_min: slot.estimated_duration_min, blocks: slot.blocks.map((block, blockIndex) => ({ block_key: keys.block(blockIndex), title: block.title, exercises: block.exercises.map((exercise, exerciseIndex) => ({ exercise_occurrence_key: keys.exercise(blockIndex, exerciseIndex), exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: exercise.sets.map((set, setIndex) => ({ set_key: keys.set(blockIndex, exerciseIndex, setIndex), ...deepClone(set) })) })) })) };
 }

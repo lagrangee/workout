@@ -5,7 +5,7 @@ Date: 2026-07-31
 ## Passed locally
 
 - `npm run typecheck`
-- `npm test` — 19 HTTP/static integration tests passed for signed application login/logout, identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, boundary coverage, app shell, and the D1 session-date migration guard.
+- `npm test` — HTTP/static integration tests passed for signed application login/logout, identity isolation, settings, plan/schedule, strict JSON update, Session lifecycle/correction, metrics, Coach Share, Export, Agent Token/API/MCP access, boundary coverage, app shell, and the D1 migration guards.
 - `node --check src/worker.js`
 - `node --check public/app.js`
 - `npm run forbidden-scan`
@@ -17,14 +17,14 @@ Date: 2026-07-31
 
 ## Evidence boundary
 
-The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql` through `migrations/0004_restore_session_date_guard.sql`, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
+The test suite uses a local MemoryStore fixture with the same HTTP handler as the D1 adapter. `migrations/0001_initial.sql` through `migrations/0005_agent_token_lookup.sql`, the Agent API contract, `wrangler.toml`, the Cloudflare checklist, and the D1/Export rehearsal are present locally.
 
 ## Production-candidate evidence
 
 - Direct Wrangler deploy succeeded on 2026-07-31 with Worker version `b4ed0fea-f55f-4f4e-8d95-1f48a6bc1fc2`; the custom domain is `workout.lagrangee.xyz` with Preview URLs disabled.
 - `GET /healthz` returned `200` and `{"ok":true,"service":"workout-tracker"}`. Public Coach schema returned `200` with `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, CSP, no-referrer, and noindex headers.
 - `GET /api/private/me` without an application session returned `401` with the stable unauthorized envelope and the same private security headers; `POST /api/auth/login` returns `503 service_not_configured` until the five production Worker Secrets are written, and `/app` redirects unauthenticated production requests to `/`.
-- Production D1 migrations through `0004_restore_session_date_guard.sql` applied successfully. A remote schema read confirmed `session_date_guard` exists; production seed import and read-back are recorded in [`seed-verification.md`](./seed-verification.md).
+- Production D1 migrations through `0004_restore_session_date_guard.sql` applied successfully. The next production candidate must apply `0005_agent_token_lookup.sql`; a remote schema read confirmed `session_date_guard` exists; production seed import and read-back are recorded in [`seed-verification.md`](./seed-verification.md).
 - The repository is private at `lagrangee/workout`; `main` contains the intended source and production deployment is recorded through direct Wrangler evidence, not GitHub Actions auto deploy.
 
 ## Follow-up notes
