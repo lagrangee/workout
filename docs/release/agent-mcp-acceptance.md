@@ -11,10 +11,9 @@ MCP setup and live Athlete acceptance are pending.
 - `npm run typecheck` — passed.
 - `npm run mcp:check` — passed.
 - `node --test tests/mcp-onboarding.test.js` — 3 onboarding tests passed.
-- `npm run release-check` — blocked in the pre-existing seed verifier because
-  `seed/workout-tracker-weekly-seed.json` uses the past `effective_from`
-  `2026-08-02` relative to the current local date. The failure occurs before
-  `forbidden-scan` and release-acceptance checks.
+- `npm run release-check` — passed. The fixture-only seed verifier keeps the
+  historical source package unchanged and uses the same weekly content with a
+  runtime future effective date, so the release gate remains date-stable.
 
 ## Local MCP smoke
 
