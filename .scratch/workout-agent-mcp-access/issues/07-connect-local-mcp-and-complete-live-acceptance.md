@@ -50,3 +50,11 @@ The remaining acceptance boundary is user-owned: create or rotate a Token in
 the authenticated App, configure the local owner-only MCP file, start a fresh
 Codex task, and complete the read-only smoke before any separately confirmed
 plan update.
+
+2026-08-08 — The user-filled owner-only config was registered as the global
+`workout` stdio MCP without exposing the Token. Direct launcher smoke
+initialized successfully, listed all 9 tools, and completed a read-only
+`workout_get_overview` request with the `7d` preset; the response payload was
+not printed. A fresh Codex task is still required to load the newly registered
+server. Plan-update preview, separate confirmation, apply, readback, and Gate
+Passage remain pending.

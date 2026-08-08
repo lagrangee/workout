@@ -18,12 +18,16 @@ MCP setup and live Athlete acceptance are pending.
 
 ## Local MCP smoke
 
-- The typed bridge and launcher tests pass.
-- The current shell has no `WORKOUT_AGENT_API_ORIGIN` or
-  `WORKOUT_AGENT_TOKEN` values.
-- The current Codex MCP list has no `workout` server registration. The onboarding
-  command is documented in [`agent-mcp-onboarding.md`](./agent-mcp-onboarding.md)
-  and has not been executed, so no user configuration was mutated.
+- The typed bridge and launcher tests pass, and the owner-only local config was
+  prepared outside the repository.
+- The Codex MCP registry contains an enabled `workout` stdio server pointing at
+  `mcp/launch.mjs`; the registry stores only the config-file path, not the
+  Token value.
+- Direct stdio smoke initialized successfully, listed 9 tools, and completed a
+  read-only `workout_get_overview` request with the `7d` preset. The returned
+  training payload was not printed.
+- A fresh Codex task is still required because the current task does not hot
+  load newly registered MCP servers.
 
 ## Deployed smoke
 
@@ -39,16 +43,16 @@ MCP setup and live Athlete acceptance are pending.
 
 ## Human acceptance
 
-No production Agent Token was created or requested in chat. No production plan
-was previewed or changed. A live plan application requires the Athlete to
-choose the future change and give the separate confirmation after seeing its
-preview. Therefore no local MCP reads, pagination/stale recovery, idempotent
-retry, verified readback, or Gate Passage is claimed yet.
+The Athlete entered a production Agent Token into the owner-only local config;
+the value was not read, printed, or requested in chat. No production plan was
+previewed or changed. A live plan application requires the Athlete to choose
+the future change and give the separate confirmation after seeing its preview.
+Therefore no plan-update/readback or Gate Passage is claimed yet.
 
 ## Remaining write set
 
 The authorized production deployment, D1 migration, and `AGENT_TOKEN_SECRET`
-write are complete. The Athlete must now create or rotate a Token through the
-authenticated App, configure the local MCP launcher in the owner-only config
-file, and start a fresh Codex task. That task can run the read-only smoke and,
-only after a separate preview confirmation, the plan-update/readback scenario.
+write are complete, and the local Token-backed read-only smoke has passed. The
+Athlete must now start a fresh Codex task to load the registered MCP. Only after
+a separate preview confirmation may that task run the plan-update/readback
+scenario.
