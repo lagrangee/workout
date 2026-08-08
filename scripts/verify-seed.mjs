@@ -8,22 +8,27 @@ const seedPath = "seed/workout-tracker-weekly-seed.json";
 const seedText = await readFile(seedPath, "utf8");
 /** @type {any} */
 const seed = JSON.parse(seedText);
+// The checked-in seed records the historical production import date. Reuse its
+// weekly content for this fixture-only verification with a fresh future date so
+// the release gate remains valid after the original date has passed.
+const verificationSeed = { ...seed, effective_from: addDays(today, 1) };
+const verificationSeedText = JSON.stringify(verificationSeed);
 const { handler, store } = appFixture();
 const before = await store.getByEmail("athlete-a@example.invalid");
 const revisionCountBefore = before.plan_revisions.length;
 
-const validation = await call(handler, "/api/private/plan-updates/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package_text: seedText }) });
+const validation = await call(handler, "/api/private/plan-updates/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package_text: verificationSeedText }) });
 assert.equal(validation.response.status, 200, JSON.stringify(validation.body));
-assert.equal(validation.body.preview.effective_from, seed.effective_from);
+assert.equal(validation.body.preview.effective_from, verificationSeed.effective_from);
 assert.deepEqual(validation.body.preview.week, seed.week);
 
-const applied = await call(handler, "/api/private/plan-updates/apply", post({ package_text: seedText }, "seed-apply-1"));
+const applied = await call(handler, "/api/private/plan-updates/apply", post({ package_text: verificationSeedText }, "seed-apply-1"));
 assert.equal(applied.response.status, 201, JSON.stringify(applied.body));
 const after = await store.getByEmail("athlete-a@example.invalid");
 assert.equal(after.plan_revisions.length, revisionCountBefore + 1);
 
 const plan = await call(handler, "/api/private/plan");
-const readBack = plan.body.future.find(/** @param {any} revision */ (revision) => revision.effective_from === seed.effective_from);
+const readBack = plan.body.future.find(/** @param {any} revision */ (revision) => revision.effective_from === verificationSeed.effective_from);
 assert.ok(readBack, "seed revision should remain visible as the next effective plan");
 assert.equal(canonicalJson(readBack.week), canonicalJson(seed.week));
 
@@ -40,10 +45,10 @@ for (const [day, expected] of Object.entries(expectedCounts)) {
   }
 }
 
-const schedule = await call(handler, `/api/private/schedule?from=${seed.effective_from}&to=${addDays(seed.effective_from, 6)}&expand=prescription`);
+const schedule = await call(handler, `/api/private/schedule?from=${verificationSeed.effective_from}&to=${addDays(verificationSeed.effective_from, 6)}&expand=prescription`);
 assert.equal(schedule.response.status, 200);
 const expectedScheduleKinds = Array.from({ length: 7 }, (_, index) => {
-  const slot = seed.week[weekdayKey(addDays(seed.effective_from, index))];
+  const slot = seed.week[weekdayKey(addDays(verificationSeed.effective_from, index))];
   return slot === null ? "no_plan" : slot.kind === "rest" ? "rest" : "workout";
 });
 assert.deepEqual(schedule.body.entries.map(/** @param {any} entry */ (entry) => entry.kind), expectedScheduleKinds);
@@ -52,7 +57,7 @@ for (const forbidden of ["telemetry", "symptom", "condition", "instruction", "ro
 
 const invalid = await call(handler, "/api/private/plan-updates/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package_text: "{}" }) });
 assert.equal(invalid.response.status, 400);
-const noop = await call(handler, "/api/private/plan-updates/apply", post({ package_text: seedText }, "seed-noop"));
+const noop = await call(handler, "/api/private/plan-updates/apply", post({ package_text: verificationSeedText }, "seed-noop"));
 assert.equal(noop.response.status, 400);
 assert.equal((await store.getByEmail("athlete-a@example.invalid")).plan_revisions.length, revisionCountBefore + 1);
 
@@ -60,4 +65,4 @@ const otherPlan = await call(handler, "/api/private/plan", {}, "athlete-b@exampl
 assert.equal(otherPlan.body.current, null);
 assert.deepEqual(otherPlan.body.future, []);
 
-console.log(JSON.stringify({ seed: seedPath, selected_athlete: "fixture-only", effective_from: seed.effective_from, revision_created: true, completion_item_counts: expectedCounts, schedule_kinds: schedule.body.entries.map(/** @param {any} entry */ (entry) => entry.kind), no_op_rejected: true, invalid_attempt_preserved_revision_count: true, other_athlete_isolated: true }));
+console.log(JSON.stringify({ seed: seedPath, selected_athlete: "fixture-only", source_effective_from: seed.effective_from, effective_from: verificationSeed.effective_from, revision_created: true, completion_item_counts: expectedCounts, schedule_kinds: schedule.body.entries.map(/** @param {any} entry */ (entry) => entry.kind), no_op_rejected: true, invalid_attempt_preserved_revision_count: true, other_athlete_isolated: true }));
