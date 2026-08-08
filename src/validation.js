@@ -2,13 +2,27 @@
 
 import { isRecord, isValidLocalDate, isValidTimezone, isValidUtcInstant, trimString } from "./util.js";
 
+/** @param {string} value */
+function jsonPointerSegment(value) {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+class StrictJsonParseError extends Error {
+  /** @param {string} path @param {string} message */
+  constructor(path, message) {
+    super(message);
+    this.name = "StrictJsonParseError";
+    this.path = path;
+  }
+}
+
 class StrictJsonParser {
   /** @param {string} text */
   constructor(text) { this.text = text; this.index = 0; }
   parse() {
-    const value = this.value("$");
+    const value = this.value("");
     this.ws();
-    if (this.index !== this.text.length) throw new Error(`Unexpected character at offset ${this.index}`);
+    if (this.index !== this.text.length) throw new StrictJsonParseError("", `Unexpected character at offset ${this.index}`);
     return value;
   }
   ws() { while (/\s/.test(this.text[this.index] ?? "")) this.index += 1; }
@@ -18,36 +32,37 @@ class StrictJsonParser {
     const char = this.text[this.index];
     if (char === "{") return this.object(path);
     if (char === "[") return this.array(path);
-    if (char === '"') return this.string();
-    if (char === "-" || /\d/.test(char ?? "")) return this.number();
+    if (char === '"') return this.string(path);
+    if (char === "-" || /\d/.test(char ?? "")) return this.number(path);
     /** @type {Array<[string, any]>} */
     const literals = [["true", true], ["false", false], ["null", null]];
     for (const [literal, value] of literals) {
       if (this.text.startsWith(literal, this.index)) { this.index += literal.length; return value; }
     }
-    throw new Error(`Expected a JSON value at ${path} (offset ${this.index})`);
+    throw new StrictJsonParseError(path, `Expected a JSON value at ${path} (offset ${this.index})`);
   }
   /** @param {string} path @returns {Record<string, any>} */
   object(path) {
     this.index += 1; this.ws();
     /** @type {Record<string, any>} */
-    const object = {};
+    const object = Object.create(null);
     if (this.text[this.index] === "}") { this.index += 1; return object; }
     while (this.index < this.text.length) {
       this.ws();
-      if (this.text[this.index] !== '"') throw new Error(`Expected an object key at ${path} (offset ${this.index})`);
-      const key = this.string();
-      if (Object.prototype.hasOwnProperty.call(object, key)) throw new Error(`Duplicate JSON member ${path}/${key}`);
+      if (this.text[this.index] !== '"') throw new StrictJsonParseError(path, `Expected an object key at ${path} (offset ${this.index})`);
+      const key = this.string(path);
+      const keyPath = `${path}/${jsonPointerSegment(key)}`;
+      if (Object.prototype.hasOwnProperty.call(object, key)) throw new StrictJsonParseError(keyPath, `Duplicate JSON member ${keyPath}`);
       this.ws();
-      if (this.text[this.index] !== ":") throw new Error(`Expected ':' after ${path}/${key}`);
+      if (this.text[this.index] !== ":") throw new StrictJsonParseError(keyPath, `Expected ':' after ${keyPath}`);
       this.index += 1;
-      object[key] = this.value(`${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`);
+      object[key] = this.value(keyPath);
       this.ws();
       if (this.text[this.index] === "}") { this.index += 1; return object; }
-      if (this.text[this.index] !== ",") throw new Error(`Expected ',' in ${path}`);
+      if (this.text[this.index] !== ",") throw new StrictJsonParseError(path, `Expected ',' in ${path}`);
       this.index += 1;
     }
-    throw new Error(`Unterminated object at ${path}`);
+    throw new StrictJsonParseError(path, `Unterminated object at ${path}`);
   }
   /** @param {string} path @returns {any[]} */
   array(path) {
@@ -59,33 +74,37 @@ class StrictJsonParser {
       array.push(this.value(`${path}/${array.length}`));
       this.ws();
       if (this.text[this.index] === "]") { this.index += 1; return array; }
-      if (this.text[this.index] !== ",") throw new Error(`Expected ',' in ${path}`);
+      if (this.text[this.index] !== ",") throw new StrictJsonParseError(path, `Expected ',' in ${path}`);
       this.index += 1;
     }
-    throw new Error(`Unterminated array at ${path}`);
+    throw new StrictJsonParseError(path, `Unterminated array at ${path}`);
   }
-  string() {
+  /** @param {string} [path] */
+  string(path = "") {
     const start = this.index; this.index += 1;
     while (this.index < this.text.length) {
       const char = this.text[this.index++];
-      if (char === '"') return JSON.parse(this.text.slice(start, this.index));
+      if (char === '"') {
+        try { return JSON.parse(this.text.slice(start, this.index)); } catch { throw new StrictJsonParseError(path, `Invalid JSON string at ${path}`); }
+      }
       if (char === "\\") this.index += 1;
     }
-    throw new Error(`Unterminated string at offset ${start}`);
+    throw new StrictJsonParseError(path, `Unterminated string at ${path}`);
   }
-  number() {
+  /** @param {string} [path] */
+  number(path = "") {
     const match = this.text.slice(this.index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
-    if (!match) throw new Error(`Invalid number at offset ${this.index}`);
+    if (!match) throw new StrictJsonParseError(path, `Invalid number at ${path}`);
     this.index += match[0].length;
     const value = Number(match[0]);
-    if (!Number.isFinite(value)) throw new Error(`Non-finite number at offset ${this.index}`);
+    if (!Number.isFinite(value)) throw new StrictJsonParseError(path, `Non-finite number at ${path}`);
     return value;
   }
 }
 
-/** @param {string} text */
-export function parseStrictJson(text) {
-  if (new TextEncoder().encode(text).byteLength > 256 * 1024) throw new Error("Package exceeds the 256 KiB limit");
+/** @param {string} text @param {number} [maxBytes] */
+export function parseStrictJson(text, maxBytes = 256 * 1024) {
+  if (new TextEncoder().encode(text).byteLength > maxBytes) throw new StrictJsonParseError("", "Package exceeds the 256 KiB limit");
   return new StrictJsonParser(text).parse();
 }
 
@@ -97,9 +116,24 @@ function requireArray(value, path, errors) { if (!Array.isArray(value)) errors.p
 function requireString(value, path, errors) { if (typeof value !== "string") errors.push(`${path}: must be a string`); return typeof value === "string"; }
 /** @param {any} value @param {string} path @param {string[]} errors */
 function requireInteger(value, path, errors) { if (!Number.isInteger(value)) errors.push(`${path}: must be an integer`); return Number.isInteger(value); }
+/** @param {any} value @param {string} path @param {string[]} errors */
+function requireTrimmedString(value, path, errors) {
+  if (!requireString(value, path, errors)) return false;
+  const trimmed = trimString(value);
+  if (trimmed !== value || trimmed.length < 1 || trimmed.length > 100) errors.push(`${path}: must contain 1-100 trimmed characters`);
+  return true;
+}
 /** @param {Record<string, any>} object @param {string[]} allowed @param {string} path @param {string[]} errors */
 function exactKeys(object, allowed, path, errors) {
-  for (const key of Object.keys(object)) if (!allowed.includes(key)) errors.push(`${path}/${key}: unknown field`);
+  for (const key of Object.keys(object)) if (!allowed.includes(key)) errors.push(`${path}/${jsonPointerSegment(key)}: unknown field`);
+}
+
+/** @param {string[]} errors */
+function validationErrorDetails(errors) {
+  return errors.map((message) => {
+    const separator = message.lastIndexOf(": ");
+    return { path: separator === -1 ? "" : message.slice(0, separator), message };
+  });
 }
 
 /** @param {any} value @param {string} path @param {string[]} errors */
@@ -155,26 +189,26 @@ function validateSlot(value, path, errors) {
   if (value.kind === "rest") { exactKeys(value, ["kind"], path, errors); return; }
   exactKeys(value, ["kind", "title", "start_time", "estimated_duration_min", "blocks"], path, errors);
   if (value.kind !== "workout") errors.push(`${path}/kind: must be workout or rest`);
-  if (!requireString(value.title, `${path}/title`, errors) || trimString(value.title).length < 1 || trimString(value.title).length > 100) errors.push(`${path}/title: must contain 1-100 trimmed characters`);
+  requireTrimmedString(value.title, `${path}/title`, errors);
   if (value.start_time !== null && (!requireString(value.start_time, `${path}/start_time`, errors) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.start_time))) errors.push(`${path}/start_time: must be HH:mm or null`);
   if (!requireInteger(value.estimated_duration_min, `${path}/estimated_duration_min`, errors) || value.estimated_duration_min <= 0) errors.push(`${path}/estimated_duration_min: must be a positive integer`);
   if (!requireArray(value.blocks, `${path}/blocks`, errors) || value.blocks.length < 1 || value.blocks.length > 20) { errors.push(`${path}/blocks: must contain 1-20 blocks`); return; }
   let exercises = 0; let completionItems = 0;
+  const exerciseKeys = new Set();
   value.blocks.forEach((block, blockIndex) => {
     const blockPath = `${path}/blocks/${blockIndex}`;
     if (!requireObject(block, blockPath, errors)) return;
     exactKeys(block, ["title", "exercises"], blockPath, errors);
-    if (!requireString(block.title, `${blockPath}/title`, errors) || trimString(block.title).length < 1 || trimString(block.title).length > 100) errors.push(`${blockPath}/title: must contain 1-100 trimmed characters`);
+    requireTrimmedString(block.title, `${blockPath}/title`, errors);
     if (!requireArray(block.exercises, `${blockPath}/exercises`, errors) || block.exercises.length < 1) { errors.push(`${blockPath}/exercises: must not be empty`); return; }
-    const keys = new Set();
     block.exercises.forEach((exercise, exerciseIndex) => {
       exercises += 1;
       const exercisePath = `${blockPath}/exercises/${exerciseIndex}`;
       if (!requireObject(exercise, exercisePath, errors)) return;
       exactKeys(exercise, ["exercise_key", "name", "category", "side_mode", "sets"], exercisePath, errors);
       if (!requireString(exercise.exercise_key, `${exercisePath}/exercise_key`, errors) || !/^[a-z][a-z0-9_]{0,63}$/.test(exercise.exercise_key)) errors.push(`${exercisePath}/exercise_key: invalid key`);
-      if (keys.has(exercise.exercise_key)) errors.push(`${exercisePath}/exercise_key: duplicate in workout slot`); keys.add(exercise.exercise_key);
-      if (!requireString(exercise.name, `${exercisePath}/name`, errors) || trimString(exercise.name).length < 1 || trimString(exercise.name).length > 100) errors.push(`${exercisePath}/name: must contain 1-100 trimmed characters`);
+      if (exerciseKeys.has(exercise.exercise_key)) errors.push(`${exercisePath}/exercise_key: duplicate in workout slot`); exerciseKeys.add(exercise.exercise_key);
+      requireTrimmedString(exercise.name, `${exercisePath}/name`, errors);
       if (!["strength", "endurance", "mobility", "recovery"].includes(exercise.category)) errors.push(`${exercisePath}/category: unsupported category`);
       if (!["none", "left_right"].includes(exercise.side_mode)) errors.push(`${exercisePath}/side_mode: unsupported side mode`);
       if (!requireArray(exercise.sets, `${exercisePath}/sets`, errors) || exercise.sets.length < 1 || exercise.sets.length > 200) { errors.push(`${exercisePath}/sets: must contain 1-200 sets`); return; }
@@ -190,19 +224,24 @@ export function validatePlanPackage(text, today) {
   /** @type {string[]} */
   const errors = [];
   let packageValue;
-  try { packageValue = parseStrictJson(text); } catch (error) { return { ok: false, errors: [{ path: "$", message: error instanceof Error ? error.message : "Invalid JSON" }] }; }
-  if (!requireObject(packageValue, "$", errors)) return { ok: false, errors: errors.map((message) => ({ path: "$", message })) };
-  exactKeys(packageValue, ["schema_version", "effective_from", "week"], "$", errors);
+  try { packageValue = parseStrictJson(text); } catch (error) {
+    return {
+      ok: false,
+      errors: [{ path: error instanceof StrictJsonParseError ? error.path : "", message: error instanceof Error ? error.message : "Invalid JSON" }],
+    };
+  }
+  if (!requireObject(packageValue, "", errors)) return { ok: false, errors: validationErrorDetails(errors) };
+  exactKeys(packageValue, ["schema_version", "effective_from", "week"], "", errors);
   if (packageValue.schema_version !== 1) errors.push("/schema_version: must equal integer 1");
   if (!requireString(packageValue.effective_from, "/effective_from", errors) || !isValidLocalDate(packageValue.effective_from)) errors.push("/effective_from: must be a valid local date");
   else if (packageValue.effective_from <= today) errors.push("/effective_from: must be later than the current local date");
-  if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: errors.map((message) => ({ path: "$", message })) };
+  if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: validationErrorDetails(errors) };
   exactKeys(packageValue.week, ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], "/week", errors);
   for (const weekday of ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]) {
     if (!Object.prototype.hasOwnProperty.call(packageValue.week, weekday)) errors.push(`/week/${weekday}: required`);
     else validateSlot(packageValue.week[weekday], `/week/${weekday}`, errors);
   }
-  return errors.length ? { ok: false, errors: errors.map((message) => ({ path: message.split(":")[0], message })) } : { ok: true, value: packageValue };
+  return errors.length ? { ok: false, errors: validationErrorDetails(errors) } : { ok: true, value: packageValue };
 }
 
 /** @param {any} value @param {string} path @returns {string[]} */

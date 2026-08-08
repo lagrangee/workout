@@ -3,6 +3,7 @@ import { emptyAthlete, MemoryStore } from "../src/store.js";
 import { createHandler } from "../src/http.js";
 
 export const today = localDate(new Date(), "Asia/Shanghai");
+export const testAgentSecret = "test-only-agent-token-secret";
 
 /** @returns {any} */
 export function workout(title = "下肢力量") {
@@ -30,16 +31,38 @@ export function fixture() {
 }
 
 /** @returns {any} */
-export function appFixture() { const value = fixture(); return { ...value, handler: createHandler({ STORE: value.store, LOCAL_AUTH: "true", DEFAULT_TIMEZONE: "Asia/Shanghai", PUBLIC_ORIGIN: "https://workout.example" }) }; }
+export function appFixture() { const value = fixture(); return { ...value, handler: createHandler({ STORE: value.store, LOCAL_AUTH: "true", DEFAULT_TIMEZONE: "Asia/Shanghai", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret }) }; }
 
 /** @param {any} handler @param {string} path @param {any} options @param {string} email @returns {Promise<any>} */
 export async function call(handler, path, options = {}, email = "athlete-a@example.invalid") {
   const headers = { "x-athlete-email": email, ...(options.headers || {}) };
   const request = new Request(`https://workout.example${path}`, { ...options, headers });
-  const response = await handler.fetch(request, { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example" });
+  const response = await handler.fetch(request, { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });
   const text = await response.text();
   let body; try { body = JSON.parse(text); } catch { body = text; }
   return { response, body };
+}
+
+/** @param {any} handler @param {string} token @param {string} path @param {any} [options] @returns {Promise<any>} */
+export async function agentRequest(handler, token, path, options = {}) {
+  const response = await handler.fetch(new Request(`https://workout.example${path}`, {
+    ...options,
+    headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) },
+  }), {
+    LOCAL_AUTH: "true",
+    PUBLIC_ORIGIN: "https://workout.example",
+    AGENT_TOKEN_SECRET: testAgentSecret,
+  });
+  const text = await response.text();
+  let body; try { body = JSON.parse(text); } catch { body = text; }
+  return { response, body };
+}
+
+/** @param {any} handler @param {string} [email] @returns {Promise<string>} */
+export async function createAgentToken(handler, email = "athlete-a@example.invalid") {
+  const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, email);
+  if (result.response.status !== 201 || typeof result.body.token !== "string") throw new Error("Agent token creation failed");
+  return result.body.token;
 }
 
 /** @returns {any} */

@@ -165,9 +165,19 @@ export function scheduleModel(state, from, to, now = new Date(), includePrescrip
   return dateRange(start, end).map((date) => scheduleEntry(state, date, now, includePrescription));
 }
 
+function emptyWeek() {
+  return Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
+}
+
+/** @param {any} state @param {any} packageValue */
+export function planUpdateBase(state, packageValue) {
+  const revision = effectiveRevision(state, packageValue.effective_from);
+  return revision ? { effective_from: revision.effective_from, week: deepClone(revision.week) } : { effective_from: null, week: null };
+}
+
 /** @param {any} state @param {any} packageValue @param {Date} now */
 export function packagePreview(state, packageValue, now = new Date()) {
-  const previous = effectiveRevision(state, packageValue.effective_from)?.week ?? Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
+  const previous = planUpdateBase(state, packageValue).week ?? emptyWeek();
   const changed = WEEKDAYS.filter((day) => canonicalJson(previous[day]) !== canonicalJson(packageValue.week[day])).length;
   return { effective_from: packageValue.effective_from, week: deepClone(packageValue.week), changed_weekday_slot_count: changed };
 }
@@ -179,8 +189,8 @@ export function validatePlanForState(state, text, now = new Date()) {
   if (!result.ok) return result;
   /** @type {any} */
   const value = result.value;
-  const current = effectiveRevision(state, value.effective_from);
-  if (current && canonicalJson(current.week) === canonicalJson(value.week)) return { ok: false, errors: [{ path: "/week", message: "This package does not change the effective template" }] };
+  const baselineWeek = planUpdateBase(state, value).week ?? emptyWeek();
+  if (canonicalJson(baselineWeek) === canonicalJson(value.week)) return { ok: false, errors: [{ path: "/week", message: "This package does not change the effective template" }] };
   return { ok: true, value, preview: packagePreview(state, value, now) };
 }
 
