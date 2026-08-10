@@ -28,6 +28,32 @@
   font-weight: 700;
 }
 
+.session-wake-notice {
+  display: grid;
+  gap: 3px;
+  margin: 10px 18px 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.session-wake-notice strong {
+  font-size: 13px;
+}
+
+.session-wake-notice span {
+  font-weight: 500;
+}
+
+.session-wake-notice.is-paused {
+  background: #fff5e2;
+  color: #765922;
+}
+
+.session-wake-notice.is-fallback {
+  background: #fbe8e1;
+  color: #8e3626;
+}
+
 .calendar-head {
   padding-bottom: 12px;
 }
@@ -302,7 +328,7 @@
 .session-header {
   min-height: 58px;
   display: grid;
-  grid-template-columns: 48px 1fr 48px;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
@@ -317,6 +343,65 @@
 
 .today-content {
   padding: 24px 22px 28px;
+}
+
+.mutation-feedback {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mutation-feedback.is-pending {
+  color: var(--muted);
+  background: #fbf7f0;
+}
+
+.mutation-feedback.is-error {
+  color: #8e3626;
+  background: #fbe8e1;
+}
+
+.mutation-feedback strong,
+.mutation-feedback span:last-child {
+  grid-column: 1 / -1;
+}
+
+.mutation-feedback.is-pending span:last-child {
+  grid-column: 2;
+}
+
+.mutation-feedback.is-error span:last-child {
+  color: #8e3626;
+  font-size: 12px;
+}
+
+.mutation-indicator {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: mutation-spin .8s linear infinite;
+}
+
+button:disabled,
+button[aria-busy="true"] {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+@keyframes mutation-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mutation-indicator { animation: none; }
 }
 
 .today-content h1 {
@@ -511,10 +596,18 @@
   color: var(--ink);
 }
 
-.session-timer-toggle {
+.session-header-actions {
+  display: flex;
+  align-items: center;
   justify-self: end;
-  min-width: 48px;
-  padding: 8px 0;
+  gap: 2px;
+}
+
+.session-mute-toggle,
+.session-timer-toggle {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 5px;
   border-radius: 10px;
   background: transparent;
   color: var(--accent-dark);
@@ -522,6 +615,7 @@
   font-weight: 760;
 }
 
+.session-mute-toggle[aria-pressed="true"],
 .session-timer-toggle[aria-pressed="true"] {
   background: #f8ece6;
 }
@@ -616,6 +710,63 @@
   line-height: 1.5;
 }
 
+.timed-execution {
+  margin-top: 22px;
+  padding: 18px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fbf7f0;
+  text-align: center;
+}
+
+.timed-execution-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timed-execution-label {
+  color: var(--accent-dark);
+  font-weight: 760;
+}
+
+.timed-action-state {
+  min-height: 20px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.timed-remaining {
+  margin: 12px 0 16px;
+  color: var(--ink);
+  font-size: 68px;
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.timed-start {
+  min-height: 48px;
+}
+
+.timed-actual-fields {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  text-align: left;
+}
+
+.timed-actual-fields input:disabled {
+  background: #f4f2ef;
+  color: var(--muted);
+}
+
 .actual-panel {
   margin-top: 22px;
   padding: 0 14px;
@@ -679,6 +830,10 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-top: 8px;
+}
+
+.focus-secondary.is-timed {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .focus-secondary .secondary {

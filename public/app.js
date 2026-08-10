@@ -12,7 +12,51 @@ const rpeMeanings = [
   { title: "接近极限", detail: "非常吃力，但仍能按标准完成。" },
   { title: "最大用力", detail: "已到极限；若有未完成，请在备注说明。" },
 ];
-const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [] }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restNextIndex: null, timerHandle: null, timerPaused: false, timerPauseStartedAt: null, timerPausedSec: 0, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
+const sessionMutationActions = new Set(["start", "continue", "restart", "complete"]);
+const mutationPendingLabels = { start: "正在开始训练…", continue: "正在继续训练…", restart: "正在重新开始训练…", complete: "正在保存…" };
+const preparationDurationSec = 5;
+const restFinalCueSeconds = 3;
+const workoutTestSeams = typeof window !== "undefined" ? window.__workoutTestSeams || {} : {};
+const clockNow = () => typeof workoutTestSeams.now === "function" ? Number(workoutTestSeams.now()) : Date.now();
+const scheduleInterval = (callback, delay) => typeof workoutTestSeams.setInterval === "function" ? workoutTestSeams.setInterval(callback, delay) : setInterval(callback, delay);
+const clearScheduledInterval = (handle) => typeof workoutTestSeams.clearInterval === "function" ? workoutTestSeams.clearInterval(handle) : clearInterval(handle);
+
+function createBrowserAudio() {
+  let audioContext = null;
+  return {
+    activate() {
+      try {
+        const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextConstructor) return;
+        audioContext ||= new AudioContextConstructor();
+        if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
+      } catch {}
+    },
+    cue(kind) {
+      if (!audioContext) return;
+      try {
+        const now = audioContext.currentTime;
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        const isCompletion = kind === "complete";
+        const isRestCompletion = kind === "rest-complete";
+        const isFinal = kind === "tempo-final";
+        oscillator.type = "sine";
+        oscillator.frequency.value = isCompletion ? 740 : isRestCompletion ? 660 : isFinal ? 620 : kind === "prepare" ? 440 : 520;
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(isCompletion ? 0.16 : isRestCompletion ? 0.12 : 0.09, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + (isCompletion ? 0.24 : isRestCompletion ? 0.2 : 0.1));
+        oscillator.connect(gain).connect(audioContext.destination);
+        oscillator.start(now);
+        oscillator.stop(now + (isCompletion ? 0.26 : isRestCompletion ? 0.22 : 0.12));
+      } catch {}
+    },
+  };
+}
+
+const actionAudio = workoutTestSeams.audio || createBrowserAudio();
+const blankTimedAction = () => ({ itemKey: null, phase: "idle", targetSec: null, deadlineMs: null, remainingMs: null, remainingSec: null, lastCueSecond: null });
+const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [] }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
 
 const app = document.querySelector("#app");
 async function api(path, options = {}) {
@@ -31,6 +75,145 @@ const addCalendarDays = (date, days) => { const value = new Date(`${date}T12:00:
 const calendarWeekday = (date) => { const day = new Date(`${date}T12:00:00Z`).getUTCDay(); return day === 0 ? 6 : day - 1; };
 const calendarMonday = (date) => addCalendarDays(date, -calendarWeekday(date));
 const calendarFirstDate = () => state.plan?.first_effective_from || null;
+const isSessionMutationPending = (action) => state.sessionMutation.pending && state.sessionMutation.action === action;
+const mutationDisabled = (action) => isSessionMutationPending(action) ? 'disabled aria-disabled="true" aria-busy="true"' : "";
+const mutationLabel = (action, fallback) => isSessionMutationPending(action) ? mutationPendingLabels[action] : fallback;
+function sessionMutationNotice(action) {
+  const mutation = state.sessionMutation;
+  if (mutation.action !== action) return "";
+  if (mutation.pending) return `<div class="mutation-feedback is-pending" role="status" aria-live="polite"><span class="mutation-indicator" aria-hidden="true"></span><span>${mutationPendingLabels[action]}</span></div>`;
+  if (!mutation.error) return "";
+  const hint = action === "complete" ? "可以直接重试，未保存的实际值和动作反馈会保留。" : "可以直接重试。";
+  return `<div class="mutation-feedback is-error" role="alert"><strong>${escapeHtml(mutation.error)}</strong><span>${hint}</span></div>`;
+}
+function beginSessionMutation(action) {
+  if (state.sessionMutation.pending) return false;
+  state.sessionMutation = { action, pending: true, error: null };
+  state.error = null;
+  render();
+  return true;
+}
+function clearSessionMutation() { state.sessionMutation = { action: null, pending: false, error: null }; }
+function failSessionMutation(action, error) {
+  state.error = null;
+  state.sessionMutation = { action, pending: false, error: error.data?.error?.message || error.message || "请求失败，请重试" };
+  render();
+}
+function documentIsVisible() { return typeof document === "undefined" || document.hidden !== true; }
+function wakeLockSupported() { return typeof navigator !== "undefined" && navigator.wakeLock && typeof navigator.wakeLock.request === "function"; }
+function isVisibleSession() { return state.view === "today" && state.sessionDetail?.status === "in_progress" && documentIsVisible(); }
+function shouldKeepWakeLock() { return isVisibleSession() && !(state.timerPaused && state.timerPauseReason === "manual"); }
+function releaseWakeLock() {
+  const sentinel = state.wakeLock.sentinel;
+  state.wakeLock.sentinel = null;
+  state.wakeLock.requestPending = false;
+  state.wakeLock.requestId += 1;
+  try {
+    const result = sentinel?.release?.();
+    result?.catch?.(() => {});
+  } catch {}
+}
+function pauseForInterruption(reason) {
+  if (!state.sessionDetail || state.sessionDetail.status !== "in_progress" || state.view !== "today") return;
+  if (state.timerPaused && state.timerPauseReason === "manual") return;
+  const now = clockNow();
+  if (!state.timerPaused) {
+    pauseExecutionTimers(now);
+    state.timerPaused = true;
+    state.timerPauseStartedAt = now;
+  }
+  state.timerPauseReason = reason;
+  render();
+}
+function handleWakeLockRelease(sentinel) {
+  if (state.wakeLock.sentinel !== sentinel) return;
+  state.wakeLock.sentinel = null;
+  state.wakeLock.requestPending = false;
+  state.wakeLock.status = documentIsVisible() ? "released" : "hidden";
+  pauseForInterruption(documentIsVisible() ? "wake-lock" : "visibility");
+}
+async function requestWakeLock({ force = false } = {}) {
+  if (!isVisibleSession() || !wakeLockSupported()) {
+    if (isVisibleSession() && !wakeLockSupported()) state.wakeLock.status = "unsupported";
+    return false;
+  }
+  if (state.wakeLock.sentinel && !state.wakeLock.sentinel.released) {
+    state.wakeLock.status = "active";
+    return true;
+  }
+  if (state.wakeLock.requestPending) return false;
+  if (!force && ["unsupported", "denied", "released"].includes(state.wakeLock.status)) return false;
+  const requestId = ++state.wakeLock.requestId;
+  state.wakeLock.requestPending = true;
+  state.wakeLock.status = "requesting";
+  try {
+    const sentinel = await navigator.wakeLock.request("screen");
+    if (requestId !== state.wakeLock.requestId || !isVisibleSession()) {
+      try { await sentinel?.release?.(); } catch {}
+      return false;
+    }
+    if (sentinel?.released) {
+      state.wakeLock.requestPending = false;
+      state.wakeLock.status = "released";
+      if (["preparing", "active"].includes(state.timedAction.phase)) pauseForInterruption("wake-lock");
+      else render();
+      return false;
+    }
+    state.wakeLock.sentinel = sentinel;
+    state.wakeLock.requestPending = false;
+    state.wakeLock.status = "active";
+    const onRelease = () => handleWakeLockRelease(sentinel);
+    if (typeof sentinel.addEventListener === "function") sentinel.addEventListener("release", onRelease);
+    else sentinel.onrelease = onRelease;
+    render();
+    return true;
+  } catch {
+    if (requestId !== state.wakeLock.requestId) return false;
+    state.wakeLock.requestPending = false;
+    state.wakeLock.status = "denied";
+    if (["preparing", "active"].includes(state.timedAction.phase)) pauseForInterruption("wake-lock");
+    else render();
+    return false;
+  }
+}
+function syncWakeLock() {
+  if (!isVisibleSession()) {
+    if (state.wakeLock.sentinel || state.wakeLock.requestPending) releaseWakeLock();
+    return;
+  }
+  if (!shouldKeepWakeLock()) {
+    if (state.wakeLock.sentinel) releaseWakeLock();
+    return;
+  }
+  if (state.wakeLock.sentinel || state.wakeLock.requestPending || ["unsupported", "denied", "released"].includes(state.wakeLock.status)) return;
+  void requestWakeLock();
+}
+function wakeLockNotice() {
+  if (!state.sessionDetail || state.sessionDetail.status !== "in_progress") return "";
+  const status = state.wakeLock.status === "idle" && !wakeLockSupported() ? "unsupported" : state.wakeLock.status;
+  if (state.timerPaused && state.timerPauseReason === "visibility") return `<div class="notice session-wake-notice is-paused" role="status" aria-live="polite"><strong>${status === "active" ? "已回到前台，计时仍暂停" : "页面已离开前台，计时已暂停"}</strong><span>${status === "active" ? "屏幕保持已重新请求。准备好后点击顶部“继续”；后台时间不会计入动作或 Session 计时。" : "回到训练后点击顶部“继续”；后台时间不会计入动作或 Session 计时。"}</span></div>`;
+  if (state.timerPaused && state.timerPauseReason === "wake-lock") return `<div class="notice session-wake-notice is-paused" role="status" aria-live="polite"><strong>${status === "active" ? "已回到前台，计时仍暂停" : "屏幕保持已中断，计时已暂停"}</strong><span>${status === "active" ? "屏幕保持已重新请求。准备好后点击顶部“继续”。" : "准备好后点击顶部“继续”；未保持期间的时间不会计入动作或 Session 计时。"}</span></div>`;
+  if (status === "unsupported") return `<div class="notice session-wake-notice is-fallback" role="status" aria-live="polite"><strong>无法保持屏幕常亮</strong><span>当前浏览器不支持屏幕保持。计时仍可手动执行；若页面隐藏或锁屏，回到训练后会暂停并等待你继续。</span></div>`;
+  if (status === "denied") return `<div class="notice session-wake-notice is-fallback" role="status" aria-live="polite"><strong>屏幕保持未获允许</strong><span>应用不能保证屏幕常亮，但“开始动作”和手动计时仍可使用；若页面隐藏或锁屏，回到训练后会暂停并等待你继续。</span></div>`;
+  return "";
+}
+function handleVisibilityChange() {
+  if (!documentIsVisible()) {
+    if (state.sessionDetail?.status === "in_progress" && state.view === "today") {
+      state.wakeLock.status = "hidden";
+      releaseWakeLock();
+      pauseForInterruption("visibility");
+    }
+    return;
+  }
+  if (state.sessionDetail?.status !== "in_progress" || state.view !== "today") return;
+  if (state.timerPaused && state.timerPauseReason === "manual") return render();
+  if (wakeLockSupported()) {
+    state.wakeLock.status = "idle";
+    void requestWakeLock({ force: true });
+  } else state.wakeLock.status = "unsupported";
+  render();
+}
 const calendarStatus = (entry, session) => { if (entry.kind === "rest") return { key: "rest", label: "休息日" }; if (entry.kind === "no_plan") return { key: "no_plan", label: "无计划" }; if (session?.status === "in_progress") return { key: "in_progress", label: "进行中" }; if (session?.status === "completed") return { key: "completed", label: "已完成" }; if (session?.status === "partial") return { key: "partial", label: "未完成" }; if (session?.status === "skipped") return { key: "skipped", label: "已跳过" }; if (entry.is_overdue_unstarted) return { key: "overdue", label: "未开始" }; if (entry.date === state.today?.date) return { key: "today", label: "未开始" }; return { key: "scheduled", label: "未开始" }; };
 const monthStart = (date) => `${date.slice(0, 7)}-01`;
 const shiftMonth = (date, offset) => { const [year, month] = date.slice(0, 7).split("-").map(Number); const shifted = new Date(Date.UTC(year, month - 1 + offset, 1)); return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-01`; };
@@ -71,11 +254,11 @@ function shell(content) {
 }
 
 function render() {
-  if (state.authRequired) { app.innerHTML = loginView(); bind(); syncSessionClock(); return; }
-  if (state.loading) { stopSessionClock(); app.innerHTML = shell(`<section class="loading"><span class="spinner"></span><p>正在读取你的训练状态…</p></section>`); return; }
-  if (state.error) { app.innerHTML = shell(`<section class="error-card"><p>${escapeHtml(state.error)}</p><button class="primary" data-action="refresh">重新读取</button></section>`); bind(); syncSessionClock(); return; }
+  if (state.authRequired) { app.innerHTML = loginView(); bind(); syncSessionClock(); syncWakeLock(); return; }
+  if (state.loading) { stopSessionClock(); app.innerHTML = shell(`<section class="loading"><span class="spinner"></span><p>正在读取你的训练状态…</p></section>`); syncWakeLock(); return; }
+  if (state.error) { app.innerHTML = shell(`<section class="error-card"><p>${escapeHtml(state.error)}</p><button class="primary" data-action="refresh">重新读取</button></section>`); bind(); syncSessionClock(); syncWakeLock(); return; }
   const content = state.view === "today" ? todayView() : state.view === "calendar" ? calendarView() : state.view === "progress" ? progressView() : settingsView();
-  app.innerHTML = shell(content); bind(); syncSessionClock();
+  app.innerHTML = shell(content); bind(); syncSessionClock(); syncWakeLock();
 }
 
 function loginView() {
@@ -83,36 +266,69 @@ function loginView() {
 }
 
 function todayView() {
-  const entry = state.today?.entry; const session = state.today?.session;
+  const entry = state.today?.entry; const session = state.session || state.today?.session;
   if (!entry || entry.kind === "no_plan") return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today?.date || "今天"}</p><h1>今天没有计划</h1><p class="muted">可以在设置中提交未来训练计划。</p></div></section>`;
   if (entry.kind === "rest") return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today.date} · ${state.today.timezone}</p><span class="status-dot rest"></span><h1>休息日</h1><p class="muted">今天不安排训练。</p><div class="quiet-card">今天把恢复留给自己。</div></div></section>`;
   if (session) return state.correction && state.todayDetail ? correctionView(state.todayDetail, entry) : sessionView(session, entry);
   const plan = entry.prescription;
-  return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today.date} · ${state.today.timezone}</p><h1>${escapeHtml(entry.title)}</h1><p class="muted">约 ${entry.estimated_duration_min} 分钟 · 只记录今天的训练</p><div class="hero-actions"><button class="primary" data-action="start">开始训练</button><button class="secondary" data-action="skip">跳过今天</button></div><section class="today-plan calendar-prescription" aria-label="今日训练计划"><div class="today-plan-head"><h2>今日训练计划</h2><span>${entry.module_count} 个模块</span></div>${plan ? renderCalendarPrescription(plan) : `<p class="muted">今天的训练计划暂时无法读取。</p>`}</section></div></section>`;
+  return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today.date} · ${state.today.timezone}</p><h1>${escapeHtml(entry.title)}</h1><p class="muted">约 ${entry.estimated_duration_min} 分钟 · 只记录今天的训练</p><div class="hero-actions"><button class="primary" data-action="start" ${mutationDisabled("start")}>${mutationLabel("start", "开始训练")}</button><button class="secondary" data-action="skip">跳过今天</button></div>${sessionMutationNotice("start")}<section class="today-plan calendar-prescription" aria-label="今日训练计划"><div class="today-plan-head"><h2>今日训练计划</h2><span>${entry.module_count} 个模块</span></div>${plan ? renderCalendarPrescription(plan) : `<p class="muted">今天的训练计划暂时无法读取。</p>`}</section></div></section>`;
+}
+
+function canonicalDurationSeconds(target) {
+  if (target?.metric !== "duration_sec") return null;
+  return Number.isInteger(target.max) && target.max > 0 ? target.max : null;
+}
+
+function timedActionFor(item) {
+  return state.timedAction.itemKey === item?.completion_item_key ? state.timedAction : blankTimedAction();
+}
+
+function formatActionRemaining(seconds) { if (seconds == null) return "—"; return String(Math.max(0, Math.ceil(Number(seconds) || 0))).padStart(2, "0"); }
+
+function timedActionView(item, context, result) {
+  const targetSec = canonicalDurationSeconds(item.target);
+  const timer = timedActionFor(item);
+  const isComplete = timer.phase === "complete";
+  const isRunning = timer.phase === "preparing" || timer.phase === "active";
+  const pausedStatus = state.timerPauseReason === "visibility" ? "页面已离开前台 · 计时已暂停 · 回到前台后点击顶部继续" : state.timerPauseReason === "wake-lock" ? "屏幕保持已中断 · 计时已暂停 · 点击顶部继续" : "已暂停 · 点击顶部继续";
+  const status = state.timerPaused ? pausedStatus : timer.phase === "preparing" ? "准备中 · 5 秒后开始" : timer.phase === "active" ? "动作进行中" : isComplete ? "时间到 · 修改实际值后点击完成" : "固定目标 · 点击开始动作";
+  const actionLabel = isComplete ? "动作已结束" : isRunning ? "计时进行中" : "开始动作";
+  const actionDisabled = isRunning || isComplete || state.timerPaused;
+  const actualDraft = state.actualDrafts[item.completion_item_key] ?? result?.actual?.value ?? (isComplete ? targetSec : "");
+  const actualDisabled = !isComplete || isSessionMutationPending("complete");
+  const rirDraft = state.rirDrafts[item.completion_item_key] ?? result?.rir ?? "";
+  const rirField = context.set?.target_rir != null || result?.rir != null ? `<label>RIR<input id="actual-rir" data-completion-key="${item.completion_item_key}" type="number" min="0" max="10" value="${escapeHtml(rirDraft)}" ${actualDisabled ? "disabled" : ""} /></label>` : "";
+  return `<section class="timed-execution" aria-label="固定时长动作"><div class="timed-execution-heading"><span class="timed-execution-label">固定时长</span><span>${targetSec} 秒</span></div><div class="timed-action-state" role="status" aria-live="polite">${escapeHtml(status)}</div><div class="timed-remaining" data-action-remaining aria-live="polite" aria-label="动作剩余时间">${formatActionRemaining(timer.phase === "idle" ? null : timer.remainingSec ?? targetSec)}</div><button class="primary wide timed-start" data-action="start-timed" ${actionDisabled ? "disabled aria-disabled=\"true\"" : ""}>${actionLabel}</button><div class="timed-actual-fields"><label>实际时长（秒）<input id="actual-value" data-completion-key="${item.completion_item_key}" type="number" min="1" value="${escapeHtml(actualDraft)}" placeholder="归零后自动填入" ${actualDisabled ? "disabled" : ""} /></label>${rirField}</div></section>`;
 }
 
 function sessionView(session, entry) {
   const detail = state.sessionDetail;
   const items = detail?.snapshot?.completion_items || [];
-  if (session.status === "skipped") return `<section class="hero"><span class="status-pill skipped">已跳过</span><h1>${escapeHtml(entry.title)}</h1><p class="muted">跳过保留在今天的记录中。你仍可以在今天重新开始。</p><button class="primary" data-action="restart">重新开始训练</button></section>`;
+  if (session.status === "skipped") return `<section class="hero"><span class="status-pill skipped">已跳过</span><h1>${escapeHtml(entry.title)}</h1><p class="muted">跳过保留在今天的记录中。你仍可以在今天重新开始。</p><button class="primary" data-action="restart" ${mutationDisabled("restart")}>${mutationLabel("restart", "重新开始训练")}</button>${sessionMutationNotice("restart")}</section>`;
   if (!detail) return todayProgressView(session, entry, state.todayDetail);
-  if (state.restUntil && state.restNextIndex != null) return restView(detail, items);
+  if ((state.restUntil || state.restRemainingMs != null) && state.restNextIndex != null) return restView(detail, items);
   const item = items[state.focusIndex] || items[0]; const result = detail.completion_results.find((candidate) => candidate.completion_item_key === item?.completion_item_key); const isDone = Boolean(result);
   if (session.status === "completed" || session.status === "partial") {
     if (state.correction) return correctionView(detail, entry);
     return sessionSummaryView(session, entry, detail);
   }
   const context = itemContext(detail, item); const target = focusTarget(item.target); const parts = [`计划：${target}`, focusResistance(context.set?.resistance ?? item.resistance), context.set?.target_rir == null ? null : `RIR ${context.set.target_rir}`, context.set?.rest_after_sec == null ? null : `休息 ${context.set.rest_after_sec} 秒`].filter(Boolean); const actual = result?.actual;
+  const timedDuration = canonicalDurationSeconds(item.target); const isTimed = timedDuration != null; const timedTimer = timedActionFor(item);
   const actualRows = `<div class="actual-row"><span>${item.target.metric === "reps" ? "次数" : "时长"}</span><strong>${actual ? `${target} / <em>${formatActual(actual)}</em>` : target}</strong></div>${context.set?.resistance ? `<div class="actual-row"><span>重量</span><strong>${focusResistance(context.set.resistance)}</strong></div>` : ""}${context.set?.target_rir != null || result?.rir != null ? `<div class="actual-row"><span>RIR</span><strong>${result?.rir == null ? context.set?.target_rir ?? "—" : `<em>${result.rir}</em>`}</strong></div>` : ""}`;
   const feedbackText = state.feedbackDraft[item.exercise_occurrence_key] ?? detail.exercise_feedback.find((entry) => entry.exercise_occurrence_key === item.exercise_occurrence_key)?.text ?? "";
   const feedback = `<textarea class="focus-feedback-input" id="feedback-${item.exercise_occurrence_key}" data-exercise-key="${item.exercise_occurrence_key}" maxlength="500" placeholder="记录感受">${escapeHtml(feedbackText)}</textarea>`;
-  return `${sessionHeader(detail)}${progressDisclosure(detail, items)}<div class="focus-workout-scroll"><section class="focus-stage"><span class="focus-count">${state.focusIndex + 1} / ${items.length} · ${escapeHtml(context.block?.title || (item.target.metric === "reps" ? "力量" : "训练"))}</span><h2>${escapeHtml(itemLabel(detail, item))}</h2><p class="focus-prescription">${escapeHtml(parts.join(" · "))}</p><div class="actual-panel">${actualRows}</div><div class="feedback-area">${feedback}</div><div class="focus-actions"><button class="primary wide" data-action="complete" ${isDone ? "disabled" : ""}>${isDone ? "已完成" : "完成"}</button><div class="focus-secondary"><button class="secondary" data-action="previous" ${state.focusIndex === 0 ? "disabled" : ""}>上一项</button><button class="secondary" data-action="toggle-adjust">${state.adjust ? "收起调整" : "调整"}</button><button class="secondary" data-action="next" ${state.focusIndex >= items.length - 1 ? "disabled" : ""}>下一项</button></div>${state.adjust ? `<div class="adjust-panel"><label>实际 ${item?.target?.metric === "reps" ? "次数" : "秒数"}<input id="actual-value" type="number" min="1" value="${actual?.value || item?.target?.min || 1}" /></label><label>RIR<input id="actual-rir" type="number" min="0" max="10" value="${result?.rir ?? ""}" /></label><button class="primary wide" data-action="save-adjust">保存并完成</button></div>` : ""}</div></section></div>${sessionFooter(detail)}${state.endSheet ? endSheet(detail) : ""}`;
+  const actualDraft = state.actualDrafts[item.completion_item_key] ?? actual?.value ?? item?.target?.min ?? 1;
+  const rirDraft = state.rirDrafts[item.completion_item_key] ?? result?.rir ?? "";
+  const completeBlocked = isDone || isSessionMutationPending("complete") || (isTimed && timedTimer.phase !== "complete");
+  const adjustButton = isTimed ? "" : `<button class="secondary" data-action="toggle-adjust">${state.adjust ? "收起调整" : "调整"}</button>`;
+  const adjustPanel = isTimed ? "" : state.adjust ? `<div class="adjust-panel"><label>实际 ${item?.target?.metric === "reps" ? "次数" : "秒数"}<input id="actual-value" data-completion-key="${item.completion_item_key}" type="number" min="1" value="${escapeHtml(actualDraft)}" /></label><label>RIR<input id="actual-rir" data-completion-key="${item.completion_item_key}" type="number" min="0" max="10" value="${escapeHtml(rirDraft)}" /></label><button class="primary wide" data-action="save-adjust" ${mutationDisabled("complete")}>${mutationLabel("complete", "保存并完成")}</button></div>` : "";
+  return `${sessionHeader(detail)}${progressDisclosure(detail, items)}${wakeLockNotice()}<div class="focus-workout-scroll"><section class="focus-stage"><span class="focus-count">${state.focusIndex + 1} / ${items.length} · ${escapeHtml(context.block?.title || (item.target.metric === "reps" ? "力量" : "训练"))}</span><h2>${escapeHtml(itemLabel(detail, item))}</h2><p class="focus-prescription">${escapeHtml(parts.join(" · "))}</p>${isTimed ? timedActionView(item, context, result) : ""}<div class="actual-panel">${actualRows}</div><div class="feedback-area">${feedback}</div><div class="focus-actions"><button class="primary wide" data-action="complete" ${completeBlocked ? "disabled" : ""} ${isSessionMutationPending("complete") ? 'aria-disabled="true" aria-busy="true"' : ""}>${isDone ? "已完成" : mutationLabel("complete", "完成")}</button><div class="focus-secondary ${isTimed ? "is-timed" : ""}"><button class="secondary" data-action="previous" ${state.focusIndex === 0 ? "disabled" : ""}>上一项</button>${adjustButton}<button class="secondary" data-action="next" ${state.focusIndex >= items.length - 1 ? "disabled" : ""}>下一项</button></div>${adjustPanel}${sessionMutationNotice("complete")}</div></section></div>${sessionFooter(detail)}${state.endSheet ? endSheet(detail) : ""}`;
 }
 
 function restView(detail, items) {
   const next = items[state.restNextIndex] || items[state.focusIndex];
   const context = itemContext(detail, next);
-  return `${sessionHeader(detail, false)}${progressDisclosure(detail, items)}<section class="rest-screen"><span class="rest-label">组间休息</span><h2>放松，准备下一项</h2><div class="rest-time" data-rest-remaining aria-live="polite">${formatRestRemaining()}</div><div class="next-context"><span>接下来</span><strong>${escapeHtml(itemLabel(detail, next))}</strong><small>${escapeHtml(focusTarget(next.target))}</small></div><button class="secondary" data-action="skip-rest">跳过休息</button></section>${sessionFooter(detail, false)}`;
+  return `${sessionHeader(detail, false)}${progressDisclosure(detail, items)}${wakeLockNotice()}<section class="rest-screen"><span class="rest-label">组间休息</span><h2>放松，准备下一项</h2><div class="rest-time" data-rest-remaining aria-live="polite" aria-label="休息剩余时间">${formatRestRemaining()}</div><div class="next-context"><span>接下来</span><strong>${escapeHtml(itemLabel(detail, next))}</strong><small>${escapeHtml(focusTarget(next.target))}</small></div><button class="secondary" data-action="skip-rest">跳过休息</button></section>${sessionFooter(detail, false)}`;
 }
 
 function sessionSummaryView(session, entry, detail) {
@@ -124,7 +340,7 @@ function sessionSummaryView(session, entry, detail) {
     return `<div class="session-item-row ${result ? "is-complete" : "is-unfinished"}"><span class="session-item-index">${result ? "✓" : index + 1}</span><div class="session-item-main"><strong>${escapeHtml(itemLabel(detail, item))}</strong><small>计划：${escapeHtml(focusTarget(item.target))} · ${escapeHtml(actual)}${result?.rir == null ? "" : ` · RIR ${result.rir}`}</small></div><span class="session-item-status">${result ? "已完成" : "未完成"}</span></div>`;
   }).join("");
   const feedback = (detail.exercise_feedback || []).filter((item) => item.text).map((item) => `<p><strong>${escapeHtml(exerciseName(detail, { exercise_occurrence_key: item.exercise_occurrence_key }))}</strong>${escapeHtml(item.text)}</p>`).join("");
-  return `<section class="session-summary-page"><section class="session-summary-hero"><span class="status-pill ${session.status}">${session.status === "completed" ? "已完成" : "部分完成"}</span><h1>${escapeHtml(entry.title)}</h1><div class="metric-large">${pct(session.completion_fraction)}</div><p class="muted">训练时长 ${session.training_duration_sec} 秒${session.session_rpe == null ? "" : ` · RPE ${session.session_rpe}`}</p></section><section class="session-summary-card"><div class="session-summary-heading"><h2>训练项目</h2><span>${detail.completion_results.length} / ${items.length} 项完成</span></div>${rows}</section>${feedback ? `<section class="session-summary-feedback"><h2>动作反馈</h2>${feedback}</section>` : ""}<div class="hero-actions">${session.status === "partial" ? `<button class="primary" data-action="continue">继续训练</button>` : ""}<button class="secondary" data-action="edit-session">校正记录</button></div></section>`;
+  return `<section class="session-summary-page"><section class="session-summary-hero"><span class="status-pill ${session.status}">${session.status === "completed" ? "已完成" : "部分完成"}</span><h1>${escapeHtml(entry.title)}</h1><div class="metric-large">${pct(session.completion_fraction)}</div><p class="muted">训练时长 ${session.training_duration_sec} 秒${session.session_rpe == null ? "" : ` · RPE ${session.session_rpe}`}</p></section><section class="session-summary-card"><div class="session-summary-heading"><h2>训练项目</h2><span>${detail.completion_results.length} / ${items.length} 项完成</span></div>${rows}</section>${feedback ? `<section class="session-summary-feedback"><h2>动作反馈</h2>${feedback}</section>` : ""}<div class="hero-actions">${session.status === "partial" ? `<button class="primary" data-action="continue" ${mutationDisabled("continue")}>${mutationLabel("continue", "继续训练")}</button>${sessionMutationNotice("continue")}` : ""}<button class="secondary" data-action="edit-session">校正记录</button></div></section>`;
 }
 
 function todayProgressView(session, entry, detail) {
@@ -139,48 +355,156 @@ function todayProgressView(session, entry, detail) {
     const actual = result?.actual ? `实际：${formatActual(result.actual)}` : "未完成";
     return `<div class="today-item-row ${result ? "is-complete" : "is-unfinished"}"><span class="today-item-index">${result ? "✓" : index + 1}</span><span class="today-item-main"><strong>${escapeHtml(itemLabel(detail, item))}</strong><small>计划：${escapeHtml(plan)} · ${escapeHtml(actual)}${result?.rir == null ? "" : ` · RIR ${result.rir}`}</small></span><span class="today-item-status">${result ? "已完成" : "未完成"}</span></div>`;
   }).join("") : "";
-  const action = session.status === "in_progress" || session.status === "partial" ? `<button class="primary wide" data-action="${session.status === "partial" ? "continue" : "open-session"}">继续训练</button>` : `<button class="secondary wide" data-action="open-session">查看训练记录</button>`;
+  const actionName = session.status === "partial" ? "continue" : "open-session";
+  const action = session.status === "in_progress" || session.status === "partial" ? `<button class="primary wide" data-action="${actionName}" ${mutationDisabled(actionName)}>${mutationLabel(actionName, "继续训练")}</button>${actionName === "continue" ? sessionMutationNotice("continue") : ""}` : `<button class="secondary wide" data-action="open-session">查看训练记录</button>`;
   return `<section class="today-page"><div class="today-content"><p class="eyebrow">${state.today?.date || "今天"} · ${state.today?.timezone || ""}</p><h1>${escapeHtml(entry.title)}</h1><section class="today-progress-card"><div class="today-progress-head"><strong>${completed.length} / ${items.length || Math.round(1 / (fraction || 1))} 项完成</strong><span>${pct(fraction)}</span></div><div class="progress-line"><span style="width:${pct(fraction)}"></span></div>${rows || `<p class="muted">训练记录已保存。</p>`}</section>${action}${session.status === "completed" || session.status === "partial" ? `<button class="text-button wide" data-action="edit-session">校正记录</button>` : ""}</div></section>`;
 }
 
-function sessionHeader(detail, showTimer = true) { const timerAction = showTimer && detail?.status === "in_progress" ? `<button class="session-timer-toggle" data-action="toggle-timer" aria-pressed="${state.timerPaused}">${state.timerPaused ? "继续" : "暂停"}</button>` : `<span aria-hidden="true"></span>`; return `<header class="session-header"><button class="session-header-side" data-action="minimize" aria-label="返回今日">‹</button><strong ${showTimer ? "data-session-elapsed" : ""}>${showTimer ? formatElapsed(detail) : "组间休息"}</strong>${timerAction}</header>`; }
+function sessionMuteControl() { const label = state.muted ? "开启提示音" : "静音提示音"; return `<button class="session-mute-toggle" data-action="toggle-mute" aria-pressed="${state.muted}" aria-label="${label}">${state.muted ? "开启声音" : "静音"}</button>`; }
+function sessionHeader(detail, showTimer = true) { const timerAction = detail?.status === "in_progress" ? `<button class="session-timer-toggle" data-action="toggle-timer" aria-pressed="${state.timerPaused}">${state.timerPaused ? "继续" : "暂停"}</button>` : ""; return `<header class="session-header"><button class="session-header-side" data-action="minimize" aria-label="返回今日">‹</button><strong ${showTimer ? "data-session-elapsed" : ""}>${showTimer ? formatElapsed(detail) : "组间休息"}</strong><div class="session-header-actions">${sessionMuteControl()}${timerAction}</div></header>`; }
 function sessionFooter(detail, showTimer = true) { return `<footer class="session-footer"><strong ${showTimer ? "data-session-elapsed" : ""}>${showTimer ? formatElapsed(detail) : "组间休息"}</strong><button class="secondary" data-action="end">结束训练</button></footer>`; }
 function progressDisclosure(detail, items) { const completed = detail.completion_results.length; const fraction = items.length ? completed / items.length : 0; return `<section class="session-progress"><button class="session-progress-toggle" data-action="toggle-progress" aria-expanded="${state.progressOpen}"><span><strong>${completed} / ${items.length} 完成</strong><span class="progress-line"><span style="width:${pct(fraction)}"></span></span></span><span class="progress-chevron">${state.progressOpen ? "⌃" : "⌄"}</span></button>${state.progressOpen ? `<div class="progress-list focus-progress">${items.map((candidate, index) => { const done = detail.completion_results.some((result) => result.completion_item_key === candidate.completion_item_key); return `<button class="list-row ${index === state.focusIndex ? "active" : ""}" data-action="jump-item" data-index="${index}"><span>${index + 1}. ${escapeHtml(itemLabel(detail, candidate))}</span><span>${done ? "✓" : "○"}</span></button>`; }).join("")}</div>` : ""}</section>`; }
 function itemContext(detail, item) { const block = detail?.snapshot?.blocks?.find((candidate) => candidate.exercises.some((exercise) => exercise.exercise_occurrence_key === item?.exercise_occurrence_key)); const exercise = block?.exercises?.find((candidate) => candidate.exercise_occurrence_key === item?.exercise_occurrence_key); const setIndex = exercise?.sets?.findIndex((set) => set.set_key === item?.set_key) ?? -1; return { block, exercise, set: setIndex >= 0 ? exercise.sets[setIndex] : null, setNumber: setIndex >= 0 ? setIndex + 1 : null }; }
 function itemLabel(detail, item) { const context = itemContext(detail, item); const side = item?.side === "left" ? "左" : item?.side === "right" ? "右" : ""; return `${exerciseName(detail, item)}${context.setNumber ? ` · 第 ${context.setNumber} 组` : ""}${side ? ` · ${side}` : ""}`; }
-function focusTarget(target) { if (!target) return "未指定目标"; const unit = target.metric === "reps" ? "次" : target.metric === "duration_sec" ? "秒" : target.metric; return `${target.min === target.max ? target.min : `${target.min}–${target.max}`} ${unit}`; }
+function focusTarget(target) { if (!target) return "未指定目标"; const fixedDuration = canonicalDurationSeconds(target); if (fixedDuration != null) return `${fixedDuration} 秒`; const unit = target.metric === "reps" ? "次" : target.metric === "duration_sec" ? "秒" : target.metric; return `${target.min === target.max ? target.min : `${target.min}–${target.max}`} ${unit}`; }
 function focusResistance(resistance) { if (!resistance) return ""; if (resistance.mode === "bodyweight") return "自重"; if (resistance.mode === "external_weight") return `${resistance.load_kg ?? "—"} kg${resistance.quantity && resistance.quantity !== 1 ? ` × ${resistance.quantity}` : ""}`; return resistance.mode || "阻力未指定"; }
-function formatElapsed(detail, now = Date.now()) { const seconds = (detail?.training_intervals || []).reduce((total, interval) => { const end = interval.ended_at ? Date.parse(interval.ended_at) : now; return total + Math.max(0, (end - Date.parse(interval.started_at)) / 1000); }, 0); const pausedSeconds = state.timerPausedSec + (state.timerPaused && state.timerPauseStartedAt ? Math.max(0, (now - state.timerPauseStartedAt) / 1000) : 0); const value = Math.max(0, Math.round(seconds - pausedSeconds)); const minutes = Math.floor(value / 60); const secs = value % 60; return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`; }
-function formatRestRemaining() { const seconds = Math.max(0, Math.ceil((state.restUntil - Date.now()) / 1000)); const minutes = Math.floor(seconds / 60); return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`; }
-function stopSessionClock() { if (state.timerHandle) clearInterval(state.timerHandle); state.timerHandle = null; }
+function formatElapsed(detail, now = clockNow()) { const seconds = (detail?.training_intervals || []).reduce((total, interval) => { const end = interval.ended_at ? Date.parse(interval.ended_at) : now; return total + Math.max(0, (end - Date.parse(interval.started_at)) / 1000); }, 0); const pausedSeconds = state.timerPausedSec + (state.timerPaused && state.timerPauseStartedAt ? Math.max(0, (now - state.timerPauseStartedAt) / 1000) : 0); const value = Math.max(0, Math.round(seconds - pausedSeconds)); const minutes = Math.floor(value / 60); const secs = value % 60; return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`; }
+function formatRestRemaining() { const milliseconds = state.restUntil == null ? state.restRemainingMs ?? 0 : Math.max(0, state.restUntil - clockNow()); const seconds = Math.max(0, Math.ceil(milliseconds / 1000)); const minutes = Math.floor(seconds / 60); return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`; }
+function resetTimedAction() { state.timedAction = blankTimedAction(); }
+function clearRestCountdown() { state.restUntil = null; state.restRemainingMs = null; state.restNextIndex = null; state.restLastCueSecond = null; state.restEndCuePlayed = false; }
+function pauseRestCountdown(now = clockNow()) {
+  if (state.restUntil == null) return;
+  state.restRemainingMs = Math.max(0, state.restUntil - now);
+  state.restUntil = null;
+}
+function resumeRestCountdown(now = clockNow()) {
+  if (state.restRemainingMs == null) return;
+  state.restUntil = now + state.restRemainingMs;
+  state.restRemainingMs = null;
+}
+function pauseExecutionTimers(now = clockNow()) { pauseTimedAction(now); pauseRestCountdown(now); }
+function resumeExecutionTimers(now = clockNow()) { resumeTimedAction(now); resumeRestCountdown(now); }
+function playActionCue(kind, value) { if (state.muted) return; try { actionAudio.cue?.(kind, value); } catch {} }
+function emitTempoCues(timer, remainingSec) {
+  while (timer.lastCueSecond > remainingSec) {
+    timer.lastCueSecond -= 1;
+    if (timer.lastCueSecond >= 1) playActionCue(timer.lastCueSecond <= 3 ? "tempo-final" : "tempo", timer.lastCueSecond);
+  }
+}
+function emitRestCues(remainingSec) {
+  while (state.restLastCueSecond != null && state.restLastCueSecond > remainingSec) {
+    state.restLastCueSecond -= 1;
+    if (state.restLastCueSecond >= 1 && state.restLastCueSecond <= restFinalCueSeconds) playActionCue("rest-final", state.restLastCueSecond);
+  }
+}
+function updateTimedAction(now = clockNow()) {
+  const timer = state.timedAction;
+  if (timer.phase !== "preparing" && timer.phase !== "active") return false;
+  let shouldRender = false;
+  if (timer.phase === "preparing") {
+    const remainingMs = Math.max(0, (timer.deadlineMs ?? now) - now);
+    timer.remainingMs = remainingMs;
+    timer.remainingSec = remainingMs === 0 ? 0 : Math.ceil(remainingMs / 1000);
+    if (timer.deadlineMs == null || now < timer.deadlineMs) return false;
+    timer.phase = "active";
+    timer.deadlineMs += timer.targetSec * 1000;
+    timer.remainingMs = timer.targetSec * 1000;
+    timer.remainingSec = timer.targetSec;
+    timer.lastCueSecond = timer.targetSec + 1;
+    shouldRender = true;
+  }
+  if (timer.phase === "active") {
+    const remainingMs = Math.max(0, (timer.deadlineMs ?? now) - now);
+    const remainingSec = remainingMs === 0 ? 0 : Math.ceil(remainingMs / 1000);
+    timer.remainingMs = remainingMs;
+    timer.remainingSec = remainingSec;
+    emitTempoCues(timer, remainingSec);
+    if (remainingSec === 0) {
+      timer.phase = "complete";
+      timer.deadlineMs = null;
+      timer.lastCueSecond = null;
+      state.actualDrafts[timer.itemKey] = String(timer.targetSec);
+      playActionCue("complete", 0);
+      shouldRender = true;
+    }
+  }
+  return shouldRender;
+}
+function updateActionRemaining() { const element = document.querySelector("[data-action-remaining]"); if (element) element.textContent = formatActionRemaining(state.timedAction.remainingSec); }
+function startTimedAction() {
+  const detail = state.sessionDetail;
+  const item = detail?.snapshot?.completion_items?.[state.focusIndex];
+  const targetSec = canonicalDurationSeconds(item?.target);
+  if (!detail || !item || targetSec == null || state.timerPaused || state.timedAction.phase !== "idle") return;
+  const now = clockNow();
+  state.timedAction = { itemKey: item.completion_item_key, phase: "preparing", targetSec, deadlineMs: now + preparationDurationSec * 1000, remainingMs: preparationDurationSec * 1000, remainingSec: preparationDurationSec, lastCueSecond: null };
+  try { actionAudio.activate?.(); } catch {}
+  playActionCue("prepare", preparationDurationSec);
+  render();
+}
+function pauseTimedAction(now = clockNow()) {
+  updateTimedAction(now);
+  const timer = state.timedAction;
+  if ((timer.phase === "preparing" || timer.phase === "active") && timer.deadlineMs != null) {
+    timer.remainingMs = Math.max(0, timer.deadlineMs - now);
+    timer.remainingSec = timer.remainingMs === 0 ? 0 : Math.ceil(timer.remainingMs / 1000);
+    timer.deadlineMs = null;
+  }
+}
+function resumeTimedAction(now = clockNow()) {
+  const timer = state.timedAction;
+  if ((timer.phase === "preparing" || timer.phase === "active") && timer.remainingMs > 0) timer.deadlineMs = now + timer.remainingMs;
+}
+function stopSessionClock() { if (state.timerHandle) clearScheduledInterval(state.timerHandle); state.timerHandle = null; }
 function updateSessionClock() {
   if (!state.sessionDetail || state.sessionDetail.status !== "in_progress" || state.view !== "today") return stopSessionClock();
+  const now = clockNow();
   if (state.restUntil) {
-    const remaining = Math.max(0, Math.ceil((state.restUntil - Date.now()) / 1000));
+    const remaining = Math.max(0, Math.ceil((state.restUntil - now) / 1000));
     const element = document.querySelector("[data-rest-remaining]");
     if (element) element.textContent = formatRestRemaining();
-    if (remaining === 0) { state.focusIndex = state.restNextIndex ?? state.focusIndex; state.restUntil = null; state.restNextIndex = null; render(); }
+    emitRestCues(remaining);
+    if (remaining === 0) {
+      if (!state.restEndCuePlayed) { state.restEndCuePlayed = true; playActionCue("rest-complete", 0); }
+      state.focusIndex = state.restNextIndex ?? state.focusIndex;
+      clearRestCountdown();
+      render();
+    }
     return;
   }
-  const elapsed = formatElapsed(state.sessionDetail);
+  const shouldRender = updateTimedAction(now);
+  updateActionRemaining();
+  const elapsed = formatElapsed(state.sessionDetail, now);
   document.querySelectorAll("[data-session-elapsed]").forEach((element) => { element.textContent = elapsed; });
+  if (shouldRender) render();
 }
 function syncSessionClock() {
   const shouldRun = Boolean(state.sessionDetail?.status === "in_progress" && state.view === "today" && !state.endSheet && !state.timerPaused);
   if (!shouldRun) return stopSessionClock();
-  if (!state.timerHandle) state.timerHandle = setInterval(updateSessionClock, 1000);
+  if (!state.timerHandle) state.timerHandle = scheduleInterval(updateSessionClock, 250);
   updateSessionClock();
 }
 
 function toggleTimer() {
   if (!state.sessionDetail || state.sessionDetail.status !== "in_progress") return;
+  const now = clockNow();
   if (state.timerPaused) {
-    state.timerPausedSec += state.timerPauseStartedAt ? Math.max(0, (Date.now() - state.timerPauseStartedAt) / 1000) : 0;
+    state.timerPausedSec += state.timerPauseStartedAt ? Math.max(0, (now - state.timerPauseStartedAt) / 1000) : 0;
     state.timerPaused = false;
+    const retryWakeLock = state.wakeLock.status === "released";
     state.timerPauseStartedAt = null;
+    state.timerPauseReason = null;
+    if (retryWakeLock) state.wakeLock.status = "idle";
+    resumeExecutionTimers(now);
   } else {
+    pauseExecutionTimers(now);
     state.timerPaused = true;
-    state.timerPauseStartedAt = Date.now();
+    state.timerPauseReason = "manual";
+    state.timerPauseStartedAt = now;
+    if (state.wakeLock.sentinel) {
+      releaseWakeLock();
+      if (state.wakeLock.status === "active" || state.wakeLock.status === "requesting") state.wakeLock.status = "idle";
+    }
   }
   render();
 }
@@ -232,7 +556,7 @@ function renderCalendarPrescription(prescription, detail) {
   return `<p class="muted">${prescription.blocks.length} 个训练模块 · ${prescription.title ? escapeHtml(prescription.title) : ""}</p>${prescription.blocks.map((block, blockIndex) => `<article class="prescription-block"><h4>${escapeHtml(block.title)}</h4>${block.exercises.map((exercise, exerciseIndex) => { const snapshotExercise = snapshotBlocks[blockIndex]?.exercises?.[exerciseIndex]; return `<div class="prescription-exercise"><strong>${escapeHtml(exercise.name)}</strong>${exercise.sets.map((set, index) => { const snapshotSet = snapshotExercise?.sets?.[index]; const actuals = detail && snapshotSet ? (detail.snapshot.completion_items || []).filter((item) => item.set_key === snapshotSet.set_key).map((item) => detail.completion_results.find((result) => result.completion_item_key === item.completion_item_key)?.actual ? `${item.side === "none" ? "" : `${item.side} `}${formatActual(detail.completion_results.find((result) => result.completion_item_key === item.completion_item_key).actual)}` : null).filter(Boolean) : []; const tempo = formatTempo(set.tempo); return `<div class="prescription-set"><span>第 ${index + 1} 组 · ${formatTarget(set.target)}</span><span>${formatResistance(set.resistance)}${tempo ? ` · 节奏 ${tempo}` : ""}${set.rest_after_sec == null ? "" : ` · 休息 ${set.rest_after_sec} 秒`}</span>${detail ? `<small class="${actuals.length ? "actual" : "unfinished"}">${actuals.length ? `实际：${actuals.join("，")}` : "未完成"}</small>` : ""}</div>`; }).join("")}</div>`; }).join("")}</article>`).join("")}`;
 }
 
-function formatTarget(target) { if (!target) return "未指定目标"; const unit = target.metric === "reps" ? "次" : target.metric === "duration_sec" || target.metric === "seconds" ? "秒" : target.metric; const qualifiers = [target.target_rir == null ? null : `RIR ${target.target_rir}`, target.target_rpe == null ? null : `RPE ${target.target_rpe}`, target.target_incline_percent == null ? null : `坡度 ${target.target_incline_percent}%`].filter(Boolean); return `${target.min === target.max ? target.min : `${target.min}–${target.max}`} ${unit}${qualifiers.length ? ` · ${qualifiers.join(" · ")}` : ""}`; }
+function formatTarget(target) { if (!target) return "未指定目标"; const fixedDuration = canonicalDurationSeconds(target); const unit = target.metric === "reps" ? "次" : target.metric === "duration_sec" || target.metric === "seconds" ? "秒" : target.metric; const value = fixedDuration != null ? fixedDuration : target.min === target.max ? target.min : `${target.min}–${target.max}`; const qualifiers = [target.target_rir == null ? null : `RIR ${target.target_rir}`, target.target_rpe == null ? null : `RPE ${target.target_rpe}`, target.target_incline_percent == null ? null : `坡度 ${target.target_incline_percent}%`].filter(Boolean); return `${value} ${unit}${qualifiers.length ? ` · ${qualifiers.join(" · ")}` : ""}`; }
 function formatTempo(tempo) { if (!tempo || typeof tempo !== "object") return ""; return [["eccentric_sec", "离心"], ["bottom_hold_sec", "底部停顿"], ["concentric_sec", "向心"], ["top_hold_sec", "顶部停顿"]].filter(([key]) => tempo[key] != null).map(([key, label]) => `${label} ${escapeHtml(tempo[key])} 秒`).join(" · "); }
 function formatResistance(resistance) { if (!resistance) return "阻力未指定"; if (resistance.mode === "bodyweight") return "自重"; if (resistance.mode === "external_weight") return `${resistance.load_kg ?? "—"} kg × ${resistance.quantity ?? 1}`; return escapeHtml(resistance.mode || "阻力"); }
 function formatActual(actual) { const unit = actual.metric === "reps" ? "次" : actual.metric === "duration_sec" || actual.metric === "seconds" ? "秒" : actual.metric; return `${actual.value} ${unit}`; }
@@ -290,11 +614,15 @@ function bind() {
   const loginForm = app.querySelector("[data-form=login]"); if (loginForm) loginForm.addEventListener("submit", async (event) => { event.preventDefault(); state.authMessage = ""; const values = Object.fromEntries(new FormData(loginForm)); try { await api("/api/auth/login", { method: "POST", body: JSON.stringify(values) }); state.authRequired = false; await refresh(); } catch (error) { state.authMessage = error.data?.error?.message || "邮箱或密码不正确"; render(); } });
   const textarea = app.querySelector("#plan-json"); if (textarea) textarea.addEventListener("input", () => { state.draft = textarea.value; state.planError = null; });
   const focusFeedback = app.querySelector(".focus-feedback-input"); if (focusFeedback) focusFeedback.addEventListener("input", () => { state.feedbackDraft[focusFeedback.dataset.exerciseKey] = focusFeedback.value; });
+  const actualValue = app.querySelector("#actual-value"); if (actualValue) actualValue.addEventListener("input", () => { state.actualDrafts[actualValue.dataset.completionKey] = actualValue.value; });
+  const actualRir = app.querySelector("#actual-rir"); if (actualRir) actualRir.addEventListener("input", () => { state.rirDrafts[actualRir.dataset.completionKey] = actualRir.value; });
   const endNote = app.querySelector("#end-note"); if (endNote) endNote.addEventListener("input", () => { state.endNote = endNote.value; });
   app.querySelectorAll("[data-end-feedback]").forEach((input) => input.addEventListener("input", () => { state.endFeedback[input.dataset.endFeedback] = input.value; }));
 }
 
 async function action(name, value, date) {
+  const mutationAction = name === "save-adjust" ? "complete" : name;
+  if (sessionMutationActions.has(mutationAction) && state.sessionMutation.pending) return;
   try {
     if (name === "refresh") return refresh(); if (name === "logout") { await api("/api/auth/logout", { method: "POST" }); state.authRequired = true; state.me = null; state.share = null; state.agentAccess = null; state.agentAccessToken = null; return render(); } if (name === "settings") { state.view = "settings"; await Promise.all([loadMe(), loadShare(), loadAgentAccess()]); return render(); }
     if (name === "calendar-retry") return loadCalendarWeek(state.calendar.from || initialCalendarWeek(), state.calendar.selectedDate || state.today.date);
@@ -303,10 +631,28 @@ async function action(name, value, date) {
     if (name === "calendar-select") return loadCalendarDay(date);
     if (name === "progress-range") return loadProgress(value);
     if (name === "calendar-correct") { state.correction = true; return render(); }
-    if (name === "start" || name === "skip") { const date = state.today.date; const body = name === "skip" ? { skip_reason: null } : {}; const result = await api(`/api/private/scheduled-workouts/${date}/${name}`, { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify(body) }); state.session = result; await openSession(result.session_key); return; }
-    if (name === "open-session" || name === "restart") { if (name === "restart") { const result = await api(`/api/private/sessions/${state.session.session_key}/restart`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" }); state.session = result; } await openSession(state.session.session_key); return; }
-    if (name === "continue") { const result = await api(`/api/private/sessions/${state.session.session_key}/continue`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" }); state.session = result; await openSession(result.session_key); return; }
-    if (name === "complete" || name === "save-adjust") return completeCurrent(); if (name === "previous") { state.focusIndex = Math.max(0, state.focusIndex - 1); state.adjust = false; return render(); } if (name === "next") { const max = state.sessionDetail?.snapshot?.completion_items?.length - 1 || 0; state.focusIndex = Math.min(max, state.focusIndex + 1); state.adjust = false; return render(); } if (name === "jump-item") { state.focusIndex = Number(value); state.progressOpen = false; state.adjust = false; state.restUntil = null; state.restNextIndex = null; return render(); } if (name === "toggle-adjust") { state.adjust = !state.adjust; return render(); } if (name === "toggle-progress") { state.progressOpen = !state.progressOpen; return render(); } if (name === "toggle-timer") { toggleTimer(); return; } if (name === "minimize") { stopSessionClock(); state.sessionDetail = null; state.progressOpen = false; state.adjust = false; state.feedbackOpen = null; state.restUntil = null; state.restNextIndex = null; state.endSheet = false; state.timerPaused = false; state.timerPauseStartedAt = null; state.timerPausedSec = 0; return refresh(); } if (name === "skip-rest") { state.focusIndex = state.restNextIndex ?? state.focusIndex; state.restUntil = null; state.restNextIndex = null; return render(); } if (name === "open-feedback") { state.feedbackOpen = value || null; return render(); } if (name === "close-feedback") { state.feedbackOpen = null; return render(); }
+    if (name === "start") {
+      if (!beginSessionMutation("start")) return;
+      const result = await api(`/api/private/scheduled-workouts/${state.today.date}/start`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
+      showSession(result);
+      return;
+    }
+    if (name === "skip") { const result = await api(`/api/private/scheduled-workouts/${state.today.date}/skip`, { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify({ skip_reason: null }) }); state.session = result; await openSession(result.session_key); return; }
+    if (name === "restart") {
+      if (!beginSessionMutation("restart")) return;
+      const result = await api(`/api/private/sessions/${state.session.session_key}/restart`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
+      showSession(result);
+      return;
+    }
+    if (name === "open-session") return openSession(state.session.session_key);
+    if (name === "continue") {
+      if (!beginSessionMutation("continue")) return;
+      const result = await api(`/api/private/sessions/${state.session.session_key}/continue`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
+      showSession(result);
+      return;
+    }
+    if (name === "start-timed") { startTimedAction(); return; }
+    if (name === "complete" || name === "save-adjust") return await completeCurrent(); if (name === "previous") { resetTimedAction(); state.focusIndex = Math.max(0, state.focusIndex - 1); state.adjust = false; return render(); } if (name === "next") { resetTimedAction(); const max = state.sessionDetail?.snapshot?.completion_items?.length - 1 || 0; state.focusIndex = Math.min(max, state.focusIndex + 1); state.adjust = false; return render(); } if (name === "jump-item") { resetTimedAction(); state.focusIndex = Number(value); state.progressOpen = false; state.adjust = false; clearRestCountdown(); return render(); } if (name === "toggle-adjust") { state.adjust = !state.adjust; return render(); } if (name === "toggle-progress") { state.progressOpen = !state.progressOpen; return render(); } if (name === "toggle-timer") { toggleTimer(); return; } if (name === "toggle-mute") { state.muted = !state.muted; return render(); } if (name === "minimize") { stopSessionClock(); resetTimedAction(); state.sessionDetail = null; state.progressOpen = false; state.adjust = false; state.feedbackOpen = null; clearRestCountdown(); state.endSheet = false; state.timerPaused = false; state.timerPauseStartedAt = null; state.timerPausedSec = 0; return refresh(); } if (name === "skip-rest") { resetTimedAction(); state.focusIndex = state.restNextIndex ?? state.focusIndex; clearRestCountdown(); return render(); } if (name === "open-feedback") { state.feedbackOpen = value || null; return render(); } if (name === "close-feedback") { state.feedbackOpen = null; return render(); }
     if (name === "end") { beginEndSheet(); return render(); } if (name === "set-end-rpe") { state.endRpe = Number(value); return render(); } if (name === "save-end") return endCurrent(); if (name === "cancel-end") { state.endSheet = false; return render(); } if (name === "edit-session") { state.correction = true; return render(); } if (name === "cancel-correction") { state.correction = false; return render(); } if (name === "save-correction") return saveCorrection(); if (name === "open-progress-list") { state.focusIndex = 0; state.progressOpen = true; return render(); }
     if (name === "close-exercise") { state.exercise = null; return render(); }
     if (name === "open-plan-sheet") { state.sheet = true; state.preview = null; state.error = null; state.planError = null; return render(); } if (name === "copy-current-plan") return copyCurrentPlan(); if (name === "close-sheet") { state.sheet = false; state.preview = null; state.planError = null; return render(); }
@@ -318,7 +664,11 @@ async function action(name, value, date) {
     if (name === "create-agent-token" || name === "rotate-agent-token") { const result = await api("/api/private/agent-access", { method: "POST", body: "{}" }); state.agentAccess = { active: true, created_at: result.created_at, rotated_at: result.rotated_at, revoked_at: null }; state.agentAccessToken = result.token; state.message = name === "create-agent-token" ? "Agent Token 已创建，请立即保存" : "Agent Token 已重新生成，旧 Token 已失效"; return render(); }
     if (name === "revoke-agent-token") { const result = await api("/api/private/agent-access", { method: "DELETE" }); state.agentAccess = { active: false, created_at: state.agentAccess?.created_at ?? null, rotated_at: state.agentAccess?.rotated_at ?? null, revoked_at: new Date().toISOString() }; state.agentAccessToken = null; state.message = result.revoked ? "Agent Token 已撤销" : "没有启用的 Agent Token"; return render(); }
     if (name === "copy-agent-token") { let copied = false; try { if (state.agentAccessToken && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(state.agentAccessToken); copied = true; } } catch {} state.message = copied ? "Agent Token 已复制，请妥善保存" : "请复制上方显示的 Agent Token"; return render(); }
-  } catch (error) { state.error = error.data?.error?.message || error.message; render(); }
+  } catch (error) {
+    if (sessionMutationActions.has(mutationAction) && state.sessionMutation.action === mutationAction) return failSessionMutation(mutationAction, error);
+    state.error = error.data?.error?.message || error.message;
+    render();
+  }
 }
 
 function beginEndSheet() {
@@ -328,25 +678,41 @@ function beginEndSheet() {
   state.endNote = detail?.note || "";
   state.endFeedback = Object.fromEntries((detail?.exercise_feedback || []).map((item) => [item.exercise_occurrence_key, item.text]));
 }
-async function openSession(sessionKey, requestedIndex = null, options = {}) {
-  state.sessionDetail = await api(`/api/private/sessions/${sessionKey}`);
-  state.session = state.sessionDetail;
+function showSession(detail, requestedIndex = null, options = {}) {
+  clearSessionMutation();
+  resetTimedAction();
+  state.sessionDetail = detail;
+  state.todayDetail = detail;
+  state.session = detail;
+  if (state.today) state.today.session = detail;
   state.timerPaused = false;
+  state.timerPauseReason = null;
   state.timerPauseStartedAt = null;
   state.timerPausedSec = 0;
-  const items = state.sessionDetail.snapshot?.completion_items || [];
-  const firstIncomplete = items.findIndex((item) => !state.sessionDetail.completion_results.some((result) => result.completion_item_key === item.completion_item_key));
+  const items = detail.snapshot?.completion_items || [];
+  const savedKeys = new Set((detail.completion_results || []).map((result) => result.completion_item_key));
+  state.actualDrafts = Object.fromEntries(Object.entries(state.actualDrafts).filter(([completionItemKey]) => !savedKeys.has(completionItemKey)));
+  state.rirDrafts = Object.fromEntries(Object.entries(state.rirDrafts).filter(([completionItemKey]) => !savedKeys.has(completionItemKey)));
+  const firstIncomplete = items.findIndex((item) => !savedKeys.has(item.completion_item_key));
   state.focusIndex = requestedIndex == null ? (firstIncomplete >= 0 ? firstIncomplete : 0) : Math.max(0, Math.min(requestedIndex, Math.max(0, items.length - 1)));
   state.progressOpen = false;
   state.adjust = false;
   state.feedbackOpen = null;
-  state.feedbackDraft = Object.fromEntries((state.sessionDetail.exercise_feedback || []).map((item) => [item.exercise_occurrence_key, item.text]));
-  state.restUntil = options.restSeconds ? Date.now() + options.restSeconds * 1000 : null;
-  state.restNextIndex = options.restSeconds ? options.nextIndex : null;
+  state.feedbackDraft = Object.fromEntries((detail.exercise_feedback || []).map((item) => [item.exercise_occurrence_key, item.text]));
+  const restSeconds = Number(options.restSeconds) || 0;
+  state.restUntil = restSeconds > 0 ? clockNow() + restSeconds * 1000 : null;
+  state.restRemainingMs = restSeconds > 0 ? restSeconds * 1000 : null;
+  state.restNextIndex = restSeconds > 0 ? options.nextIndex : null;
+  state.restLastCueSecond = restSeconds > 0 ? restSeconds + 1 : null;
+  state.restEndCuePlayed = false;
   state.endSheet = Boolean(options.openEnd);
   if (state.endSheet) beginEndSheet();
   state.view = "today";
   render();
+}
+async function openSession(sessionKey, requestedIndex = null, options = {}) {
+  const detail = await api(`/api/private/sessions/${sessionKey}`);
+  showSession(detail, requestedIndex, options);
 }
 async function copyShare(message) { let copied = false; try { if (state.share?.url && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(state.share.url); copied = true; } } catch {} state.message = copied ? message : "分享链接已准备好，请复制下方链接"; return render(); }
 async function openExercise(exerciseKey) { try { state.exercise = await api(`/api/private/exercises/${encodeURIComponent(exerciseKey)}?preset=12w`); state.view = "progress"; render(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } }
@@ -355,19 +721,29 @@ async function completeCurrent() {
   const detail = state.sessionDetail;
   const item = detail?.snapshot?.completion_items?.[state.focusIndex];
   if (!detail || !item) return;
+  const timedTarget = canonicalDurationSeconds(item.target);
+  if (timedTarget != null && (state.timedAction.itemKey !== item.completion_item_key || state.timedAction.phase !== "complete")) return;
   const currentIndex = state.focusIndex;
+  const restSeconds = itemContext(detail, item).set?.rest_after_sec || 0;
   const existing = detail.completion_results.filter((result) => result.completion_item_key !== item.completion_item_key);
-  const value = Number(document.querySelector("#actual-value")?.value || item.target.min);
-  const rirInput = document.querySelector("#actual-rir")?.value;
+  const actualInput = document.querySelector("#actual-value");
+  const rawValue = actualInput?.value || state.actualDrafts[item.completion_item_key] || String(canonicalDurationSeconds(item.target) ?? item.target.min ?? 1);
+  const rirInput = document.querySelector("#actual-rir")?.value ?? state.rirDrafts[item.completion_item_key] ?? "";
+  state.actualDrafts[item.completion_item_key] = String(rawValue);
+  state.rirDrafts[item.completion_item_key] = String(rirInput);
   const feedbackInput = document.querySelector(".focus-feedback-input");
   if (feedbackInput) state.feedbackDraft[feedbackInput.dataset.exerciseKey] = feedbackInput.value;
   const exerciseFeedback = Object.entries(state.feedbackDraft).map(([exercise_occurrence_key, text]) => ({ exercise_occurrence_key, text: text.trim() })).filter((item) => item.text);
-  const result = { completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value }, resistance: item.resistance, rir: rirInput === "" || rirInput == null ? null : Number(rirInput), completed_at: new Date().toISOString() };
-  await api(`/api/private/sessions/${detail.session_key}/record`, { method: "PUT", body: JSON.stringify({ record_schema_version: 1, completion_results: [...existing, result], training_intervals: detail.training_intervals, session_rpe: null, note: detail.note, exercise_feedback: exerciseFeedback, skip_reason: null }) });
-  const nextIndex = detail.snapshot.completion_items.findIndex((candidate, index) => index > currentIndex && ![...existing, result].some((saved) => saved.completion_item_key === candidate.completion_item_key));
-  const fallbackIndex = nextIndex >= 0 ? nextIndex : detail.snapshot.completion_items.findIndex((candidate) => ![...existing, result].some((saved) => saved.completion_item_key === candidate.completion_item_key));
-  const restSeconds = itemContext(detail, item).set?.rest_after_sec || 0;
-  await openSession(detail.session_key, fallbackIndex >= 0 ? fallbackIndex : 0, { restSeconds: fallbackIndex >= 0 ? restSeconds : 0, nextIndex: fallbackIndex >= 0 ? fallbackIndex : null, openEnd: fallbackIndex < 0 });
+  const result = { completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: Number(rawValue) }, resistance: item.resistance, rir: rirInput === "" || rirInput == null ? null : Number(rirInput), completed_at: new Date().toISOString() };
+  if (!beginSessionMutation("complete")) return;
+  if (restSeconds > 0) {
+    try { actionAudio.activate?.(); } catch {}
+  }
+  const updated = await api(`/api/private/sessions/${detail.session_key}/record`, { method: "PUT", body: JSON.stringify({ record_schema_version: 1, completion_results: [...existing, result], training_intervals: detail.training_intervals, session_rpe: null, note: detail.note, exercise_feedback: exerciseFeedback, skip_reason: null }) });
+  const savedKeys = new Set(updated.completion_results.map((saved) => saved.completion_item_key));
+  const nextIndex = updated.snapshot.completion_items.findIndex((candidate, index) => index > currentIndex && !savedKeys.has(candidate.completion_item_key));
+  const fallbackIndex = nextIndex >= 0 ? nextIndex : updated.snapshot.completion_items.findIndex((candidate) => !savedKeys.has(candidate.completion_item_key));
+  showSession(updated, fallbackIndex >= 0 ? fallbackIndex : 0, { restSeconds: fallbackIndex >= 0 ? restSeconds : 0, nextIndex: fallbackIndex >= 0 ? fallbackIndex : null, openEnd: fallbackIndex < 0 });
 }
 async function endCurrent() {
   const detail = state.sessionDetail;
@@ -377,10 +753,11 @@ async function endCurrent() {
   const feedback = Object.entries(state.endFeedback).map(([exercise_occurrence_key, text]) => ({ exercise_occurrence_key, text: text.trim() })).filter((item) => item.text);
   const record = { record_schema_version: 1, completion_results: detail.completion_results, training_intervals: detail.training_intervals, session_rpe: Number.isInteger(state.endRpe) ? state.endRpe : null, note: state.endNote.trim() || null, exercise_feedback: feedback, skip_reason: null };
   const result = await api(`/api/private/sessions/${detail.session_key}/end`, { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify({ record, ended_at: new Date().toISOString() }) });
-  stopSessionClock(); state.session = result; state.sessionDetail = null; state.todayDetail = null; state.endSheet = false; state.restUntil = null; state.restNextIndex = null; await refresh();
+  stopSessionClock(); releaseWakeLock(); state.session = result; state.sessionDetail = null; state.todayDetail = null; state.endSheet = false; state.timerPauseReason = null; clearRestCountdown(); await refresh();
 }
 async function saveCorrection() { const detail = state.view === "calendar" ? state.calendarDay?.session : state.sessionDetail; if (!detail) return; const isSkipped = detail.status === "skipped"; const correctionTimestamp = detail.training_intervals.at(-1)?.ended_at || detail.updated_at; const completion_results = isSkipped ? [] : detail.snapshot.completion_items.map((item) => { const value = document.querySelector(`#correction-value-${item.completion_item_key}`)?.value; if (!value) return null; const rir = document.querySelector(`#correction-rir-${item.completion_item_key}`)?.value; const existing = detail.completion_results.find((result) => result.completion_item_key === item.completion_item_key); return { completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: Number(value) }, resistance: item.resistance, rir: rir === "" || rir == null ? null : Number(rir), completed_at: existing?.completed_at || correctionTimestamp }; }).filter(Boolean); const feedback = isSkipped ? [] : detail.snapshot.blocks.flatMap((block) => block.exercises).map((exercise) => ({ exercise_occurrence_key: exercise.exercise_occurrence_key, text: document.querySelector(`#correction-feedback-${exercise.exercise_occurrence_key}`)?.value.trim() })).filter((item) => item.text); const record = { record_schema_version: 1, completion_results, training_intervals: isSkipped ? [] : detail.training_intervals, session_rpe: isSkipped ? null : (document.querySelector("#correction-rpe")?.value ? Number(document.querySelector("#correction-rpe").value) : null), note: document.querySelector("#correction-note")?.value.trim() || null, exercise_feedback: feedback, skip_reason: isSkipped ? (document.querySelector("#correction-skip-reason")?.value.trim() || null) : null }; await api(`/api/private/sessions/${detail.session_key}/record`, { method: "PUT", body: JSON.stringify(record) }); state.correction = false; if (state.view === "calendar") return loadCalendarDay(state.calendar.selectedDate); await openSession(detail.session_key); }
 async function validatePlan() { try { const result = await api("/api/private/plan-updates/validate", { method: "POST", body: JSON.stringify({ package_text: state.draft }) }); state.preview = result.preview; state.planError = null; render(); } catch (error) { state.planError = error.data?.error?.details?.map((detail) => `${detail.path}: ${detail.message}`).join("\n") || error.data?.error?.message || error.message; state.error = null; render(); } }
 async function confirmPlan() { await api("/api/private/plan-updates/apply", { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify({ package_text: state.draft }) }); state.sheet = false; state.preview = null; await refresh(); }
 
+if (typeof document.addEventListener === "function") document.addEventListener("visibilitychange", handleVisibilityChange);
 refresh();
