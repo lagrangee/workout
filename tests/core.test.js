@@ -133,6 +133,51 @@ test("tickets 19-20: record, end, continue, split intervals and terminal correct
   const corrected = await call(handler, `/api/private/sessions/${start.body.session_key}/record`, json({ method: "PUT" }, correction)); assert.equal(corrected.response.status, 200); assert.equal(corrected.body.status, "partial"); assert.equal(canonicalJson(corrected.body.snapshot), beforeSnapshot);
 });
 
+test("execution lifecycle: pause closes the active interval, resume opens a new one, and paused Sessions can end", async () => {
+  const { handler } = appFixture();
+  const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "pause-lifecycle-start"));
+  const paused = await call(handler, `/api/private/sessions/${started.body.session_key}/pause`, post({}, "pause-lifecycle-pause"));
+  assert.equal(paused.response.status, 200);
+  assert.ok(paused.body.training_intervals[0].ended_at);
+  const pauseReplay = await call(handler, `/api/private/sessions/${started.body.session_key}/pause`, post({}, "pause-lifecycle-pause-replay"));
+  assert.deepEqual(pauseReplay.body.training_intervals, paused.body.training_intervals);
+
+  const resumed = await call(handler, `/api/private/sessions/${started.body.session_key}/resume`, post({}, "pause-lifecycle-resume"));
+  assert.equal(resumed.response.status, 200);
+  assert.equal(resumed.body.training_intervals.length, 2);
+  assert.equal(resumed.body.training_intervals.at(-1).ended_at, null);
+  const pausedAgain = await call(handler, `/api/private/sessions/${started.body.session_key}/pause`, post({}, "pause-lifecycle-pause-again"));
+  assert.ok(pausedAgain.body.training_intervals.every(/** @param {any} interval */ (interval) => interval.ended_at));
+
+  const detail = await call(handler, `/api/private/sessions/${started.body.session_key}`);
+  const finalRecord = recordFor(detail.body, 0, 8);
+  const ended = await call(handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record: finalRecord, ended_at: new Date().toISOString() }, "pause-lifecycle-end"));
+  assert.equal(ended.response.status, 200);
+  assert.equal(ended.body.status, "partial");
+  assert.ok(ended.body.training_intervals.every(/** @param {any} interval */ (interval) => interval.ended_at));
+});
+
+test("execution lifecycle: pause boundaries are strict, Athlete-scoped, and active resume is idempotent", async () => {
+  const { handler, store } = appFixture();
+  const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "pause-validation-start"));
+  const sessionPath = `/api/private/sessions/${started.body.session_key}`;
+  const before = await store.getByEmail("athlete-a@example.invalid");
+  const invalidNull = await call(handler, `${sessionPath}/pause`, post({ close_at: null }, "pause-validation-null"));
+  assert.equal(invalidNull.response.status, 400);
+  const invalidFuture = await call(handler, `${sessionPath}/pause`, post({ close_at: new Date(Date.now() + 60_000).toISOString() }, "pause-validation-future"));
+  assert.equal(invalidFuture.response.status, 400);
+  const unchanged = await store.getByEmail("athlete-a@example.invalid");
+  assert.equal(unchanged.training_version, before.training_version);
+
+  const otherAthlete = await call(handler, `${sessionPath}/resume`, post({}, "pause-validation-other"), "athlete-b@example.invalid");
+  assert.equal(otherAthlete.response.status, 404);
+  const activeResume = await call(handler, `${sessionPath}/resume`, post({}, "pause-validation-active"));
+  assert.equal(activeResume.response.status, 200);
+  assert.equal(activeResume.body.training_intervals.length, 1);
+  const activeResumeReplay = await call(handler, `${sessionPath}/resume`, post({}, "pause-validation-active-replay"));
+  assert.deepEqual(activeResumeReplay.body.training_intervals, activeResume.body.training_intervals);
+});
+
 test("ticket 21: progress exposes evidence and exercise detail", async () => {
   const { handler, store } = appFixture();
   const progress = await call(handler, "/api/private/progress?preset=30d"); assert.equal(progress.response.status, 200); assert.ok("completion_rate" in progress.body.metrics); assert.ok("current_streak" in progress.body);

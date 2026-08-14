@@ -93,11 +93,12 @@ export function replaceRecord(state, session, record, now, mode = "replace") {
   if (session.status === "skipped") {
     if (record.completion_results.length || record.training_intervals.length || record.session_rpe !== null || record.exercise_feedback.length) return { error: { code: "invalid_skipped_record", message: "A skipped Session can only correct its note and skip reason until restart" } };
   }
+  const existingOpen = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
+  if (session.status === "in_progress" && !existingOpen) return { error: { code: "session_state_conflict", message: "Resume the paused Session before recording a Completion Item" } };
   const targetMode = session.status === "skipped" ? "skipped" : session.status === "in_progress" ? "in_progress" : "terminal";
   const errors = validateSessionRecord(record, session, now.toISOString(), targetMode);
   if (errors.length) return { error: { code: "invalid_session_record", message: "The Session Record is invalid", details: errors } };
   if (session.status === "in_progress") {
-    const existingOpen = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
     const submittedOpen = record.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
     if (!existingOpen || !submittedOpen || submittedOpen.interval_key !== existingOpen.interval_key) return { error: { code: "invalid_session_record", message: "The open interval is server-owned and must be preserved" } };
   }
@@ -123,12 +124,14 @@ export function endSession(state, sessionKey, payload, now) {
   const difference = Date.parse(payload.ended_at) - now.getTime();
   if (difference > 5 * 60 * 1000) return { error: { code: "invalid_request", message: "ended_at cannot be more than five minutes in the future" } };
   const open = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
-  if (!open || Date.parse(payload.ended_at) <= Date.parse(open.started_at)) return { error: { code: "invalid_session_record", message: "ended_at must close the open interval" } };
+  if (open && Date.parse(payload.ended_at) <= Date.parse(open.started_at)) return { error: { code: "invalid_session_record", message: "ended_at must close the open interval" } };
   if (!isRecord(payload.record) || !Array.isArray(payload.record.training_intervals)) return { error: { code: "invalid_session_record", message: "End requires the complete Session Record" } };
   const proposed = deepClone(payload.record);
-  const proposedOpen = proposed.training_intervals.find(/** @param {any} interval */ (interval) => interval.interval_key === open.interval_key);
-  if (!proposedOpen) return { error: { code: "invalid_session_record", message: "End record must include the open interval" } };
-  proposedOpen.ended_at = payload.ended_at;
+  if (open) {
+    const proposedOpen = proposed.training_intervals.find(/** @param {any} interval */ (interval) => interval.interval_key === open.interval_key);
+    if (!proposedOpen) return { error: { code: "invalid_session_record", message: "End record must include the open interval" } };
+    proposedOpen.ended_at = payload.ended_at;
+  }
   const errors = validateSessionRecord(proposed, session, now.toISOString(), "terminal");
   if (errors.length) return { error: { code: "invalid_session_record", message: "The final Session Record is invalid", details: errors } };
   session.completion_results = deepClone(proposed.completion_results);
@@ -138,6 +141,40 @@ export function endSession(state, sessionKey, payload, now) {
   session.exercise_feedback = deepClone(proposed.exercise_feedback);
   session.skip_reason = null;
   session.status = completionFraction(session) === 1 ? "completed" : "partial";
+  session.updated_at = now.toISOString();
+  state.training_version += 1;
+  return { session };
+}
+
+/** @param {any} state @param {string} sessionKey @param {Date} now @param {string|null} closeAt */
+export function pauseSession(state, sessionKey, now, closeAt = null) {
+  const session = state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey);
+  if (!session) return { error: { code: "not_found", message: "Session not found" } };
+  if (session.status !== "in_progress") return { error: { code: "session_state_conflict", message: "Only an in-progress Session can pause" } };
+  const open = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
+  if (!open) return { session, replay: true };
+  const requested = closeAt === null ? now.getTime() : Date.parse(closeAt);
+  if (!Number.isFinite(requested)) return { error: { code: "invalid_request", message: "close_at must be an RFC 3339 UTC instant" } };
+  const startedAt = Date.parse(open.started_at);
+  if (closeAt !== null && requested > now.getTime()) return { error: { code: "invalid_request", message: "close_at cannot be in the future" } };
+  const endAt = closeAt === null ? Math.max(startedAt + 1, requested) : requested;
+  if (endAt <= startedAt) return { error: { code: "invalid_request", message: "close_at must be after the open interval start" } };
+  open.ended_at = new Date(endAt).toISOString();
+  session.updated_at = now.toISOString();
+  state.training_version += 1;
+  return { session };
+}
+
+/** @param {any} state @param {string} sessionKey @param {Date} now */
+export function resumeSession(state, sessionKey, now) {
+  const session = state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey);
+  if (!session) return { error: { code: "not_found", message: "Session not found" } };
+  if (session.status !== "in_progress") return { error: { code: "session_state_conflict", message: "Only an in-progress Session can resume" } };
+  const today = localDate(now, state.timezone);
+  if (session.scheduled_date !== today) return { error: { code: "session_date_not_today", message: "Only today's Session can resume" } };
+  const open = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
+  if (open) return { session, replay: true };
+  session.training_intervals.push({ interval_key: opaqueKey("ti"), started_at: now.toISOString(), ended_at: null });
   session.updated_at = now.toISOString();
   state.training_version += 1;
   return { session };

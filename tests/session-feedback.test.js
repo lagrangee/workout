@@ -394,7 +394,7 @@ test("browser seam: failed start restores a retryable Today control", async () =
 
 test("browser seam: manual completion enters restrained rest, announces its end, and advances focus", async () => {
   const fixture = appFixture();
-  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 4;
+  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 6;
   const clock = deterministicClock();
   const audioEvents = [];
   const browser = await openBrowser(fixture.handler, async () => null, { clock, audioEvents });
@@ -407,13 +407,17 @@ test("browser seam: manual completion enters restrained rest, announces its end,
 
   assert.match(browser.root.innerHTML, /组间休息/);
   assert.equal(audioEvents.filter((event) => event.type === "activate").length, 1);
-  assert.equal(browser.root.querySelector('[data-rest-remaining]').textContent, "00:04");
+  assert.equal(browser.root.querySelector('[data-rest-remaining]').textContent, "00:06");
   assert.equal(browser.root.querySelector('[data-action="skip-rest"]').disabled, false);
 
   clock.advance(1000);
   clock.advance(1000);
   clock.advance(1000);
+  clock.advance(1000);
+  clock.advance(1000);
   assert.deepEqual(audioEvents.filter((event) => event.type === "cue").map((event) => [event.kind, event.value]), [
+    ["rest-final", 5],
+    ["rest-final", 4],
     ["rest-final", 3],
     ["rest-final", 2],
     ["rest-final", 1],
@@ -423,6 +427,68 @@ test("browser seam: manual completion enters restrained rest, announces its end,
   assert.equal(audioEvents.at(-1).kind, "rest-complete");
   assert.doesNotMatch(browser.root.innerHTML, /组间休息/);
   assert.match(browser.root.innerHTML, /第 2 组/);
+});
+
+test("browser seam: leaving execution closes the active interval and resume excludes hidden time", async () => {
+  const fixture = appFixture();
+  const clock = deterministicClock();
+  const browser = await openBrowser(fixture.handler, async () => null, { clock });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  const started = await fixture.store.getByEmail("athlete-a@example.invalid");
+  const sessionKey = started.sessions[0].session_key;
+  const elapsedBeforeExit = browser.root.querySelector("[data-session-elapsed]").textContent;
+
+  browser.context.document.hidden = true;
+  browser.context.document.dispatchEvent({ type: "pagehide" });
+  await settle();
+
+  const paused = await fixture.store.getByEmail("athlete-a@example.invalid");
+  const pausedSession = paused.sessions.find((session) => session.session_key === sessionKey);
+  assert.ok(pausedSession.training_intervals[0].ended_at);
+  const pausedDetail = await call(fixture.handler, `/api/private/sessions/${sessionKey}`);
+  assert.ok(pausedDetail.body.training_duration_sec < 60);
+  const pauseRequest = browser.calls.find((request) => request.path === `/api/private/sessions/${sessionKey}/pause`);
+  assert.ok(pauseRequest);
+  const pauseBody = JSON.parse(pauseRequest.options.body);
+  assert.ok(!Object.hasOwn(pauseBody, "close_at") || typeof pauseBody.close_at === "string");
+  clock.advance(60_000);
+  assert.equal(browser.root.querySelector("[data-session-elapsed]").textContent, elapsedBeforeExit);
+
+  const reopened = await openBrowser(fixture.handler, async () => null, { clock });
+  reopened.root.querySelector('[data-action="open-session"]').click();
+  await settle();
+  assert.equal(reopened.root.querySelector('[data-action="toggle-timer"]').textContent, "继续");
+  assert.match(reopened.root.innerHTML, /点击顶部“继续”/);
+
+  reopened.root.querySelector('[data-action="toggle-timer"]').click();
+  await settle();
+  const resumed = await fixture.store.getByEmail("athlete-a@example.invalid");
+  const resumedSession = resumed.sessions.find((session) => session.session_key === sessionKey);
+  assert.equal(resumedSession.training_intervals.at(-1).ended_at, null);
+  assert.ok(reopened.calls.some((request) => request.path === `/api/private/sessions/${sessionKey}/resume`));
+  const elapsedAfterResume = reopened.root.querySelector("[data-session-elapsed]").textContent;
+  clock.advance(2000);
+  assert.notEqual(reopened.root.querySelector("[data-session-elapsed]").textContent, elapsedAfterResume);
+});
+
+test("browser seam: returning to Today pauses the server interval before navigation completes", async () => {
+  const fixture = appFixture();
+  const browser = await openBrowser(fixture.handler, async () => null);
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  const started = await fixture.store.getByEmail("athlete-a@example.invalid");
+  const sessionKey = started.sessions[0].session_key;
+  browser.root.querySelector('[data-action="minimize"]').click();
+  await settle();
+
+  const stateAfterNavigation = await fixture.store.getByEmail("athlete-a@example.invalid");
+  const sessionAfterNavigation = stateAfterNavigation.sessions.find((session) => session.session_key === sessionKey);
+  assert.ok(sessionAfterNavigation.training_intervals[0].ended_at);
+  assert.ok(browser.root.querySelector('[data-view="calendar"]'));
+  assert.equal(browser.root.querySelector('[data-session-elapsed]'), null);
 });
 
 test("browser seam: rest can be skipped to the next focus item", async () => {
@@ -479,7 +545,7 @@ test("browser seam: mute suppresses action and rest cues without changing the sa
   assert.equal(audioEvents.filter((event) => event.type === "cue").length, cueCountAfterSave);
 });
 
-test("browser seam: visibility loss pauses timed execution and foreground recovery re-requests Wake Lock", async () => {
+test("browser seam: visibility loss pauses timed execution and foreground recovery waits for manual continue", async () => {
   const { handler } = timedAppFixture();
   const clock = deterministicClock();
   const audioEvents = [];
@@ -507,9 +573,11 @@ test("browser seam: visibility loss pauses timed execution and foreground recove
   browser.context.document.hidden = false;
   browser.context.document.dispatchEvent({ type: "visibilitychange" });
   await settle();
-  assert.deepEqual(wakeLock.requests, ["screen", "screen"]);
+  assert.deepEqual(wakeLock.requests, ["screen"]);
   assert.match(browser.root.innerHTML, /已回到前台，计时仍暂停/);
   browser.root.querySelector('[data-action="toggle-timer"]').click();
+  await settle();
+  assert.equal(browser.root.querySelector('[data-action="toggle-timer"]').textContent, "暂停", browser.root.innerHTML);
   clock.advance(1000);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "04");
 });
@@ -597,7 +665,10 @@ test("browser seam: fixed duration runs preparation and tempo cues, pauses with 
   assert.equal(browser.root.querySelector("[data-session-elapsed]").textContent, sessionElapsedAtPause);
   assert.equal(audioEvents.filter((event) => event.type === "cue").length, 2);
 
+  await settle();
   browser.root.querySelector('[data-action="toggle-timer"]').click();
+  await settle();
+  assert.equal(browser.root.querySelector('[data-action="toggle-timer"]').textContent, "暂停", browser.root.innerHTML);
   clock.advance(1000);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "04");
   clock.advance(1000);
