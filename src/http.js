@@ -1,9 +1,9 @@
 // @ts-nocheck
 
 import { createStore } from "./store.js";
-import { addDays, base64UrlDecode, base64UrlEncode, constantTimeEqual, deepClone, dateSpan, isRecord, isValidLocalDate, normalizeEmail, localDate, isValidTimezone, sha256Hex, trimString } from "./util.js";
+import { addDays, base64UrlDecode, base64UrlEncode, constantTimeEqual, deepClone, dateSpan, isRecord, isValidLocalDate, normalizeEmail, localDate, isValidTimezone, isValidUtcInstant, sha256Hex, trimString } from "./util.js";
 import { planModel, scheduleModel, todayModel, sessionSummary, validatePlanForState, appendPlanRevision } from "./plan.js";
-import { createSession, replaceRecord, endSession, continueOrRestart, normalizeExpiredSessions, findSession, sessionDetail } from "./session.js";
+import { createSession, replaceRecord, endSession, pauseSession, resumeSession, continueOrRestart, normalizeExpiredSessions, findSession, sessionDetail } from "./session.js";
 import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
@@ -186,7 +186,7 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (request.method === "POST" && path === "/api/private/plan-updates/apply") return applyPlanUpdate(state, rawBody, now);
     if (request.method === "POST" && path.match(/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/(start|skip)$/)) return startOrSkip(state, path, rawBody, now);
     if (request.method === "POST" && path === "/api/private/sessions/normalize-expired") return normalizeExpired(state, rawBody, now);
-    if (request.method === "POST" && path.match(/^\/api\/private\/sessions\/[^/]+\/(end|continue|restart)$/)) return sessionCommand(state, path, rawBody, now);
+    if (request.method === "POST" && path.match(/^\/api\/private\/sessions\/[^/]+\/(end|pause|resume|continue|restart)$/)) return sessionCommand(state, path, rawBody, now);
     if (request.method === "PUT" && path.match(/^\/api\/private\/sessions\/[^/]+\/record$/)) return correctRecord(state, path, rawBody, now);
     if (request.method === "POST" && path === "/api/private/coach-share") return shareCommand(state, env, now, false);
     if (request.method === "POST" && path === "/api/private/coach-share/regenerate") return shareCommand(state, env, now, true);
@@ -275,8 +275,11 @@ function startOrSkip(state, path, rawBody, now) {
 
 function sessionCommand(state, path, rawBody, now) {
   const sessionKey = path.split("/").at(-2); const command = path.split("/").at(-1); const body = parseJsonBody(rawBody); if (body.error) return body;
-  if (!isRecord(body.value) || Object.keys(body.value).length !== 0 && command !== "end") return { body: errorBody("invalid_request", `${command} accepts an empty object`, []), status: 400, persist: false };
-  const result = command === "end" ? endSession(state, sessionKey, body.value, now) : continueOrRestart(state, sessionKey, now, command);
+  const allowedKeys = command === "end" ? ["record", "ended_at"] : command === "pause" ? ["close_at"] : [];
+  if (!isRecord(body.value) || Object.keys(body.value).some((key) => !allowedKeys.includes(key))) return { body: errorBody("invalid_request", `${command} request body is invalid`, []), status: 400, persist: false };
+  if (command !== "end" && command !== "pause" && Object.keys(body.value).length !== 0) return { body: errorBody("invalid_request", `${command} accepts an empty object`, []), status: 400, persist: false };
+  if (command === "pause" && Object.hasOwn(body.value, "close_at") && (typeof body.value.close_at !== "string" || !isValidUtcInstant(body.value.close_at))) return { body: errorBody("invalid_request", "close_at must be an RFC 3339 UTC instant", []), status: 400, persist: false };
+  const result = command === "end" ? endSession(state, sessionKey, body.value, now) : command === "pause" ? pauseSession(state, sessionKey, now, body.value.close_at ?? null) : command === "resume" ? resumeSession(state, sessionKey, now) : continueOrRestart(state, sessionKey, now, command);
   if (result.error) return { body: errorBody(result.error.code, result.error.message, result.error.details ?? []), status: errorStatus(result.error.code), persist: false };
   return { body: sessionDetail(result.session), status: 200, persist: true };
 }

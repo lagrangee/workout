@@ -73,7 +73,7 @@ One Athlete's actual execution or explicit skip of exactly one Scheduled Workout
 _Avoid_: Scheduled Workout status, plan item, free workout
 
 **Training Interval**:
-One contiguous span of active training time within a Workout Session. Starting or continuing training opens a new interval, only ending training closes it, and the Session's actual duration is the sum of its closed intervals.
+One contiguous span of active training time within a Workout Session. Starting or resuming training opens a new interval; pausing, ending, or explicit expiry closes the active interval, and the Session's actual duration is the sum of its closed intervals. An in-progress Session may therefore be paused with no open interval until the Athlete resumes it.
 _Avoid_: Workout Session, wall-clock gap, rest countdown
 
 **Training Plan Snapshot**:

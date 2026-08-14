@@ -12,10 +12,10 @@ const rpeMeanings = [
   { title: "接近极限", detail: "非常吃力，但仍能按标准完成。" },
   { title: "最大用力", detail: "已到极限；若有未完成，请在备注说明。" },
 ];
-const sessionMutationActions = new Set(["start", "continue", "restart", "complete"]);
-const mutationPendingLabels = { start: "正在开始训练…", continue: "正在继续训练…", restart: "正在重新开始训练…", complete: "正在保存…" };
+const sessionMutationActions = new Set(["start", "continue", "restart", "complete", "pause", "resume"]);
+const mutationPendingLabels = { start: "正在开始训练…", continue: "正在继续训练…", restart: "正在重新开始训练…", complete: "正在保存…", pause: "正在暂停…", resume: "正在继续…" };
 const preparationDurationSec = 5;
-const restFinalCueSeconds = 3;
+const restFinalCueSeconds = 5;
 const workoutTestSeams = typeof window !== "undefined" ? window.__workoutTestSeams || {} : {};
 const clockNow = () => typeof workoutTestSeams.now === "function" ? Number(workoutTestSeams.now()) : Date.now();
 const scheduleInterval = (callback, delay) => typeof workoutTestSeams.setInterval === "function" ? workoutTestSeams.setInterval(callback, delay) : setInterval(callback, delay);
@@ -27,6 +27,7 @@ const audioSources = {
   tempo: "/audio/workout-tempo.wav",
   "tempo-final": "/audio/workout-tempo-final.wav",
   complete: "/audio/workout-complete.wav",
+  "rest-complete": "/audio/workout-complete.wav",
 };
 
 function createBrowserAudio() {
@@ -140,8 +141,11 @@ function observeAudioResult(result) {
 }
 function documentIsVisible() { return typeof document === "undefined" || document.hidden !== true; }
 function wakeLockSupported() { return typeof navigator !== "undefined" && navigator.wakeLock && typeof navigator.wakeLock.request === "function"; }
-function isVisibleSession() { return state.view === "today" && state.sessionDetail?.status === "in_progress" && documentIsVisible(); }
-function shouldKeepWakeLock() { return isVisibleSession() && !(state.timerPaused && state.timerPauseReason === "manual"); }
+function isExecutionSurface() { return state.view === "today" && state.sessionDetail?.status === "in_progress" && !state.endSheet; }
+function isVisibleSession() { return isExecutionSurface() && !state.timerPaused && documentIsVisible(); }
+function hasOpenTrainingInterval(detail) { return Boolean(detail?.training_intervals?.some((interval) => interval.ended_at === null)); }
+function shouldKeepWakeLock() { return isVisibleSession(); }
+function canPauseSession(reason) { return state.view === "today" && state.sessionDetail?.status === "in_progress" && (!state.endSheet || reason === "end-form"); }
 function releaseWakeLock() {
   const sentinel = state.wakeLock.sentinel;
   state.wakeLock.sentinel = null;
@@ -153,8 +157,8 @@ function releaseWakeLock() {
   } catch {}
 }
 function pauseForInterruption(reason) {
-  if (!state.sessionDetail || state.sessionDetail.status !== "in_progress" || state.view !== "today") return;
-  if (state.timerPaused && state.timerPauseReason === "manual") return;
+  if (!canPauseSession(reason)) return Promise.resolve(null);
+  if (state.timerPaused && state.timerPauseReason === "manual") return persistSessionPause(pauseBoundary(state.sessionDetail, clockNow()));
   const now = clockNow();
   if (!state.timerPaused) {
     pauseExecutionTimers(now);
@@ -162,14 +166,21 @@ function pauseForInterruption(reason) {
     state.timerPauseStartedAt = now;
   }
   state.timerPauseReason = reason;
+  releaseWakeLock();
   render();
+  return persistSessionPause(pauseBoundary(state.sessionDetail, now));
+}
+async function ensureSessionPaused(reason) {
+  if (state.sessionDetail?.status !== "in_progress" || state.view !== "today") return true;
+  await pauseForInterruption(reason);
+  return !hasOpenTrainingInterval(state.sessionDetail);
 }
 function handleWakeLockRelease(sentinel) {
   if (state.wakeLock.sentinel !== sentinel) return;
   state.wakeLock.sentinel = null;
   state.wakeLock.requestPending = false;
   state.wakeLock.status = documentIsVisible() ? "released" : "hidden";
-  pauseForInterruption(documentIsVisible() ? "wake-lock" : "visibility");
+  void pauseForInterruption(documentIsVisible() ? "wake-lock" : "visibility");
 }
 async function requestWakeLock({ force = false } = {}) {
   if (!isVisibleSession() || !wakeLockSupported()) {
@@ -230,8 +241,9 @@ function syncWakeLock() {
 function wakeLockNotice() {
   if (!state.sessionDetail || state.sessionDetail.status !== "in_progress") return "";
   const status = state.wakeLock.status === "idle" && !wakeLockSupported() ? "unsupported" : state.wakeLock.status;
-  if (state.timerPaused && state.timerPauseReason === "visibility") return `<div class="notice session-wake-notice is-paused" role="status" aria-live="polite"><strong>${status === "active" ? "已回到前台，计时仍暂停" : "页面已离开前台，计时已暂停"}</strong><span>${status === "active" ? "屏幕保持已重新请求。准备好后点击顶部“继续”；后台时间不会计入动作或 Session 计时。" : "回到训练后点击顶部“继续”；后台时间不会计入动作或 Session 计时。"}</span></div>`;
+  if (state.timerPaused && state.timerPauseReason === "visibility") { const foreground = documentIsVisible(); return `<div class="notice session-wake-notice is-paused" role="status" aria-live="polite"><strong>${foreground ? "已回到前台，计时仍暂停" : "页面已离开前台，计时已暂停"}</strong><span>${foreground ? "准备好后点击顶部“继续”；后台时间不会计入动作或 Session 计时。" : "回到训练后点击顶部“继续”；后台时间不会计入动作或 Session 计时。"}</span></div>`; }
   if (state.timerPaused && state.timerPauseReason === "wake-lock") return `<div class="notice session-wake-notice is-paused" role="status" aria-live="polite"><strong>${status === "active" ? "已回到前台，计时仍暂停" : "屏幕保持已中断，计时已暂停"}</strong><span>${status === "active" ? "屏幕保持已重新请求。准备好后点击顶部“继续”。" : "准备好后点击顶部“继续”；未保持期间的时间不会计入动作或 Session 计时。"}</span></div>`;
+  if (state.timerPaused) return `<div class="notice session-wake-notice is-paused" role="status" aria-live="polite"><strong>训练已暂停，计时已停止</strong><span>当前不在主动训练中；准备好后点击顶部“继续”。暂停期间不会计入 Session 计时。</span></div>`;
   if (status === "unsupported") return `<div class="notice session-wake-notice is-fallback" role="status" aria-live="polite"><strong>无法保持屏幕常亮</strong><span>当前浏览器不支持屏幕保持。计时仍可手动执行；若页面隐藏或锁屏，回到训练后会暂停并等待你继续。</span></div>`;
   if (status === "denied") return `<div class="notice session-wake-notice is-fallback" role="status" aria-live="polite"><strong>屏幕保持未获允许</strong><span>应用不能保证屏幕常亮，但“开始动作”和手动计时仍可使用；若页面隐藏或锁屏，回到训练后会暂停并等待你继续。</span></div>`;
   return "";
@@ -241,12 +253,15 @@ function handleVisibilityChange() {
     if (state.sessionDetail?.status === "in_progress" && state.view === "today") {
       state.wakeLock.status = "hidden";
       releaseWakeLock();
-      pauseForInterruption("visibility");
+      void pauseForInterruption("visibility");
     }
     return;
   }
   if (state.sessionDetail?.status !== "in_progress" || state.view !== "today") return;
-  if (state.timerPaused && state.timerPauseReason === "manual") return render();
+  if (state.timerPaused) {
+    if (state.timerPauseReason === "visibility") state.wakeLock.status = "idle";
+    return render();
+  }
   if (wakeLockSupported()) {
     state.wakeLock.status = "idle";
     void requestWakeLock({ force: true });
@@ -359,16 +374,16 @@ function sessionView(session, entry) {
   const feedback = `<textarea class="focus-feedback-input" id="feedback-${item.exercise_occurrence_key}" data-exercise-key="${item.exercise_occurrence_key}" maxlength="500" placeholder="记录感受">${escapeHtml(feedbackText)}</textarea>`;
   const actualDraft = state.actualDrafts[item.completion_item_key] ?? actual?.value ?? item?.target?.min ?? 1;
   const rirDraft = state.rirDrafts[item.completion_item_key] ?? result?.rir ?? "";
-  const completeBlocked = isDone || isSessionMutationPending("complete") || (isTimed && timedTimer.phase !== "complete");
+  const completeBlocked = isDone || state.timerPaused || isSessionMutationPending("complete") || (isTimed && timedTimer.phase !== "complete");
   const adjustButton = isTimed ? "" : `<button class="secondary" data-action="toggle-adjust">${state.adjust ? "收起调整" : "调整"}</button>`;
   const adjustPanel = isTimed ? "" : state.adjust ? `<div class="adjust-panel"><label>实际 ${item?.target?.metric === "reps" ? "次数" : "秒数"}<input id="actual-value" data-completion-key="${item.completion_item_key}" type="number" min="1" value="${escapeHtml(actualDraft)}" /></label><label>RIR<input id="actual-rir" data-completion-key="${item.completion_item_key}" type="number" min="0" max="10" value="${escapeHtml(rirDraft)}" /></label><button class="primary wide" data-action="save-adjust" ${mutationDisabled("complete")}>${mutationLabel("complete", "保存并完成")}</button></div>` : "";
-  return `${sessionHeader(detail)}${progressDisclosure(detail, items)}${wakeLockNotice()}${audioNotice()}<div class="focus-workout-scroll"><section class="focus-stage"><span class="focus-count">${state.focusIndex + 1} / ${items.length} · ${escapeHtml(context.block?.title || (item.target.metric === "reps" ? "力量" : "训练"))}</span><h2>${escapeHtml(itemLabel(detail, item))}</h2><p class="focus-prescription">${escapeHtml(parts.join(" · "))}</p>${isTimed ? timedActionView(item, context, result) : ""}<div class="actual-panel">${actualRows}</div><div class="feedback-area">${feedback}</div><div class="focus-actions"><button class="primary wide" data-action="complete" ${completeBlocked ? "disabled" : ""} ${isSessionMutationPending("complete") ? 'aria-disabled="true" aria-busy="true"' : ""}>${isDone ? "已完成" : mutationLabel("complete", "完成")}</button><div class="focus-secondary ${isTimed ? "is-timed" : ""}"><button class="secondary" data-action="previous" ${state.focusIndex === 0 ? "disabled" : ""}>上一项</button>${adjustButton}<button class="secondary" data-action="next" ${state.focusIndex >= items.length - 1 ? "disabled" : ""}>下一项</button></div>${adjustPanel}${sessionMutationNotice("complete")}</div></section></div>${sessionFooter(detail)}${state.endSheet ? endSheet(detail) : ""}`;
+  return `${sessionHeader(detail)}${timerMutationNotice()}${progressDisclosure(detail, items)}${wakeLockNotice()}${audioNotice()}<div class="focus-workout-scroll"><section class="focus-stage"><span class="focus-count">${state.focusIndex + 1} / ${items.length} · ${escapeHtml(context.block?.title || (item.target.metric === "reps" ? "力量" : "训练"))}</span><h2>${escapeHtml(itemLabel(detail, item))}</h2><p class="focus-prescription">${escapeHtml(parts.join(" · "))}</p>${isTimed ? timedActionView(item, context, result) : ""}<div class="actual-panel">${actualRows}</div><div class="feedback-area">${feedback}</div><div class="focus-actions"><button class="primary wide" data-action="complete" ${completeBlocked ? "disabled" : ""} ${isSessionMutationPending("complete") ? 'aria-disabled="true" aria-busy="true"' : ""}>${isDone ? "已完成" : mutationLabel("complete", "完成")}</button><div class="focus-secondary ${isTimed ? "is-timed" : ""}"><button class="secondary" data-action="previous" ${state.focusIndex === 0 ? "disabled" : ""}>上一项</button>${adjustButton}<button class="secondary" data-action="next" ${state.focusIndex >= items.length - 1 ? "disabled" : ""}>下一项</button></div>${adjustPanel}${sessionMutationNotice("complete")}</div></section></div>${sessionFooter(detail)}${state.endSheet ? endSheet(detail) : ""}`;
 }
 
 function restView(detail, items) {
   const next = items[state.restNextIndex] || items[state.focusIndex];
   const context = itemContext(detail, next);
-  return `${sessionHeader(detail, false)}${progressDisclosure(detail, items)}${wakeLockNotice()}${audioNotice()}<section class="rest-screen"><span class="rest-label">组间休息</span><h2>放松，准备下一项</h2><div class="rest-time" data-rest-remaining aria-live="polite" aria-label="休息剩余时间">${formatRestRemaining()}</div><div class="next-context"><span>接下来</span><strong>${escapeHtml(itemLabel(detail, next))}</strong><small>${escapeHtml(focusTarget(next.target))}</small></div><button class="secondary" data-action="skip-rest">跳过休息</button></section>${sessionFooter(detail, false)}`;
+  return `${sessionHeader(detail, false)}${timerMutationNotice()}${progressDisclosure(detail, items)}${wakeLockNotice()}${audioNotice()}<section class="rest-screen"><span class="rest-label">组间休息</span><h2>放松，准备下一项</h2><div class="rest-time" data-rest-remaining aria-live="polite" aria-label="休息剩余时间">${formatRestRemaining()}</div><div class="next-context"><span>接下来</span><strong>${escapeHtml(itemLabel(detail, next))}</strong><small>${escapeHtml(focusTarget(next.target))}</small></div><button class="secondary" data-action="skip-rest">跳过休息</button></section>${sessionFooter(detail, false)}`;
 }
 
 function sessionSummaryView(session, entry, detail) {
@@ -401,14 +416,16 @@ function todayProgressView(session, entry, detail) {
 }
 
 function sessionMuteControl() { const label = state.muted ? "开启提示音" : "静音提示音"; return `<button class="session-mute-toggle" data-action="toggle-mute" aria-pressed="${state.muted}" aria-label="${label}">${state.muted ? "开启声音" : "静音"}</button>`; }
-function sessionHeader(detail, showTimer = true) { const timerAction = detail?.status === "in_progress" ? `<button class="session-timer-toggle" data-action="toggle-timer" aria-pressed="${state.timerPaused}">${state.timerPaused ? "继续" : "暂停"}</button>` : ""; return `<header class="session-header"><button class="session-header-side" data-action="minimize" aria-label="返回今日">‹</button><strong ${showTimer ? "data-session-elapsed" : ""}>${showTimer ? formatElapsed(detail) : "组间休息"}</strong><div class="session-header-actions">${sessionMuteControl()}${timerAction}</div></header>`; }
+function timerMutationPending() { return isSessionMutationPending("pause") || isSessionMutationPending("resume"); }
+function sessionHeader(detail, showTimer = true) { const retryPause = state.timerPaused && state.sessionMutation.action === "pause" && state.sessionMutation.error; const timerLabel = timerMutationPending() ? mutationPendingLabels[state.sessionMutation.action] : retryPause ? "重试暂停" : state.timerPaused ? "继续" : "暂停"; const timerAction = detail?.status === "in_progress" ? `<button class="session-timer-toggle" data-action="toggle-timer" aria-pressed="${state.timerPaused}" ${timerMutationPending() ? 'disabled aria-disabled="true" aria-busy="true"' : ""}>${timerLabel}</button>` : ""; return `<header class="session-header"><button class="session-header-side" data-action="minimize" aria-label="返回今日">‹</button><strong ${showTimer ? "data-session-elapsed" : ""}>${showTimer ? formatElapsed(detail) : "组间休息"}</strong><div class="session-header-actions">${sessionMuteControl()}${timerAction}</div></header>`; }
+function timerMutationNotice() { return sessionMutationNotice("pause") || sessionMutationNotice("resume"); }
 function sessionFooter(detail, showTimer = true) { return `<footer class="session-footer"><strong ${showTimer ? "data-session-elapsed" : ""}>${showTimer ? formatElapsed(detail) : "组间休息"}</strong><button class="secondary" data-action="end">结束训练</button></footer>`; }
 function progressDisclosure(detail, items) { const completed = detail.completion_results.length; const fraction = items.length ? completed / items.length : 0; return `<section class="session-progress"><button class="session-progress-toggle" data-action="toggle-progress" aria-expanded="${state.progressOpen}"><span><strong>${completed} / ${items.length} 完成</strong><span class="progress-line"><span style="width:${pct(fraction)}"></span></span></span><span class="progress-chevron">${state.progressOpen ? "⌃" : "⌄"}</span></button>${state.progressOpen ? `<div class="progress-list focus-progress">${items.map((candidate, index) => { const done = detail.completion_results.some((result) => result.completion_item_key === candidate.completion_item_key); return `<button class="list-row ${index === state.focusIndex ? "active" : ""}" data-action="jump-item" data-index="${index}"><span>${index + 1}. ${escapeHtml(itemLabel(detail, candidate))}</span><span>${done ? "✓" : "○"}</span></button>`; }).join("")}</div>` : ""}</section>`; }
 function itemContext(detail, item) { const block = detail?.snapshot?.blocks?.find((candidate) => candidate.exercises.some((exercise) => exercise.exercise_occurrence_key === item?.exercise_occurrence_key)); const exercise = block?.exercises?.find((candidate) => candidate.exercise_occurrence_key === item?.exercise_occurrence_key); const setIndex = exercise?.sets?.findIndex((set) => set.set_key === item?.set_key) ?? -1; return { block, exercise, set: setIndex >= 0 ? exercise.sets[setIndex] : null, setNumber: setIndex >= 0 ? setIndex + 1 : null }; }
 function itemLabel(detail, item) { const context = itemContext(detail, item); const side = item?.side === "left" ? "左" : item?.side === "right" ? "右" : ""; return `${exerciseName(detail, item)}${context.setNumber ? ` · 第 ${context.setNumber} 组` : ""}${side ? ` · ${side}` : ""}`; }
 function focusTarget(target) { if (!target) return "未指定目标"; const fixedDuration = canonicalDurationSeconds(target); if (fixedDuration != null) return `${fixedDuration} 秒`; const unit = target.metric === "reps" ? "次" : target.metric === "duration_sec" ? "秒" : target.metric; return `${target.min === target.max ? target.min : `${target.min}–${target.max}`} ${unit}`; }
 function focusResistance(resistance) { if (!resistance) return ""; if (resistance.mode === "bodyweight") return "自重"; if (resistance.mode === "external_weight") return `${resistance.load_kg ?? "—"} kg${resistance.quantity && resistance.quantity !== 1 ? ` × ${resistance.quantity}` : ""}`; return resistance.mode || "阻力未指定"; }
-function formatElapsed(detail, now = clockNow()) { const seconds = (detail?.training_intervals || []).reduce((total, interval) => { const end = interval.ended_at ? Date.parse(interval.ended_at) : now; return total + Math.max(0, (end - Date.parse(interval.started_at)) / 1000); }, 0); const pausedSeconds = state.timerPausedSec + (state.timerPaused && state.timerPauseStartedAt ? Math.max(0, (now - state.timerPauseStartedAt) / 1000) : 0); const value = Math.max(0, Math.round(seconds - pausedSeconds)); const minutes = Math.floor(value / 60); const secs = value % 60; return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`; }
+function formatElapsed(detail, now = clockNow()) { const seconds = (detail?.training_intervals || []).reduce((total, interval) => { const end = interval.ended_at ? Date.parse(interval.ended_at) : state.timerPaused && state.timerPauseStartedAt ? state.timerPauseStartedAt : now; return total + Math.max(0, (end - Date.parse(interval.started_at)) / 1000); }, 0); const value = Math.max(0, Math.round(seconds)); const minutes = Math.floor(value / 60); const secs = value % 60; return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`; }
 function formatRestRemaining() { const milliseconds = state.restUntil == null ? state.restRemainingMs ?? 0 : Math.max(0, state.restUntil - clockNow()); const seconds = Math.max(0, Math.ceil(milliseconds / 1000)); const minutes = Math.floor(seconds / 60); return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`; }
 function resetTimedAction() { state.timedAction = blankTimedAction(); }
 function clearRestCountdown() { state.restUntil = null; state.restRemainingMs = null; state.restNextIndex = null; state.restLastCueSecond = null; state.restEndCuePlayed = false; }
@@ -520,7 +537,7 @@ function resumeTimedAction(now = clockNow()) {
 }
 function stopSessionClock() { if (state.timerHandle) clearScheduledInterval(state.timerHandle); state.timerHandle = null; }
 function updateSessionClock() {
-  if (!state.sessionDetail || state.sessionDetail.status !== "in_progress" || state.view !== "today") return stopSessionClock();
+  if (!isVisibleSession()) return stopSessionClock();
   const now = clockNow();
   if (state.restUntil) {
     const remaining = Math.max(0, Math.ceil((state.restUntil - now) / 1000));
@@ -542,34 +559,86 @@ function updateSessionClock() {
   if (shouldRender) render();
 }
 function syncSessionClock() {
-  const shouldRun = Boolean(state.sessionDetail?.status === "in_progress" && state.view === "today" && !state.endSheet && !state.timerPaused);
+  const shouldRun = isVisibleSession();
   if (!shouldRun) return stopSessionClock();
   if (!state.timerHandle) state.timerHandle = scheduleInterval(updateSessionClock, 250);
   updateSessionClock();
 }
 
-function toggleTimer() {
-  if (!state.sessionDetail || state.sessionDetail.status !== "in_progress") return;
-  const now = clockNow();
-  if (state.timerPaused) {
-    state.timerPausedSec += state.timerPauseStartedAt ? Math.max(0, (now - state.timerPauseStartedAt) / 1000) : 0;
-    state.timerPaused = false;
-    const retryWakeLock = state.wakeLock.status === "released";
-    state.timerPauseStartedAt = null;
-    state.timerPauseReason = null;
-    if (retryWakeLock) state.wakeLock.status = "idle";
-    resumeExecutionTimers(now);
-  } else {
-    pauseExecutionTimers(now);
-    state.timerPaused = true;
-    state.timerPauseReason = "manual";
-    state.timerPauseStartedAt = now;
-    if (state.wakeLock.sentinel) {
-      releaseWakeLock();
-      if (state.wakeLock.status === "active" || state.wakeLock.status === "requesting") state.wakeLock.status = "idle";
+function syncSessionDetail(detail) {
+  state.sessionDetail = detail;
+  state.todayDetail = detail;
+  state.session = detail;
+  if (state.today) state.today.session = detail;
+}
+function postSessionCommand(detail, command, body = {}, options = {}) {
+  return api(`/api/private/sessions/${detail.session_key}/${command}`, { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify(body), ...options });
+}
+function pauseBoundary(detail, now) {
+  const open = detail?.training_intervals?.find((interval) => interval.ended_at === null);
+  if (!open || now <= Date.parse(open.started_at) || now > Date.now()) return null;
+  return new Date(now).toISOString();
+}
+function persistSessionPause(closeAt = null) {
+  const detail = state.sessionDetail;
+  if (!detail || detail.status !== "in_progress") return Promise.resolve(null);
+  const sessionKey = detail.session_key;
+  const body = closeAt ? { close_at: closeAt } : {};
+  return postSessionCommand(detail, "pause", body, { keepalive: true }).then((result) => {
+    if (state.sessionDetail?.session_key === sessionKey) syncSessionDetail(result);
+    return result;
+  }).catch((error) => {
+    if (state.sessionDetail?.session_key === sessionKey) {
+      state.sessionMutation = { action: "pause", pending: false, error: error.data?.error?.message || error.message || "暂停同步失败，请重试" };
+      render();
     }
+    return null;
+  });
+}
+async function toggleTimer() {
+  if (!state.sessionDetail || state.sessionDetail.status !== "in_progress") return;
+  if (state.sessionMutation.pending) return;
+  const retryPause = state.timerPaused && state.sessionMutation.action === "pause" && state.sessionMutation.error;
+  const command = retryPause ? "pause" : state.timerPaused ? "resume" : "pause";
+  if (!beginSessionMutation(command)) return;
+  const now = clockNow();
+  if (command === "pause") {
+    if (!state.timerPaused) {
+      pauseExecutionTimers(now);
+      state.timerPaused = true;
+      state.timerPauseStartedAt = now;
+    }
+    state.timerPauseReason = "manual";
+    releaseWakeLock();
+    render();
   }
-  render();
+  try {
+    const closeAt = command === "pause" ? pauseBoundary(state.sessionDetail, now) : null;
+    const body = closeAt ? { close_at: closeAt } : {};
+    const result = await postSessionCommand(state.sessionDetail, command, body, { keepalive: true });
+    syncSessionDetail(result);
+    if (command === "resume") {
+      state.timerPaused = false;
+      state.timerPauseReason = null;
+      state.timerPauseStartedAt = null;
+      state.timerPausedSec = 0;
+      state.wakeLock.status = "idle";
+      resumeExecutionTimers(clockNow());
+    } else {
+      state.timerPaused = true;
+      state.timerPauseReason = "manual";
+    }
+    clearSessionMutation();
+    render();
+  } catch (error) {
+    failSessionMutation(command, error);
+  }
+  /* The server owns the active interval; the visual timers only run after a successful resume. */
+  if (command === "pause") {
+    stopSessionClock();
+  } else if (state.timerPaused) {
+    pauseExecutionTimers(now);
+  }
 }
 
 function endSheet(detail) {
@@ -686,7 +755,7 @@ async function loadCalendarDay(date, shouldRender = true) {
   state.calendarDayLoading = false; if (shouldRender) render();
 }
 function bind() {
-  app.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => { const wasCalendar = state.view === "calendar"; state.view = button.dataset.view; if (state.view === "settings") { await Promise.all([loadMe(), loadShare(), loadAgentAccess()]); render(); } else if (state.view === "calendar") { if (!calendarFirstDate()) return render(); await loadCalendarWeek(wasCalendar && state.calendar.from ? state.calendar.from : initialCalendarWeek(), wasCalendar ? state.calendar.selectedDate : state.today.date); } else render(); }));
+  app.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => { const destination = button.dataset.view; if (destination !== "today" && state.view === "today" && !(await ensureSessionPaused("navigation"))) return; const wasCalendar = state.view === "calendar"; state.view = destination; if (state.view === "settings") { await Promise.all([loadMe(), loadShare(), loadAgentAccess()]); render(); } else if (state.view === "calendar") { if (!calendarFirstDate()) return render(); await loadCalendarWeek(wasCalendar && state.calendar.from ? state.calendar.from : initialCalendarWeek(), wasCalendar ? state.calendar.selectedDate : state.today.date); } else render(); }));
   app.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", () => action(element.dataset.action, element.dataset.index ?? element.dataset.exerciseKey ?? element.dataset.rpe ?? element.dataset.range, element.dataset.date)));
   app.querySelectorAll(".bottom-sheet").forEach((sheet) => sheet.addEventListener("click", (event) => event.stopPropagation()));
   app.querySelectorAll("[data-exercise]").forEach((element) => element.addEventListener("click", () => openExercise(element.dataset.exercise)));
@@ -715,26 +784,26 @@ async function action(name, value, date) {
     if (name === "start") {
       if (!beginSessionMutation("start")) return;
       const result = await api(`/api/private/scheduled-workouts/${state.today.date}/start`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
-      showSession(result);
+      showSession(result, null, { active: true });
       return;
     }
     if (name === "skip") { const result = await api(`/api/private/scheduled-workouts/${state.today.date}/skip`, { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify({ skip_reason: null }) }); state.session = result; await openSession(result.session_key); return; }
     if (name === "restart") {
       if (!beginSessionMutation("restart")) return;
       const result = await api(`/api/private/sessions/${state.session.session_key}/restart`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
-      showSession(result);
+      showSession(result, null, { active: true });
       return;
     }
     if (name === "open-session") return openSession(state.session.session_key);
     if (name === "continue") {
       if (!beginSessionMutation("continue")) return;
       const result = await api(`/api/private/sessions/${state.session.session_key}/continue`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
-      showSession(result);
+      showSession(result, null, { active: true });
       return;
     }
     if (name === "start-timed") { startTimedAction(); return; }
-    if (name === "complete" || name === "save-adjust") return await completeCurrent(); if (name === "previous") { resetTimedAction(); state.focusIndex = Math.max(0, state.focusIndex - 1); state.adjust = false; return render(); } if (name === "next") { resetTimedAction(); const max = state.sessionDetail?.snapshot?.completion_items?.length - 1 || 0; state.focusIndex = Math.min(max, state.focusIndex + 1); state.adjust = false; return render(); } if (name === "jump-item") { resetTimedAction(); state.focusIndex = Number(value); state.progressOpen = false; state.adjust = false; clearRestCountdown(); return render(); } if (name === "toggle-adjust") { state.adjust = !state.adjust; return render(); } if (name === "toggle-progress") { state.progressOpen = !state.progressOpen; return render(); } if (name === "toggle-timer") { toggleTimer(); return; } if (name === "toggle-mute") { state.muted = !state.muted; return render(); } if (name === "minimize") { stopSessionClock(); resetTimedAction(); state.sessionDetail = null; state.progressOpen = false; state.adjust = false; state.feedbackOpen = null; clearRestCountdown(); state.endSheet = false; state.timerPaused = false; state.timerPauseStartedAt = null; state.timerPausedSec = 0; return refresh(); } if (name === "skip-rest") { resetTimedAction(); state.focusIndex = state.restNextIndex ?? state.focusIndex; clearRestCountdown(); return render(); } if (name === "open-feedback") { state.feedbackOpen = value || null; return render(); } if (name === "close-feedback") { state.feedbackOpen = null; return render(); }
-    if (name === "end") { beginEndSheet(); return render(); } if (name === "set-end-rpe") { state.endRpe = Number(value); return render(); } if (name === "save-end") return endCurrent(); if (name === "cancel-end") { state.endSheet = false; return render(); } if (name === "edit-session") { state.correction = true; return render(); } if (name === "cancel-correction") { state.correction = false; return render(); } if (name === "save-correction") return saveCorrection(); if (name === "open-progress-list") { state.focusIndex = 0; state.progressOpen = true; return render(); }
+    if (name === "complete" || name === "save-adjust") return await completeCurrent(); if (name === "previous") { resetTimedAction(); state.focusIndex = Math.max(0, state.focusIndex - 1); state.adjust = false; return render(); } if (name === "next") { resetTimedAction(); const max = state.sessionDetail?.snapshot?.completion_items?.length - 1 || 0; state.focusIndex = Math.min(max, state.focusIndex + 1); state.adjust = false; return render(); } if (name === "jump-item") { resetTimedAction(); state.focusIndex = Number(value); state.progressOpen = false; state.adjust = false; clearRestCountdown(); return render(); } if (name === "toggle-adjust") { state.adjust = !state.adjust; return render(); } if (name === "toggle-progress") { state.progressOpen = !state.progressOpen; return render(); } if (name === "toggle-timer") return await toggleTimer(); if (name === "toggle-mute") { state.muted = !state.muted; return render(); } if (name === "minimize") { if (!(await ensureSessionPaused("navigation"))) return; stopSessionClock(); resetTimedAction(); state.sessionDetail = null; state.progressOpen = false; state.adjust = false; state.feedbackOpen = null; clearRestCountdown(); state.endSheet = false; state.timerPaused = false; state.timerPauseStartedAt = null; state.timerPausedSec = 0; return refresh(); } if (name === "skip-rest") { resetTimedAction(); state.focusIndex = state.restNextIndex ?? state.focusIndex; clearRestCountdown(); return render(); } if (name === "open-feedback") { state.feedbackOpen = value || null; return render(); } if (name === "close-feedback") { state.feedbackOpen = null; return render(); }
+    if (name === "end") { beginEndSheet(); await pauseForInterruption("end-form"); return render(); } if (name === "set-end-rpe") { state.endRpe = Number(value); return render(); } if (name === "save-end") return endCurrent(); if (name === "cancel-end") { state.endSheet = false; return render(); } if (name === "edit-session") { state.correction = true; return render(); } if (name === "cancel-correction") { state.correction = false; return render(); } if (name === "save-correction") return saveCorrection(); if (name === "open-progress-list") { state.focusIndex = 0; state.progressOpen = true; return render(); }
     if (name === "close-exercise") { state.exercise = null; return render(); }
     if (name === "open-plan-sheet") { state.sheet = true; state.preview = null; state.error = null; state.planError = null; return render(); } if (name === "copy-current-plan") return copyCurrentPlan(); if (name === "close-sheet") { state.sheet = false; state.preview = null; state.planError = null; return render(); }
     if (name === "validate-plan") return validatePlan(); if (name === "confirm-plan") return confirmPlan(); if (name === "copy-error") return navigator.clipboard?.writeText(state.planError || "计划需要修正"); if (name === "export") { window.location.href = "/api/private/export"; return; }
@@ -762,13 +831,11 @@ function beginEndSheet() {
 function showSession(detail, requestedIndex = null, options = {}) {
   clearSessionMutation();
   resetTimedAction();
-  state.sessionDetail = detail;
-  state.todayDetail = detail;
-  state.session = detail;
-  if (state.today) state.today.session = detail;
-  state.timerPaused = false;
-  state.timerPauseReason = null;
-  state.timerPauseStartedAt = null;
+  syncSessionDetail(detail);
+  const pausedOnEntry = detail.status === "in_progress" && options.active !== true && (options.forcePaused === true || !hasOpenTrainingInterval(detail));
+  state.timerPaused = pausedOnEntry;
+  state.timerPauseReason = pausedOnEntry ? options.pauseReason || "navigation" : null;
+  state.timerPauseStartedAt = pausedOnEntry ? options.pausedAt || clockNow() : null;
   state.timerPausedSec = 0;
   const items = detail.snapshot?.completion_items || [];
   const savedKeys = new Set((detail.completion_results || []).map((result) => result.completion_item_key));
@@ -792,11 +859,19 @@ function showSession(detail, requestedIndex = null, options = {}) {
   render();
 }
 async function openSession(sessionKey, requestedIndex = null, options = {}) {
-  const detail = await api(`/api/private/sessions/${sessionKey}`);
-  showSession(detail, requestedIndex, options);
+  let detail = await api(`/api/private/sessions/${sessionKey}`);
+  if (detail.status === "in_progress" && hasOpenTrainingInterval(detail)) {
+    try {
+      detail = await postSessionCommand(detail, "pause", { close_at: detail.updated_at });
+    } catch {
+      showSession(detail, requestedIndex, { ...options, forcePaused: true, pauseReason: "navigation", pausedAt: Date.parse(detail.updated_at) || clockNow() });
+      return;
+    }
+  }
+  showSession(detail, requestedIndex, { ...options, active: false });
 }
 async function copyShare(message) { let copied = false; try { if (state.share?.url && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(state.share.url); copied = true; } } catch {} state.message = copied ? message : "分享链接已准备好，请复制下方链接"; return render(); }
-async function openExercise(exerciseKey) { try { state.exercise = await api(`/api/private/exercises/${encodeURIComponent(exerciseKey)}?preset=12w`); state.view = "progress"; render(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } }
+async function openExercise(exerciseKey) { try { if (!(await ensureSessionPaused("navigation"))) return; state.exercise = await api(`/api/private/exercises/${encodeURIComponent(exerciseKey)}?preset=12w`); state.view = "progress"; render(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } }
 async function copyCurrentPlan() { try { const packageValue = await api("/api/private/plan/update-package"); state.draft = JSON.stringify(packageValue, null, 2); state.sheet = true; state.preview = null; state.error = null; state.planError = null; await navigator.clipboard?.writeText(state.draft); state.message = "当前计划 JSON 已复制，请修改 effective_from 或内容后检查"; render(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } }
 async function completeCurrent() {
   const detail = state.sessionDetail;
@@ -824,7 +899,7 @@ async function completeCurrent() {
   const savedKeys = new Set(updated.completion_results.map((saved) => saved.completion_item_key));
   const nextIndex = updated.snapshot.completion_items.findIndex((candidate, index) => index > currentIndex && !savedKeys.has(candidate.completion_item_key));
   const fallbackIndex = nextIndex >= 0 ? nextIndex : updated.snapshot.completion_items.findIndex((candidate) => !savedKeys.has(candidate.completion_item_key));
-  showSession(updated, fallbackIndex >= 0 ? fallbackIndex : 0, { restSeconds: fallbackIndex >= 0 ? restSeconds : 0, nextIndex: fallbackIndex >= 0 ? fallbackIndex : null, openEnd: fallbackIndex < 0 });
+  showSession(updated, fallbackIndex >= 0 ? fallbackIndex : 0, { restSeconds: fallbackIndex >= 0 ? restSeconds : 0, nextIndex: fallbackIndex >= 0 ? fallbackIndex : null, openEnd: fallbackIndex < 0, active: true });
 }
 async function endCurrent() {
   const detail = state.sessionDetail;
@@ -840,5 +915,9 @@ async function saveCorrection() { const detail = state.view === "calendar" ? sta
 async function validatePlan() { try { const result = await api("/api/private/plan-updates/validate", { method: "POST", body: JSON.stringify({ package_text: state.draft }) }); state.preview = result.preview; state.planError = null; render(); } catch (error) { state.planError = error.data?.error?.details?.map((detail) => `${detail.path}: ${detail.message}`).join("\n") || error.data?.error?.message || error.message; state.error = null; render(); } }
 async function confirmPlan() { await api("/api/private/plan-updates/apply", { method: "POST", headers: { "Idempotency-Key": key() }, body: JSON.stringify({ package_text: state.draft }) }); state.sheet = false; state.preview = null; await refresh(); }
 
-if (typeof document.addEventListener === "function") document.addEventListener("visibilitychange", handleVisibilityChange);
+function handlePageHide() { void pauseForInterruption("pagehide"); }
+if (typeof document.addEventListener === "function") {
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  document.addEventListener("pagehide", handlePageHide);
+}
 refresh();
