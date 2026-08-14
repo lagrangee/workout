@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { appFixture, call, json, post, today } from "./helpers.js";
-import { weekdayKey } from "../src/util.js";
+import { addDays, weekdayKey } from "../src/util.js";
+import { createSession } from "../src/session.js";
 
 const appSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 
@@ -211,7 +212,7 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
     now: clock.now,
     setInterval: clock.setInterval,
     clearInterval: clock.clearInterval,
-    audio: {
+    audio: options.audio ?? {
       activate: () => audioEvents.push({ type: "activate" }),
       cue: (kind, value) => audioEvents.push({ type: "cue", kind, value }),
     },
@@ -263,6 +264,17 @@ async function seedPartialSession(handler) {
   const endedRecord = { ...record, training_intervals: record.training_intervals.map((interval) => ({ ...interval, ended_at: endedAt })) };
   await call(handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record: endedRecord, ended_at: endedAt }, "seed-partial-end"));
   return started.body.session_key;
+}
+
+async function seedExpiredCalendarSession(store) {
+  const state = await store.getByEmail("athlete-a@example.invalid");
+  const scheduledDate = addDays(today, -7);
+  const startedAt = new Date(`${scheduledDate}T02:00:00.000Z`);
+  const created = createSession(state, scheduledDate, startedAt, "start");
+  assert.ok(created.session);
+  created.session.updated_at = startedAt.toISOString();
+  await store.save(state);
+  return scheduledDate;
 }
 
 test("browser seam: start shows pending, deduplicates taps, and consumes the mutation Session", async () => {
@@ -621,4 +633,48 @@ test("browser seam: fixed duration runs preparation and tempo cues, pauses with 
   assert.equal(JSON.parse(recordRequests[0].options.body).completion_results[0].actual.value, 4);
   assert.equal(browser.calls.filter((request) => request.method === "GET" && request.path.startsWith("/api/private/sessions/")).length, 0);
   assert.match(browser.root.innerHTML, /组间休息/);
+});
+
+test("browser seam: expired calendar Sessions show 未完成 and expose one-click normalization", async () => {
+  const fixture = appFixture();
+  const scheduledDate = await seedExpiredCalendarSession(fixture.store);
+  const browser = await openBrowser(fixture.handler, async () => null);
+
+  browser.root.querySelector('[data-view="calendar"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="calendar-previous"]').click();
+  await settle();
+
+  const expiredDay = browser.root.querySelector(`[data-date="${scheduledDate}"]`);
+  assert.ok(expiredDay);
+  assert.match(expiredDay.className, /partial/);
+  assert.match(expiredDay.textContent, /未完成/);
+  assert.ok(browser.root.querySelector('[data-action="normalize-expired"]'));
+
+  browser.root.querySelector('[data-action="normalize-expired"]').click();
+  await settle();
+  assert.equal(browser.calls.filter((request) => request.path === "/api/private/sessions/normalize-expired").length, 1);
+  assert.equal(browser.root.querySelector('[data-action="normalize-expired"]'), null);
+  assert.match(browser.root.innerHTML, /已整理 1 条过期训练记录/);
+});
+
+test("browser seam: audio initialization failure is visible while visual timing remains usable", async () => {
+  const { handler } = timedAppFixture();
+  const clock = deterministicClock();
+  const browser = await openBrowser(handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => Promise.resolve({ ok: false, error: "音频播放被浏览器拒绝" }),
+      cue: () => Promise.resolve({ ok: false, error: "音频播放被浏览器拒绝" }),
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
+
+  assert.match(browser.root.innerHTML, /声音未开启/);
+  assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
+  assert.equal(browser.root.querySelector('[data-action="start-timed"]').disabled, true);
 });

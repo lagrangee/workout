@@ -121,6 +121,14 @@ complete shape above:
 interval start or be more than five minutes in the future. The write is atomic
 and derives `completed` at 100 percent or `partial` below 100 percent.
 
+The private Calendar maintenance command `POST /api/private/sessions/normalize-expired`
+is the one explicit exception to the normal end derivation: for an `in_progress`
+Session whose Scheduled Workout date is earlier than the Athlete's current local
+date, it closes the open interval at the last persisted Session activity time and
+sets status to `partial` without deriving `completed`. It requires an
+`Idempotency-Key`, is Athlete-scoped, and is safe to replay. No background job
+performs this normalization.
+
 Terminal correction uses `PUT .../record`, requires all intervals closed, and
 rederives completion and status. A skipped Session permits only note and skip
 reason correction until restart. There is no field merge, audit history,
