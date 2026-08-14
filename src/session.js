@@ -160,6 +160,39 @@ export function continueOrRestart(state, sessionKey, now, command) {
   return { session };
 }
 
+/**
+ * Close sessions whose scheduled local date has passed without treating a
+ * missing explicit end command as athlete confirmation of completion.
+ *
+ * @param {any} state
+ * @param {Date} now
+ */
+export function normalizeExpiredSessions(state, now) {
+  const today = localDate(now, state.timezone);
+  const normalized = [];
+  for (const session of state.sessions) {
+    if (session.status !== "in_progress" || session.scheduled_date >= today) continue;
+    const openIntervals = session.training_intervals.filter(/** @param {any} interval */ (interval) => interval.ended_at === null);
+    const endAt = expiredSessionEndAt(session, openIntervals, now);
+    for (const interval of openIntervals) interval.ended_at = endAt;
+    session.status = "partial";
+    session.updated_at = now.toISOString();
+    normalized.push(session);
+  }
+  if (normalized.length) state.training_version += normalized.length;
+  return { normalized_count: normalized.length, session_keys: normalized.map((session) => session.session_key) };
+}
+
+/** @param {any} session @param {any[]} openIntervals @param {Date} now */
+function expiredSessionEndAt(session, openIntervals, now) {
+  const starts = openIntervals.map((interval) => Date.parse(interval.started_at)).filter(Number.isFinite);
+  const latestStart = starts.length ? Math.max(...starts) : now.getTime() - 1000;
+  const activityTimes = [Date.parse(session.updated_at), ...session.training_intervals.map(/** @param {any} interval */ (interval) => Date.parse(interval.ended_at)).filter(Number.isFinite)].filter(Number.isFinite);
+  const activity = activityTimes.length ? Math.max(...activityTimes) : latestStart + 1000;
+  const bounded = Math.min(activity, now.getTime());
+  return new Date(Math.max(latestStart + 1000, bounded)).toISOString();
+}
+
 /** @param {any} session */
 export function sessionDetail(session) {
   return {

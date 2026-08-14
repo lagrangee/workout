@@ -21,42 +21,59 @@ const clockNow = () => typeof workoutTestSeams.now === "function" ? Number(worko
 const scheduleInterval = (callback, delay) => typeof workoutTestSeams.setInterval === "function" ? workoutTestSeams.setInterval(callback, delay) : setInterval(callback, delay);
 const clearScheduledInterval = (handle) => typeof workoutTestSeams.clearInterval === "function" ? workoutTestSeams.clearInterval(handle) : clearInterval(handle);
 
+const audioSources = {
+  warmup: "/audio/workout-warmup.wav",
+  prepare: "/audio/workout-prepare.wav",
+  tempo: "/audio/workout-tempo.wav",
+  "tempo-final": "/audio/workout-tempo-final.wav",
+  complete: "/audio/workout-complete.wav",
+};
+
 function createBrowserAudio() {
-  let audioContext = null;
+  const players = new Map();
+  const sourceFor = (kind) => audioSources[kind] || audioSources.tempo;
+  const playerFor = (kind) => {
+    if (typeof Audio !== "function") return null;
+    const source = sourceFor(kind);
+    if (!players.has(source)) {
+      const player = new Audio(source);
+      player.preload = "auto";
+      player.playsInline = true;
+      players.set(source, player);
+    }
+    return players.get(source);
+  };
+  const setPlaybackSession = () => {
+    try {
+      if (navigator.audioSession && "type" in navigator.audioSession) navigator.audioSession.type = "playback";
+    } catch {}
+  };
+  const play = (kind) => {
+    const player = playerFor(kind);
+    if (!player) return Promise.resolve({ ok: false, error: "当前浏览器不支持 HTML 音频播放" });
+    try {
+      player.pause();
+      player.currentTime = 0;
+      return Promise.resolve(player.play()).then(() => ({ ok: true })).catch((error) => ({ ok: false, error: error?.message || "音频播放被浏览器拒绝" }));
+    } catch (error) {
+      return Promise.resolve({ ok: false, error: error?.message || "音频播放失败" });
+    }
+  };
   return {
-    activate() {
-      try {
-        const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContextConstructor) return;
-        audioContext ||= new AudioContextConstructor();
-        if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
-      } catch {}
+    activate(kind = null) {
+      setPlaybackSession();
+      return play(kind || "warmup").then((result) => ({ ...result, initialCue: Boolean(kind && result.ok) }));
     },
     cue(kind) {
-      if (!audioContext) return;
-      try {
-        const now = audioContext.currentTime;
-        const oscillator = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        const isCompletion = kind === "complete";
-        const isRestCompletion = kind === "rest-complete";
-        const isFinal = kind === "tempo-final";
-        oscillator.type = "sine";
-        oscillator.frequency.value = isCompletion ? 740 : isRestCompletion ? 660 : isFinal ? 620 : kind === "prepare" ? 440 : 520;
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.exponentialRampToValueAtTime(isCompletion ? 0.16 : isRestCompletion ? 0.12 : 0.09, now + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + (isCompletion ? 0.24 : isRestCompletion ? 0.2 : 0.1));
-        oscillator.connect(gain).connect(audioContext.destination);
-        oscillator.start(now);
-        oscillator.stop(now + (isCompletion ? 0.26 : isRestCompletion ? 0.22 : 0.12));
-      } catch {}
+      setPlaybackSession();
+      return play(kind === "rest-final" ? "tempo-final" : kind);
     },
   };
 }
 
 const actionAudio = workoutTestSeams.audio || createBrowserAudio();
 const blankTimedAction = () => ({ itemKey: null, phase: "idle", targetSec: null, deadlineMs: null, remainingMs: null, remainingSec: null, lastCueSecond: null });
-const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [] }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
+const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
 
 const app = document.querySelector("#app");
 async function api(path, options = {}) {
@@ -98,6 +115,28 @@ function failSessionMutation(action, error) {
   state.error = null;
   state.sessionMutation = { action, pending: false, error: error.data?.error?.message || error.message || "请求失败，请重试" };
   render();
+}
+function audioFailureFor(result) {
+  if (result === false) return "音频播放失败";
+  if (result && typeof result === "object" && result.ok === false) return result.error || "音频播放失败";
+  return null;
+}
+function setAudioFailure(error) {
+  if (state.audio.status === "error") return;
+  state.audio = { status: "error", error: typeof error === "string" ? error : "音频播放失败" };
+  render();
+}
+function observeAudioResult(result) {
+  if (result && typeof result.then === "function") {
+    return result.then((outcome) => {
+      const error = audioFailureFor(outcome);
+      if (error) setAudioFailure(error);
+      return outcome;
+    }).catch((error) => { setAudioFailure(error?.message || "音频播放失败"); return { ok: false, error }; });
+  }
+  const error = audioFailureFor(result);
+  if (error) setAudioFailure(error);
+  return result;
 }
 function documentIsVisible() { return typeof document === "undefined" || document.hidden !== true; }
 function wakeLockSupported() { return typeof navigator !== "undefined" && navigator.wakeLock && typeof navigator.wakeLock.request === "function"; }
@@ -214,7 +253,8 @@ function handleVisibilityChange() {
   } else state.wakeLock.status = "unsupported";
   render();
 }
-const calendarStatus = (entry, session) => { if (entry.kind === "rest") return { key: "rest", label: "休息日" }; if (entry.kind === "no_plan") return { key: "no_plan", label: "无计划" }; if (session?.status === "in_progress") return { key: "in_progress", label: "进行中" }; if (session?.status === "completed") return { key: "completed", label: "已完成" }; if (session?.status === "partial") return { key: "partial", label: "未完成" }; if (session?.status === "skipped") return { key: "skipped", label: "已跳过" }; if (entry.is_overdue_unstarted) return { key: "overdue", label: "未开始" }; if (entry.date === state.today?.date) return { key: "today", label: "未开始" }; return { key: "scheduled", label: "未开始" }; };
+const isExpiredSession = (session) => Boolean(session?.status === "in_progress" && state.today?.date && session.scheduled_date < state.today.date);
+const calendarStatus = (entry, session) => { if (entry.kind === "rest") return { key: "rest", label: "休息日" }; if (entry.kind === "no_plan") return { key: "no_plan", label: "无计划" }; if (isExpiredSession(session)) return { key: "partial", label: "未完成" }; if (session?.status === "in_progress") return { key: "in_progress", label: "进行中" }; if (session?.status === "completed") return { key: "completed", label: "已完成" }; if (session?.status === "partial") return { key: "partial", label: "未完成" }; if (session?.status === "skipped") return { key: "skipped", label: "已跳过" }; if (entry.is_overdue_unstarted) return { key: "overdue", label: "未开始" }; if (entry.date === state.today?.date) return { key: "today", label: "未开始" }; return { key: "scheduled", label: "未开始" }; };
 const monthStart = (date) => `${date.slice(0, 7)}-01`;
 const shiftMonth = (date, offset) => { const [year, month] = date.slice(0, 7).split("-").map(Number); const shifted = new Date(Date.UTC(year, month - 1 + offset, 1)); return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-01`; };
 const progressRangeLabel = (range) => ({ current: "当月", previous: "上月", all: "累计" }[range] || "当月");
@@ -322,13 +362,13 @@ function sessionView(session, entry) {
   const completeBlocked = isDone || isSessionMutationPending("complete") || (isTimed && timedTimer.phase !== "complete");
   const adjustButton = isTimed ? "" : `<button class="secondary" data-action="toggle-adjust">${state.adjust ? "收起调整" : "调整"}</button>`;
   const adjustPanel = isTimed ? "" : state.adjust ? `<div class="adjust-panel"><label>实际 ${item?.target?.metric === "reps" ? "次数" : "秒数"}<input id="actual-value" data-completion-key="${item.completion_item_key}" type="number" min="1" value="${escapeHtml(actualDraft)}" /></label><label>RIR<input id="actual-rir" data-completion-key="${item.completion_item_key}" type="number" min="0" max="10" value="${escapeHtml(rirDraft)}" /></label><button class="primary wide" data-action="save-adjust" ${mutationDisabled("complete")}>${mutationLabel("complete", "保存并完成")}</button></div>` : "";
-  return `${sessionHeader(detail)}${progressDisclosure(detail, items)}${wakeLockNotice()}<div class="focus-workout-scroll"><section class="focus-stage"><span class="focus-count">${state.focusIndex + 1} / ${items.length} · ${escapeHtml(context.block?.title || (item.target.metric === "reps" ? "力量" : "训练"))}</span><h2>${escapeHtml(itemLabel(detail, item))}</h2><p class="focus-prescription">${escapeHtml(parts.join(" · "))}</p>${isTimed ? timedActionView(item, context, result) : ""}<div class="actual-panel">${actualRows}</div><div class="feedback-area">${feedback}</div><div class="focus-actions"><button class="primary wide" data-action="complete" ${completeBlocked ? "disabled" : ""} ${isSessionMutationPending("complete") ? 'aria-disabled="true" aria-busy="true"' : ""}>${isDone ? "已完成" : mutationLabel("complete", "完成")}</button><div class="focus-secondary ${isTimed ? "is-timed" : ""}"><button class="secondary" data-action="previous" ${state.focusIndex === 0 ? "disabled" : ""}>上一项</button>${adjustButton}<button class="secondary" data-action="next" ${state.focusIndex >= items.length - 1 ? "disabled" : ""}>下一项</button></div>${adjustPanel}${sessionMutationNotice("complete")}</div></section></div>${sessionFooter(detail)}${state.endSheet ? endSheet(detail) : ""}`;
+  return `${sessionHeader(detail)}${progressDisclosure(detail, items)}${wakeLockNotice()}${audioNotice()}<div class="focus-workout-scroll"><section class="focus-stage"><span class="focus-count">${state.focusIndex + 1} / ${items.length} · ${escapeHtml(context.block?.title || (item.target.metric === "reps" ? "力量" : "训练"))}</span><h2>${escapeHtml(itemLabel(detail, item))}</h2><p class="focus-prescription">${escapeHtml(parts.join(" · "))}</p>${isTimed ? timedActionView(item, context, result) : ""}<div class="actual-panel">${actualRows}</div><div class="feedback-area">${feedback}</div><div class="focus-actions"><button class="primary wide" data-action="complete" ${completeBlocked ? "disabled" : ""} ${isSessionMutationPending("complete") ? 'aria-disabled="true" aria-busy="true"' : ""}>${isDone ? "已完成" : mutationLabel("complete", "完成")}</button><div class="focus-secondary ${isTimed ? "is-timed" : ""}"><button class="secondary" data-action="previous" ${state.focusIndex === 0 ? "disabled" : ""}>上一项</button>${adjustButton}<button class="secondary" data-action="next" ${state.focusIndex >= items.length - 1 ? "disabled" : ""}>下一项</button></div>${adjustPanel}${sessionMutationNotice("complete")}</div></section></div>${sessionFooter(detail)}${state.endSheet ? endSheet(detail) : ""}`;
 }
 
 function restView(detail, items) {
   const next = items[state.restNextIndex] || items[state.focusIndex];
   const context = itemContext(detail, next);
-  return `${sessionHeader(detail, false)}${progressDisclosure(detail, items)}${wakeLockNotice()}<section class="rest-screen"><span class="rest-label">组间休息</span><h2>放松，准备下一项</h2><div class="rest-time" data-rest-remaining aria-live="polite" aria-label="休息剩余时间">${formatRestRemaining()}</div><div class="next-context"><span>接下来</span><strong>${escapeHtml(itemLabel(detail, next))}</strong><small>${escapeHtml(focusTarget(next.target))}</small></div><button class="secondary" data-action="skip-rest">跳过休息</button></section>${sessionFooter(detail, false)}`;
+  return `${sessionHeader(detail, false)}${progressDisclosure(detail, items)}${wakeLockNotice()}${audioNotice()}<section class="rest-screen"><span class="rest-label">组间休息</span><h2>放松，准备下一项</h2><div class="rest-time" data-rest-remaining aria-live="polite" aria-label="休息剩余时间">${formatRestRemaining()}</div><div class="next-context"><span>接下来</span><strong>${escapeHtml(itemLabel(detail, next))}</strong><small>${escapeHtml(focusTarget(next.target))}</small></div><button class="secondary" data-action="skip-rest">跳过休息</button></section>${sessionFooter(detail, false)}`;
 }
 
 function sessionSummaryView(session, entry, detail) {
@@ -384,7 +424,14 @@ function resumeRestCountdown(now = clockNow()) {
 }
 function pauseExecutionTimers(now = clockNow()) { pauseTimedAction(now); pauseRestCountdown(now); }
 function resumeExecutionTimers(now = clockNow()) { resumeTimedAction(now); resumeRestCountdown(now); }
-function playActionCue(kind, value) { if (state.muted) return; try { actionAudio.cue?.(kind, value); } catch {} }
+function audioNotice() {
+  if (state.muted || state.audio.status !== "error") return "";
+  return `<div class="notice timed-audio-notice" role="alert"><strong>声音未开启</strong><span>提示音播放失败，计时仍可继续。请检查 iPhone 的音量和静音开关后，再点击开始动作重试。</span></div>`;
+}
+function playActionCue(kind, value) {
+  if (state.muted) return;
+  try { observeAudioResult(actionAudio.cue?.(kind, value)); } catch (error) { setAudioFailure(error?.message || "音频播放失败"); }
+}
 function emitTempoCues(timer, remainingSec) {
   while (timer.lastCueSecond > remainingSec) {
     timer.lastCueSecond -= 1;
@@ -438,9 +485,25 @@ function startTimedAction() {
   if (!detail || !item || targetSec == null || state.timerPaused || state.timedAction.phase !== "idle") return;
   const now = clockNow();
   state.timedAction = { itemKey: item.completion_item_key, phase: "preparing", targetSec, deadlineMs: now + preparationDurationSec * 1000, remainingMs: preparationDurationSec * 1000, remainingSec: preparationDurationSec, lastCueSecond: null };
-  try { actionAudio.activate?.(); } catch {}
-  playActionCue("prepare", preparationDurationSec);
-  render();
+  state.audio = state.muted ? state.audio : { status: "starting", error: null };
+  let activation;
+  try { activation = state.muted ? { ok: true, initialCue: true } : actionAudio.activate?.("prepare"); }
+  catch (error) { activation = { ok: false, error: error?.message || "音频播放失败" }; }
+  const finish = (result) => {
+    const error = audioFailureFor(result);
+    if (error) state.audio = { status: "error", error };
+    else {
+      state.audio = { status: "ready", error: null };
+      if (!result?.initialCue) playActionCue("prepare", preparationDurationSec);
+    }
+    render();
+  };
+  if (activation && typeof activation.then === "function") {
+    render();
+    void activation.then(finish).catch((error) => finish({ ok: false, error: error?.message || "音频播放失败" }));
+  } else {
+    finish(activation);
+  }
 }
 function pauseTimedAction(now = clockNow()) {
   updateTimedAction(now);
@@ -540,7 +603,9 @@ function calendarView() {
     return `<button class="calendar-day ${status.key}${selectedClass}" data-action="calendar-select" data-date="${entry.date}" ${beforePlan ? "disabled" : ""}><span class="calendar-day-label">${weekdayLabels[entry.weekday]}</span><span class="calendar-day-date">${entry.date.slice(5)}</span><span class="calendar-day-summary">${entry.kind === "workout" ? escapeHtml(entry.title) : status.label}</span><span class="calendar-day-meta">${entry.kind === "workout" ? `${entry.module_count || 0} 个模块 · ${entry.estimated_duration_min} 分钟 · ${status.label}` : entry.kind === "rest" ? "恢复，不创建训练记录" : beforePlan ? "" : "未安排内容"}</span></button>`;
   }).join("");
   const detail = state.calendarDay && state.calendarDay.entry.date === selected ? (state.correction ? correctionView(state.calendarDay.session, state.calendarDay.entry) : calendarDayDetail(state.calendarDay.entry, state.calendarDay.session)) : `<section class="quiet-card"><strong>选择一天</strong><p>查看这一天的训练处方和完成情况。</p></section>`;
-  return `<section class="page-head calendar-head"><p class="eyebrow">CALENDAR · ${state.today?.timezone || ""}</p><h1>日历</h1><div class="calendar-week-controls"><button class="secondary" data-action="calendar-previous" ${previousDisabled ? "disabled" : ""}>‹ 上一周</button><strong>${from} – ${state.calendar.to}</strong><button class="secondary" data-action="calendar-next">下一周 ›</button></div><div class="calendar-legend" aria-label="日历状态图例"><span class="calendar-legend-item completed"><i></i>已完成</span><span class="calendar-legend-item partial"><i></i>未完成</span><span class="calendar-legend-item skipped"><i></i>已跳过</span><span class="calendar-legend-item today"><i></i>未开始</span></div></section><section class="calendar-week" aria-label="七天训练安排">${rows}</section>${state.calendarDayLoading ? `<section class="loading compact-loading"><span class="spinner"></span><p>正在读取这一天…</p></section>` : detail}`;
+  const maintenance = state.calendar.expiredCount > 0 ? `<button class="secondary calendar-maintenance-button" data-action="normalize-expired" ${state.calendarMaintenance.pending ? "disabled aria-busy=\"true\"" : ""}>${state.calendarMaintenance.pending ? "整理中…" : `整理 ${state.calendar.expiredCount} 条`}</button>` : "";
+  const maintenanceError = state.calendarMaintenance.error ? `<div class="notice calendar-maintenance-notice" role="alert">${escapeHtml(state.calendarMaintenance.error)}</div>` : "";
+  return `<section class="page-head calendar-head"><div class="calendar-title-row"><div><p class="eyebrow">CALENDAR · ${state.today?.timezone || ""}</p><h1>日历</h1></div>${maintenance}</div>${maintenanceError}<div class="calendar-week-controls"><button class="secondary" data-action="calendar-previous" ${previousDisabled ? "disabled" : ""}>‹ 上一周</button><strong>${from} – ${state.calendar.to}</strong><button class="secondary" data-action="calendar-next">下一周 ›</button></div><div class="calendar-legend" aria-label="日历状态图例"><span class="calendar-legend-item completed"><i></i>已完成</span><span class="calendar-legend-item partial"><i></i>未完成</span><span class="calendar-legend-item skipped"><i></i>已跳过</span><span class="calendar-legend-item today"><i></i>未开始</span></div></section><section class="calendar-week" aria-label="七天训练安排">${rows}</section>${state.calendarDayLoading ? `<section class="loading compact-loading"><span class="spinner"></span><p>正在读取这一天…</p></section>` : detail}`;
 }
 
 function calendarDayDetail(entry, detail) {
@@ -586,13 +651,28 @@ async function loadCalendarWeek(from, selectedDate = null) {
     const to = addCalendarDays(from, 6);
     const [schedule, sessions] = await Promise.all([api(`/api/private/schedule?from=${from}&to=${to}`), api(`/api/private/sessions?from=${from}&to=${to}&limit=200`)]);
     const first = calendarFirstDate(); const requestedDate = selectedDate || from; const normalizedSelectedDate = first && requestedDate < first ? first : requestedDate;
-    state.calendar = { from, to, selectedDate: normalizedSelectedDate >= from && normalizedSelectedDate <= to ? normalizedSelectedDate : from, entries: schedule.entries, sessions: sessions.items };
+    state.calendar = { from, to, selectedDate: normalizedSelectedDate >= from && normalizedSelectedDate <= to ? normalizedSelectedDate : from, entries: schedule.entries, sessions: sessions.items, expiredCount: sessions.items.filter(isExpiredSession).length };
     state.calendarLoading = false;
     await loadCalendarDay(state.calendar.selectedDate, false);
   } catch (error) {
     state.calendarLoading = false; state.calendarDayLoading = false; state.calendarError = error.data?.error?.message || error.message;
   }
   render();
+}
+async function normalizeExpiredFromCalendar() {
+  if (state.calendarMaintenance.pending) return;
+  state.calendarMaintenance = { pending: true, error: null };
+  render();
+  try {
+    const result = await api("/api/private/sessions/normalize-expired", { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
+    state.calendarMaintenance = { pending: false, error: null };
+    state.message = result.normalized_count ? `已整理 ${result.normalized_count} 条过期训练记录，统一标记为未完成` : "没有需要整理的过期训练记录";
+    await refresh();
+    if (state.calendar.from) await loadCalendarWeek(state.calendar.from, state.calendar.selectedDate);
+  } catch (error) {
+    state.calendarMaintenance = { pending: false, error: error.data?.error?.message || error.message || "整理失败，请重试" };
+    render();
+  }
 }
 async function loadCalendarDay(date, shouldRender = true) {
   const first = calendarFirstDate();
@@ -631,6 +711,7 @@ async function action(name, value, date) {
     if (name === "calendar-select") return loadCalendarDay(date);
     if (name === "progress-range") return loadProgress(value);
     if (name === "calendar-correct") { state.correction = true; return render(); }
+    if (name === "normalize-expired") return normalizeExpiredFromCalendar();
     if (name === "start") {
       if (!beginSessionMutation("start")) return;
       const result = await api(`/api/private/scheduled-workouts/${state.today.date}/start`, { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" });
@@ -736,8 +817,8 @@ async function completeCurrent() {
   const exerciseFeedback = Object.entries(state.feedbackDraft).map(([exercise_occurrence_key, text]) => ({ exercise_occurrence_key, text: text.trim() })).filter((item) => item.text);
   const result = { completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: Number(rawValue) }, resistance: item.resistance, rir: rirInput === "" || rirInput == null ? null : Number(rirInput), completed_at: new Date().toISOString() };
   if (!beginSessionMutation("complete")) return;
-  if (restSeconds > 0) {
-    try { actionAudio.activate?.(); } catch {}
+  if (restSeconds > 0 && !state.muted) {
+    try { observeAudioResult(actionAudio.activate?.()); } catch (error) { setAudioFailure(error?.message || "音频播放失败"); }
   }
   const updated = await api(`/api/private/sessions/${detail.session_key}/record`, { method: "PUT", body: JSON.stringify({ record_schema_version: 1, completion_results: [...existing, result], training_intervals: detail.training_intervals, session_rpe: null, note: detail.note, exercise_feedback: exerciseFeedback, skip_reason: null }) });
   const savedKeys = new Set(updated.completion_results.map((saved) => saved.completion_item_key));

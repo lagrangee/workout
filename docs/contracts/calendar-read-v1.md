@@ -26,4 +26,10 @@ When the expanded entry has a `session_key`, the UI makes the separate authentic
 
 The Calendar navigation is `今日 | 日历 | 进展 | 设置`. Calendar provides no start, continue, restart, skip, record, or end action. Today remains the only execution surface. Historical completed, partial, and skipped Session details may link to the existing `校正记录` flow; correction preserves the Scheduled Workout date and immutable Training Plan Snapshot.
 
+Calendar may expose one explicit maintenance action for stale execution state:
+
+`POST /api/private/sessions/normalize-expired`
+
+The request body is `{}` and requires an `Idempotency-Key`. The server recomputes the authenticated Athlete's current local date, finds every `in_progress` Session with an earlier `scheduled_date`, closes its open Training Interval at the last persisted Session activity time, and changes its status to `partial`. It never derives `completed`, even if all Completion Items happen to have values, because the Athlete did not explicitly end the Session. The response is `{ normalized_count, session_keys }`; replaying the same idempotent request returns the original response. This is an explicit Calendar maintenance write, not an execution or recording action, and there is no scheduled daemon in v1.
+
 All reads and correction writes stay inside the authenticated Athlete boundary. Rest Day and no-plan are neutral and distinct; no Calendar read creates a Session or changes a plan.
