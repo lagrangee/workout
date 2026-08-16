@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const skillPath = resolve("skills/workout-agent/SKILL.md");
+const skillPath = resolve("skills/workout/SKILL.md");
 
 test("Workout Agent Skill is model-invoked with a sharp data and plan trigger", async () => {
   const skill = await readFile(skillPath, "utf8");
   const frontmatter = skill.match(/^---\n([\s\S]*?)\n---\n/);
 
   assert.ok(frontmatter, "skill frontmatter is present");
-  assert.match(frontmatter[1], /^name: workout-agent$/m);
+  assert.match(frontmatter[1], /^name: workout$/m);
   assert.match(
     frontmatter[1],
     /^description: .*Workout.*(data|plan).*$/im,
