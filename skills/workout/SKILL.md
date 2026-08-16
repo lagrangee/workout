@@ -1,5 +1,5 @@
 ---
-name: workout-agent
+name: workout
 description: Workout data and plan changes: use when the user asks to read training data, inspect a plan or completed sessions, analyze progress, review exercise history, or propose, validate, or apply a future plan change through the Workout MCP tools.
 ---
 
