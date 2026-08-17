@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
+import { createAerobicProjectionPublisher, createAuthenticatedAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
 
 function projection() {
   return {
@@ -86,4 +86,37 @@ test("cloud publisher rejects a response for a different projection", async () =
     () => publisher(projection(), { idempotency_key: "training-archive:2026-08-15:request-key" }),
     (error) => error.code === "invalid_sync_response" && error.retryable === false,
   );
+});
+
+test("authenticated publisher logs in once and forwards only the session cookie to D1 sync", async () => {
+  const requests = [];
+  const publisher = createAuthenticatedAerobicProjectionPublisher({
+    origin: "https://workout.example",
+    email: "athlete@example.invalid",
+    password: "not-for-output",
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), method: init?.method, headers: Object.fromEntries(new Headers(init?.headers)), body: init?.body });
+      if (String(url).endsWith("/api/auth/login")) return new Response(JSON.stringify({ authenticated: true }), { status: 200, headers: { "set-cookie": "workout_session=session-value; Max-Age=60; Path=/; HttpOnly" } });
+      return new Response(JSON.stringify({
+        schema_version: 1,
+        publication_key: projection().publication_key,
+        target_date: projection().target_date,
+        status: "none",
+        published_count: 0,
+        activity_count: 0,
+        route_count: 0,
+        source_statuses: projection().source_statuses,
+        data_as_of: projection().data_as_of,
+      }), { status: 200 });
+    },
+  });
+
+  await publisher(projection(), { idempotency_key: "training-archive:2026-08-15:request-key" });
+  await publisher(projection(), { idempotency_key: "training-archive:2026-08-15:request-key-2" });
+  assert.equal(requests.filter((request) => request.url.endsWith("/api/auth/login")).length, 1);
+  const syncRequests = requests.filter((request) => request.url.endsWith("/api/private/records/aerobic/sync"));
+  assert.equal(syncRequests.length, 2);
+  assert.equal(syncRequests[0].headers.cookie, "workout_session=session-value");
+  assert.equal(syncRequests[0].headers.authorization, undefined);
+  assert.doesNotMatch(JSON.stringify(syncRequests), /not-for-output/);
 });

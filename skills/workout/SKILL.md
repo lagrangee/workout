@@ -134,9 +134,14 @@ GPS points, high-frequency telemetry, or local paths.
 
 The publisher must receive the normal authenticated application fetch
 boundary. `credentials: "include"` preserves a browser session; it does not
-create a session for a bare Node fetch. A local runner without that boundary
-must record a cloud error and retain the local archive, never return a fake
-cloud success. When the application boundary is available, it is still one
+create a session for a bare Node fetch. The Node runner can establish that
+boundary through the normal `/api/auth/login` endpoint when the local process
+has `WORKOUT_APPLICATION_ORIGIN` plus `WORKOUT_SYNC_EMAIL` and
+`WORKOUT_SYNC_PASSWORD`, or it can use a short-lived
+`WORKOUT_SYNC_SESSION_COOKIE`; these values stay in the local environment and
+are never written to receipts. A local runner without that boundary must
+record a cloud error and retain the local archive, never return a fake cloud
+success. When the application boundary is available, it is still one
 `sync data` operation and uses the same receipt.
 
 S5. **Keep daily output factual.** Daily notes contain source facts and

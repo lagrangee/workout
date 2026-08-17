@@ -270,9 +270,14 @@ export function safeAerobicActivity(activity) {
 /** @param {any} state @param {any} projection @param {Date} now */
 export function publishAerobicProjection(state, projection, now = new Date()) {
   if (!projection || typeof projection !== "object" || !Array.isArray(projection.activities)) throw new Error("Aerobic projection needs an activities array");
+  const targetDate = typeof projection.target_date === "string" && isValidLocalDate(projection.target_date) ? projection.target_date : null;
   const existing = new Map();
   for (const activity of state.aerobic_activities ?? []) {
     const safe = safeAerobicActivity(activity);
+    // A projection is the authoritative slice for its target date. Replacing
+    // that slice is what makes a successful COROS `none` refresh remove stale
+    // activities while preserving every other date in the Athlete archive.
+    if (targetDate && safe.local_date === targetDate) continue;
     existing.set(safe.source_ref, safe);
   }
   const safeActivities = projection.activities.map(safeAerobicActivity);

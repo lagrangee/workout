@@ -286,25 +286,161 @@ export function agentSchemaCatalog(now) {
 export function agentSchemaResource(name, now) {
   if (!AGENT_ARCHIVE_SCHEMA_NAMES.includes(name)) return { error: { code: "not_found", message: "Schema not found" } };
   if (name === "schema_catalog") return agentSchemaCatalog(now);
-  const required = ["schema_version", "generated_at", "data_as_of", "source_status", "source_ref"];
-  const nullableInstant = { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] };
-  const sourceStatus = { type: "string", enum: SOURCE_STATUSES };
-  const sourceStatuses = { type: "object", required: ["workout", "coros"], properties: { workout: sourceStatus, coros: sourceStatus }, additionalProperties: false };
-  const properties = {
+  const nullable = (schema) => ({ anyOf: [schema, { type: "null" }] });
+  const nullableInstant = nullable({ type: "string", format: "date-time" });
+  const nullableNumber = nullable({ type: "number" });
+  const nullableString = nullable({ type: "string" });
+  const sourceStatus = { type: "string", enum: [...SOURCE_STATUSES] };
+  const sportType = { type: "integer", enum: [100, 101, 102, 104, 200] };
+  const sourceStatuses = objectSchema({ workout: sourceStatus, coros: sourceStatus }, ["workout", "coros"]);
+  const page = objectSchema({ limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT }, next_cursor: nullable({ type: "string" }) }, ["limit", "next_cursor"]);
+  const period = objectSchema({
+    from: nullable({ type: "string", format: "date" }),
+    to: nullable({ type: "string", format: "date" }),
+    timezone: { type: "string" },
+    includes_from: { type: "boolean" },
+    includes_to: { type: "boolean" },
+    includes_current_date: { type: "boolean" },
+    current_date_may_be_incomplete: { type: "boolean" },
+  });
+  const summary = objectSchema({
+    duration_sec: nullableNumber,
+    total_duration_sec: nullableNumber,
+    distance_km: nullableNumber,
+    average_heart_rate_bpm: nullableNumber,
+    max_heart_rate_bpm: nullableNumber,
+    calories_kcal: nullableNumber,
+    training_load: nullableNumber,
+    aerobic_te: nullableNumber,
+    anaerobic_te: nullableNumber,
+    training_focus: nullableString,
+    perceived_effort: nullableString,
+    sport_metrics: { type: "object", additionalProperties: true },
+  });
+  const activityProperties = {
     schema_version: { type: "integer", const: 1 },
-    generated_at: { type: "string", format: "date-time" },
-    data_as_of: nullableInstant,
-    source_status: sourceStatus,
-    source_statuses: sourceStatuses,
+    activity_ref: { type: "string" },
     source_ref: { type: "string" },
+    local_date: { type: "string", format: "date" },
+    timezone: { type: "string" },
+    started_at: nullableInstant,
+    ended_at: nullableInstant,
+    sport_type: sportType,
+    sport_name: { type: "string" },
+    source_status: sourceStatus,
+    data_as_of: nullableInstant,
+    updated_at: nullableInstant,
+    summary,
+    route_key: nullableString,
+    route_direction: nullable({ type: "string", enum: ["forward", "reverse"] }),
+    route_match_status: { type: "string", enum: ["matched", "registered", "unmatched", "ambiguous", "ignored", "error"] },
+    fit_status: nullable({ type: "string", enum: ["complete", "partial", "error"] }),
   };
-  if (name === "daily_context") {
-    required.push("local_date", "timezone", "sync_evidence", "context");
-    properties.source_status = sourceStatuses;
-    properties.local_date = { type: "string", format: "date" };
-    properties.timezone = { type: "string" };
-    properties.sync_evidence = { type: "string", enum: ["synced", "not_synced"] };
-    properties.context = { type: "object" };
+  const activityRequired = Object.keys(activityProperties);
+  const activityLookup = objectSchema({
+    activity_ref: { type: "string" },
+    source_ref: { type: "string" },
+    scope: { const: "single_activity" },
+    local_archive: nullableString,
+  }, ["activity_ref", "source_ref", "scope"]);
+  const activityItem = objectSchema({ ...activityProperties, lookup: activityLookup }, [...activityRequired, "lookup"]);
+  const filters = objectSchema({
+    from: nullable({ type: "string", format: "date" }),
+    to: nullable({ type: "string", format: "date" }),
+    sport_type: nullable(sportType),
+    route_key: nullableString,
+    limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT },
+  });
+  const routeFilter = objectSchema({
+    from: nullable({ type: "string", format: "date" }),
+    to: nullable({ type: "string", format: "date" }),
+    sport_type: nullable(sportType),
+    route_key: nullableString,
+    limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT },
+  });
+  const routeHistorySummary = objectSchema({
+    distance_km: nullableNumber,
+    duration_sec: nullableNumber,
+    average_heart_rate_bpm: nullableNumber,
+    max_heart_rate_bpm: nullableNumber,
+    calories_kcal: nullableNumber,
+    training_load: nullableNumber,
+    aerobic_te: nullableNumber,
+    anaerobic_te: nullableNumber,
+  });
+  const routeHistoryRow = objectSchema({
+    activity_ref: { type: "string" },
+    source_ref: { type: "string" },
+    local_date: { type: "string", format: "date" },
+    timezone: { type: "string" },
+    started_at: nullableInstant,
+    ended_at: nullableInstant,
+    sport_type: sportType,
+    sport_name: { type: "string" },
+    route_key: { type: "string" },
+    route_direction: nullable({ type: "string", enum: ["forward", "reverse"] }),
+    source_status: sourceStatus,
+    sync_status: sourceStatus,
+    data_as_of: nullableInstant,
+    summary: routeHistorySummary,
+  });
+  const routeProperties = {
+    route_key: { type: "string" },
+    route_name: { type: "string" },
+    sport_types: { type: "array", items: sportType, uniqueItems: true },
+    distance_range_km: nullable({ type: "array", prefixItems: [{ type: "number", minimum: 0 }, { type: "number", minimum: 0 }], minItems: 2, maxItems: 2 }),
+    activity_count: { type: "integer", minimum: 0 },
+    total_distance_km: nullableNumber,
+    total_duration_sec: nullableNumber,
+  };
+  const routeIndexItem = objectSchema({ ...routeProperties, latest_activity: nullable(routeHistoryRow) });
+  const routeHistoryPeriod = objectSchema({ from: nullable({ type: "string", format: "date" }), to: nullable({ type: "string", format: "date" }) });
+  const hubStatus = sourceStatuses;
+  const hubDataAsOf = objectSchema({ workout: nullableInstant, coros: nullableInstant });
+  const hub = objectSchema({
+    kind: { const: "daily-hub" },
+    schema_version: { type: "integer", const: 1 },
+    local_date: { type: "string", format: "date" },
+    timezone: { type: "string" },
+    captured_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
+    source_status: hubStatus,
+    data_as_of: hubDataAsOf,
+    relation_policy: { const: "same_local_date_context_only" },
+    machine_refs: objectSchema({
+      workout_session_keys: { type: "array", items: { type: "string" } },
+      activity_refs: { type: "array", items: { type: "string" } },
+      route_keys: { type: "array", items: { type: "string" } },
+    }),
+    links: objectSchema({
+      workout_sessions: { type: "array", items: { type: "string" } },
+      coros_activities: { type: "array", items: { type: "string" } },
+      routes: { type: "array", items: { type: "string" } },
+    }),
+    summary: objectSchema({
+      workout: objectSchema({ session_count: { type: "integer", minimum: 0 }, statuses: { type: "array", items: { type: "string" } }, duration_sec: nullableNumber }),
+      coros: objectSchema({ activity_count: { type: "integer", minimum: 0 }, distance_km: nullableNumber, duration_sec: nullableNumber, source_status: sourceStatus }),
+    }),
+    errors: { type: "array", items: { type: "object", additionalProperties: true } },
+    properties: { type: "object", additionalProperties: true },
+  });
+  let properties;
+  let required;
+  if (name === "aerobic_activity_index") {
+    properties = { schema_version: { type: "integer", const: 1 }, generated_at: { type: "string", format: "date-time" }, data_as_of: nullableInstant, source_status: sourceStatus, source_statuses: sourceStatuses, source_ref: { const: "agent:aerobic-activities" }, timezone: { type: "string" }, period, filters, page, items: { type: "array", items: activityItem } };
+    required = Object.keys(properties);
+  } else if (name === "aerobic_activity_detail") {
+    properties = { schema_version: { type: "integer", const: 1 }, generated_at: { type: "string", format: "date-time" }, data_as_of: nullableInstant, source_status: sourceStatus, source_statuses: sourceStatuses, source_ref: { type: "string" }, ...activityProperties, lookup: activityLookup };
+    required = Object.keys(properties);
+  } else if (name === "daily_context") {
+    properties = { schema_version: { type: "integer", const: 1 }, generated_at: { type: "string", format: "date-time" }, data_as_of: nullableInstant, source_status: sourceStatuses, source_statuses: sourceStatuses, source_ref: { type: "string" }, local_date: { type: "string", format: "date" }, timezone: { type: "string" }, sync_evidence: { type: "string", enum: ["synced", "not_synced"] }, context: hub };
+    required = Object.keys(properties);
+  } else if (name === "route_index") {
+    properties = { schema_version: { type: "integer", const: 1 }, generated_at: { type: "string", format: "date-time" }, data_as_of: nullableInstant, source_status: sourceStatus, source_statuses: sourceStatuses, source_ref: { const: "agent:routes" }, filters: routeFilter, page, items: { type: "array", items: routeIndexItem } };
+    required = Object.keys(properties);
+  } else {
+    properties = { schema_version: { type: "integer", const: 1 }, generated_at: { type: "string", format: "date-time" }, data_as_of: nullableInstant, source_status: sourceStatus, source_statuses: sourceStatuses, source_ref: { type: "string" }, ...routeProperties, history_period: routeHistoryPeriod, page, history: { type: "array", items: routeHistoryRow } };
+    required = Object.keys(properties);
   }
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -313,6 +449,10 @@ export function agentSchemaResource(name, now) {
     type: "object",
     required,
     properties,
-    additionalProperties: true,
+    additionalProperties: false,
   };
+}
+
+function objectSchema(properties, required = Object.keys(properties)) {
+  return { type: "object", required, properties, additionalProperties: false };
 }
