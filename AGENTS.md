@@ -1,5 +1,19 @@
 # Repository Guidelines
 
+## Agent skills
+
+### Issue tracker
+
+Local Markdown issues live under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The repo uses the default five triage roles. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo uses a single-context domain layout. See `docs/agents/domain.md`.
+
 ## Project Structure & Module Organization
 
 This repository contains the Local Markdown product handoff and the current Worker/D1 runtime scaffold for Workout Tracker.
@@ -34,3 +48,8 @@ Use concise Conventional Commit subjects such as `feat: add session record` or `
 Never commit credentials, bearer URLs, raw tokens, or personal data. Keep secrets in ignored environment files and GitHub Actions secrets. Production deploys run only from the default branch; pull requests run validation only. Treat Local Markdown as authoritative; preserve resolved decisions and update linked contracts together. See `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and `docs/agents/domain.md` before changing project records.
 
 Cloudflare/GitHub setup details live in `docs/deployment/github-actions.md`; never replace its secret names with literal values.
+
+
+<!-- bearing:managed-start -->
+For a new request, load `bearing` only for explicit Bearing concepts, a reliable direct continuation of Bearing work in this repository, or reasonable material planning/governance relevance. Do not load for working directory, generic roadmap words, repository-independent conversation, or ordinary non-governance code/documentation work. Reuse visibly reliable Bearing orientation only for a direct continuation of the same request and repository. This pointer is contextual guidance, not an executable hook or lifecycle preflight. Each requested functional operation validates its required lifecycle. Explicit `/bearing` loads the skill directly when contextual nomination did not occur.
+<!-- bearing:managed-end -->

@@ -1,13 +1,16 @@
 ---
 name: workout
-description: Workout data and plan changes: use when the user asks to read training data, inspect a plan or completed sessions, analyze progress, review exercise history, or propose, validate, or apply a future plan change through the Workout MCP tools.
+description: Workout and multi-source training data: use when the user asks to sync or analyze local training archive data, read Workout or COROS training evidence, inspect a plan or completed sessions, review exercise history, or propose, validate, or apply a future plan change.
 ---
 
 # Workout Agent
 
-Use the typed Workout MCP tools as the data boundary. Keep the read path
-bounded and evidence-led; let the Agent choose the analysis structure, tone,
-and recommendation style for the question.
+Use the typed Workout MCP tools as the Workout data boundary and the COROS MCP
+tools as the aerobic telemetry boundary. A local Training Archive is a derived,
+read-optimized context layer: load it first for historical analysis, but never
+let it outrank a live authoritative source. Keep every read bounded and
+evidence-led; let the Agent choose the analysis structure, tone, and
+recommendation style for the question.
 
 ## Process
 
@@ -43,6 +46,125 @@ and recommendation style for the question.
    recommendation style. Completion: the response format serves the question
    without turning a hypothesis into a recorded fact or hiding a coverage
    limit.
+
+## Local archive routing
+
+A1. **Load local historical context first.** For historical analysis and manual
+   weekly review, read the bounded date/week slice under the locally configured
+   `WORKOUT_ARCHIVE_DIR` before querying live sources. Use a local record only
+   when its archive `schema_version`, Athlete-local date, source status, and
+   `data_as_of` are present. A local value is context, not authority.
+
+A2. **Refresh selectively.** Query live Workout when the request concerns the
+   Current Plan, today's or an unarchived Session, a plan write, a missing or
+   partial local Workout record, or an explicit refresh. Query live COROS when
+   the request concerns latest activity, current recovery/load, today, a
+   missing or partial aerobic record, or an explicit refresh. A live value wins
+   when it conflicts with the local archive. Ordinary analysis reads do not
+   write local files.
+
+## Manual `sync data`
+
+`sync data` is an explicit read-then-write operation. It is the only operation
+in this Skill that writes the local Training Archive.
+
+S1. **Resolve the target date.** With no date, use the previous Athlete-local
+date. Accept one explicit local date for a re-run or backfill. A user may supply
+`route_key` as an explicit label, but `route_direction` is derived from the
+activity's GPS start and early trajectory. After a usable COROS FIT is archived,
+sync automatically runs route matching and completes any user-confirmed
+new-route registration.
+
+S2. **Read the Workout slice.** Call `workout_get_schedule` for the exact
+   inclusive target date. If the returned entry has a Session reference, call
+   `workout_get_session` for that Session. Preserve the schedule/session
+   `source_ref`, `data_as_of`, `training_version`, Session references, status,
+   actual results, RPE, notes, and correction freshness.
+
+S3. **Read the aerobic COROS slice.** Call `querySportRecords` for the exact
+target date with the v1 aerobic sport codes `[100, 101, 102, 104, 200]`.
+For every returned activity, call `getActivityDetail` and
+`queryActivityLapData`, then call `downloadActivityFitFiles` with the same
+`labelId` and `sportType`. Keep the `labelId` as `activity_ref` and preserve
+`sportType`, timestamps, summary provenance, lap-group identity, and the
+sanitized provider fields described by
+[`training-archive-wire-catalog-v1.md`](../../docs/contracts/training-archive-wire-catalog-v1.md).
+Validate the returned FIT resource signature and write its decoded bytes
+byte-for-byte; do not treat the MCP response envelope as the FIT file.
+COROS Strength and unrecognized sport types are outside this sync scope and
+are reported as ignored rather than converted into aerobic data.
+
+S4. **Write an idempotent archive receipt.** Write one
+`daily/YYYY-MM-DD.md` and one
+`data/coros/YYYY-MM-DD-<activity_ref>.json` plus one
+`data/coros/YYYY-MM-DD-<activity_ref>.fit` per in-scope activity below the
+configured archive root. Re-running a date replaces the same date/activity
+artifacts and updates `captured_at`, `updated_at`, and `data_as_of`; it does
+not create duplicate records. Return target date, source statuses, written
+paths, record counts, FIT byte counts, ignored sport types, and structured
+errors. If summary/lap reads succeed but FIT download fails, mark COROS
+`partial`, retain the JSON artifact, and leave an explicit FIT error for retry.
+
+After the FIT sidecar is available, invoke the route matcher for each COROS
+activity. A unique `matched` result writes its `route_key` and
+`route_direction` into the same activity JSON and daily note. An
+`unmatched` result with a registration proposal pauses for the user's route
+name; after the name is supplied, append the proposal to
+`config/routes.json`, mark the current activity as `route_direction: forward`,
+and write its new `route_key`. The proposal contains a start point and an
+approximately 200 m anchor for each entry direction; it does not make
+direction an intrinsic property of the route. If the supplied name already
+exists, treat it as an explicit request to extend that route rather than
+silently creating a duplicate. A short or GPS-incomplete activity remains
+unmatched without a name prompt. Include route outcomes and any pending name in
+the sync receipt.
+
+S5. **Keep daily output factual.** Daily notes contain source facts and
+transparent derived summaries. Do not generate daily coaching analysis as
+part of sync. A separate manual weekly analysis may read the daily notes and
+COROS detail files and write `weekly/YYYY-Www.md` with `analysis_as_of`.
+
+### FIT-backed route matching
+
+During sync, decode the FIT record messages into normalized GPS points and
+invoke the standalone
+[`route-matcher.mjs`](scripts/route-matcher.mjs) program. The route registry is
+the local `config/routes.json`; each configured route may define separate
+`forward` and `reverse` spatial reference signatures and a total-distance
+range. A signature contains a start point and an anchor around 200 m along the
+route. The route itself remains direction-agnostic.
+
+The same program may be invoked independently for a manual re-match, but sync
+is the normal route-assignment entry point.
+
+The command interface is
+`node skills/workout/scripts/route-matcher.mjs --routes <routes.json> --points <activity-points.json>`;
+the program prints one JSON result to stdout and does not write the archive.
+The normalized input shape is defined in
+[`training-archive-wire-catalog-v1.md`](../../docs/contracts/training-archive-wire-catalog-v1.md).
+
+The matcher first uses a coarse 1 km bucket on `distance_range_km`, then applies
+the exact total-distance range, first-point GPS radius, and early-anchor GPS
+checks. This keeps spatial comparisons limited to distance-compatible routes;
+routes without a distance range remain the explicit fallback set. The default
+anchor is 200 m from the activity start, which is sufficient for the simple
+route fingerprint used by v1.
+It returns `matched`, `ambiguous`, or `unmatched`. A unique match supplies both
+`route_key` and `route_direction`; sync writes them. An `unmatched` result for
+an activity with at least 1 km and two valid endpoints supplies a registration
+proposal; sync asks for a name, seeds each direction with its endpoint plus an
+approximately 200 m anchor, applies a 10% initial distance tolerance, then
+writes the registry and activity assignment. An `ambiguous` result never
+creates a new route; sync asks the user to choose an existing route. The
+matcher itself has no network or archive write side effect, so only the sync
+continuation persists a confirmed name. The full FIT sidecar remains the
+fallback for later analysis.
+
+Sync status is `complete`, `none`, `partial`, or `error`. A successful source
+with no in-scope record is `none`; missing metrics remain `null` or absent and
+are never represented as zero. One source error does not erase a successful
+result from the other source, and a partial artifact remains visibly partial
+for a later retry.
 
 5. **Build a future change from the Current Plan.** When the user asks to
    change a future plan, read `workout_get_plan` first. Preserve existing
@@ -91,8 +213,10 @@ Route structured API errors by their meaning: ask for missing information on
  Return to the preview/confirmation step for `confirmation_required`, surface
  `idempotency_conflict` without retrying under the same key, and report
  `unsupported_operation` as outside this integration. Surface rate-limit or
- server failures with their stable code. Read tools remain side-effect-free;
- plan application is the only write branch in this skill.
+ server failures with their stable code. Workout and COROS reads remain
+ side-effect-free; local archive writes occur only inside an explicit `sync
+ data` operation, and Workout plan application remains the only source-data
+ write branch.
 
 Route Session lifecycle or correction requests, account-settings changes, and
 share-management requests to the unsupported-operation path. The integration
@@ -111,4 +235,10 @@ when a response shape or provenance field is unclear. Load
 [`plan-update-package-v1.md`](../../docs/contracts/plan-update-package-v1.md)
 before constructing a package or interpreting a validation error. These
 references are the single source of truth for wire and domain details; this
-Skill routes the Agent to them without copying their schemas.
+Skill routes the Agent to them without copying their schemas. Load
+[`training-archive-v1.md`](../../docs/contracts/training-archive-v1.md) when
+sync routing, local freshness, archive paths, or weekly output is relevant.
+Load
+[`training-archive-wire-catalog-v1.md`](../../docs/contracts/training-archive-wire-catalog-v1.md)
+when a daily note, COROS activity archive, lap group, sport-specific metric, or
+archive field version is relevant.

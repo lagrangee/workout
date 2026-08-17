@@ -87,3 +87,33 @@ test("Workout Agent Skill keeps credentials and analysis ownership outside the i
   assert.match(skill, /agent-api-wire-catalog-v1\.md/);
   assert.match(skill, /plan-update-package-v1\.md/);
 });
+
+test("Workout Agent Skill routes local archive context without changing source authority", async () => {
+  const skill = await readFile(skillPath, "utf8");
+
+  assert.match(skill, /local Training Archive/i);
+  assert.match(skill, /WORKOUT_ARCHIVE_DIR/);
+  assert.match(skill, /local value is context, not authority/i);
+  assert.match(skill, /live value wins/i);
+  assert.match(skill, /sync data/);
+  assert.match(skill, /querySportRecords/);
+  assert.match(skill, /downloadActivityFitFiles/);
+  assert.match(skill, /YYYY-MM-DD-<activity_ref>\.fit/);
+  assert.match(skill, /FIT resource signature/i);
+  assert.match(skill, /\[100, 101, 102, 104, 200\]/);
+  assert.match(skill, /COROS Strength.*outside this sync scope/i);
+  assert.match(skill, /user may supply\s+`route_key`.*`route_direction` is derived/is);
+  assert.match(skill, /sync automatically runs route matching/i);
+  assert.match(skill, /FIT-backed route matching/i);
+  assert.match(skill, /route-matcher\.mjs/);
+  assert.match(skill, /--routes <routes\.json> --points <activity-points\.json>/);
+  assert.match(skill, /first-point GPS radius.*early-anchor GPS/i);
+  assert.match(skill, /approximately 200 m anchor/i);
+  assert.match(skill, /pauses for the user's route\s+name/is);
+  assert.match(skill, /append the proposal to/);
+  assert.match(skill, /ambiguous.*never\s+creates a\s+new route/s);
+  assert.match(skill, /matched.*ambiguous.*unmatched/s);
+  assert.match(skill, /weekly\/YYYY-Www\.md/);
+  assert.match(skill, /training-archive-v1\.md/);
+  assert.match(skill, /training-archive-wire-catalog-v1\.md/);
+});
