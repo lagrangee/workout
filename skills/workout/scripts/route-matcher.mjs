@@ -248,6 +248,7 @@ export function buildRegistrationProposal({ points, distance_m: explicitDistance
   const normalizedPoints = normalizePoints(points);
   if (normalizedPoints.length < 2) return null;
 
+  const observedDistanceM = cumulativePoints(normalizedPoints).at(-1)?.cumulative_distance_m ?? 0;
   const totalDistanceM = activityDistanceM(normalizedPoints, explicitDistanceM);
   const totalDistanceKm = totalDistanceM / 1000;
   if (totalDistanceKm < MIN_ROUTE_REGISTRATION_DISTANCE_KM) return null;
@@ -257,7 +258,7 @@ export function buildRegistrationProposal({ points, distance_m: explicitDistance
   if (!lastPoint) return null;
   const tolerance = totalDistanceKm * NEW_ROUTE_DISTANCE_TOLERANCE_RATIO;
   const forwardAnchor = pointAtDistance(normalizedPoints, DEFAULT_ANCHOR_DISTANCE_M);
-  const reverseAnchor = pointAtDistance(normalizedPoints, totalDistanceM - DEFAULT_ANCHOR_DISTANCE_M);
+  const reverseAnchor = pointAtDistance(normalizedPoints, observedDistanceM - DEFAULT_ANCHOR_DISTANCE_M);
   if (!forwardAnchor || !reverseAnchor) return null;
   /** @type {RouteRegistrationProposal} */
   const proposal = {

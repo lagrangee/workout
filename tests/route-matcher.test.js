@@ -149,6 +149,21 @@ test("does not propose a new route for a short activity", () => {
   assert.equal(proposal, null);
 });
 
+test("builds anchors from observed GPS distance when provider distance is longer", () => {
+  const gpsPoints = [
+    { lat: 39.5, lon: 116.5 },
+    { lat: 39.5015, lon: 116.5015 },
+    { lat: 39.58, lon: 116.58 },
+    { lat: 39.586, lon: 116.586 },
+  ];
+  const proposal = buildRegistrationProposal({ points: gpsPoints, distance_m: 13_000, sport_type: 104 });
+
+  assert.ok(proposal);
+  assert.deepEqual(proposal.sport_types, [104]);
+  assert.equal(proposal.direction_signatures.forward.anchor_distance_m, 200);
+  assert.equal(proposal.direction_signatures.reverse.anchor_distance_m, 200);
+});
+
 test("falls back to haversine distance when FIT points have no cumulative distance", () => {
   const fallbackRoute = {
     route_key: route.route_key,

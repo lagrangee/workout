@@ -127,3 +127,19 @@ test("sync registers a new route only after an explicit route name", async () =>
     await rm(archiveDir, { recursive: true, force: true });
   }
 });
+
+test("route history keeps prior dates and stays idempotent across reruns", async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), "workout-route-history-"));
+  try {
+    await import("node:fs/promises").then(({ mkdir, writeFile }) => mkdir(join(archiveDir, "config"), { recursive: true }).then(() => writeFile(join(archiveDir, "config/routes.json"), JSON.stringify({ schema_version: 1, routes: [route] }))));
+    await syncTrainingArchive(options(archiveDir, activity({ labelId: "coros-route-old", startedAt: "2026-08-15T02:00:00.000Z", endedAt: "2026-08-15T04:00:00.000Z" }), { targetDate: "2026-08-15" }));
+    await syncTrainingArchive(options(archiveDir, activity({ labelId: "coros-route-new" }), { targetDate: "2026-08-16" }));
+    await syncTrainingArchive(options(archiveDir, activity({ labelId: "coros-route-new" }), { targetDate: "2026-08-16" }));
+    const routeNote = await readFile(join(archiveDir, "routes/香山鸡腿线.md"), "utf8");
+    const historyLines = routeNote.split("\n").filter((line) => line.includes(" · "));
+    assert.equal(historyLines.filter((line) => line.includes("coros-route-old")).length, 1);
+    assert.equal(historyLines.filter((line) => line.includes("coros-route-new")).length, 1);
+  } finally {
+    await rm(archiveDir, { recursive: true, force: true });
+  }
+});

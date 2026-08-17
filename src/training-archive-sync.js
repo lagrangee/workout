@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { addDays, isValidLocalDate, localDate } from "./util.js";
 import { COROS_SPORT_TYPES, SOURCE_STATUSES, containsSensitiveText, normalizeCorosActivity, normalizeTimezone, safeAerobicActivity } from "./training-archive.js";
@@ -348,19 +348,53 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
     await writeFile(notePath, activityNote(activity), "utf8");
     activityPaths.push(relativePath(archiveDir, jsonPath), relativePath(archiveDir, notePath));
   }
+  const routeHistoryActivities = mergeActivityHistory(await readArchivedActivities(archiveDir), activitiesForNote);
   const routeRegistryPath = await writeRouteRegistry(archiveDir, routeRegistry);
   routePaths.push(relativePath(archiveDir, routeRegistryPath));
   await mkdir(join(archiveDir, "routes"), { recursive: true });
   for (const route of routeRegistry.routes) {
     const routePath = routeFilePath(archiveDir, route.route_key);
-    await writeFile(routePath, routeNote(route, activitiesForNote), "utf8");
+    await writeFile(routePath, routeNote(route, routeHistoryActivities), "utf8");
     routePaths.push(relativePath(archiveDir, routePath));
   }
   const routeIndexPath = join(archiveDir, "routes", "index.md");
-  await writeFile(routeIndexPath, routeIndexNote(routeRegistry, activitiesForNote), "utf8");
+  await writeFile(routeIndexPath, routeIndexNote(routeRegistry, routeHistoryActivities), "utf8");
   routePaths.push(relativePath(archiveDir, routeIndexPath));
   await writeFile(dailyPath, dailyNote({ targetDate, timezone, now, workout, coros, activities: activitiesForNote, errors }), "utf8");
   return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...workoutPaths, ...activityPaths, ...routePaths], fit_bytes: fitBytes, workout_sessions: workoutRecords.length, route_assignments: routeAssignments };
+}
+
+async function readArchivedActivities(archiveDir) {
+  let names;
+  try {
+    names = await readdir(join(archiveDir, "data", "coros"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  const records = [];
+  for (const name of names.filter((value) => value.endsWith(".json"))) {
+    try {
+      const value = JSON.parse(await readFile(join(archiveDir, "data", "coros", name), "utf8"));
+      records.push(safeAerobicActivity(value));
+    } catch {
+      // A malformed historical sidecar must not prevent a new date from syncing.
+    }
+  }
+  return records;
+}
+
+function mergeActivityHistory(existing, current) {
+  const byRef = new Map();
+  for (const activity of [...existing, ...current]) {
+    try {
+      const safe = safeAerobicActivity(activity);
+      byRef.set(safe.activity_ref, safe);
+    } catch {
+      // Route history is a derived view; an invalid sidecar is not a new source fact.
+    }
+  }
+  return [...byRef.values()];
 }
 
 function buildProjection({ targetDate, timezone, workout, coros, activities, routeRegistry }) {

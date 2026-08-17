@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appFixture, call } from "./helpers.js";
-import { publishAerobicProjection } from "../src/training-archive.js";
+import { normalizeCorosActivity, publishAerobicProjection } from "../src/training-archive.js";
 import { syncTrainingArchive } from "../src/training-archive-sync.js";
 
 const now = new Date("2026-08-17T08:00:00.000Z");
@@ -29,6 +29,47 @@ function activity(overrides = {}) {
     ...overrides,
   };
 }
+
+test("COROS archive retains safe namespaced sport metrics and lap provenance", () => {
+  const normalized = normalizeCorosActivity({
+    labelId: "coros-lap-shape",
+    sportType: 102,
+    startedAt: "2026-08-15T01:00:00.000Z",
+    endedAt: "2026-08-15T02:00:00.000Z",
+    summary: {
+      distance_km: 8,
+      sport_metrics: {
+        running: { average_pace_sec_per_km: 500, gps_track: "must-drop" },
+      },
+    },
+    provider_shape: {
+      mode: 15,
+      sub_mode: 1,
+      columns: [{ name: "avgPace", label: "平均配速" }, { name: "gpsUrl", label: "must-drop" }],
+      sport_data_details_present: true,
+    },
+    lap_groups: [{
+      group_type: 2,
+      lap_distance_raw: 100000,
+      laps: [{
+        lap_index: 1,
+        provider_metrics: { distance: 100000, avgPace: 500, gps: "must-drop" },
+        normalized_metrics: { duration_sec: 500, average_pace_sec_per_km: 500 },
+      }],
+    }],
+  }, { timezone: "Asia/Shanghai", dataAsOf: "2026-08-17T10:00:00.000Z", updatedAt: "2026-08-17T10:00:00.000Z" });
+
+  assert.deepEqual(normalized.summary.sport_metrics, { running: { average_pace_sec_per_km: 500 } });
+  assert.deepEqual(normalized.provider_shape, {
+    mode: 15,
+    sub_mode: 1,
+    columns: [{ name: "avgPace", label: "平均配速" }],
+    sport_data_details_present: true,
+  });
+  assert.equal(normalized.lap_groups.length, 1);
+  assert.deepEqual(normalized.lap_groups[0].laps[0].provider_metrics, { distance: 100000, avgPace: 500 });
+  assert.deepEqual(normalized.lap_groups[0].laps[0].normalized_metrics, { duration_sec: 500, average_pace_sec_per_km: 500 });
+});
 
 test("ticket 01 sync defaults to the previous Athlete-local date and writes a linked safe archive", async () => {
   const archiveDir = await mkdtemp(join(tmpdir(), "workout-training-archive-"));
