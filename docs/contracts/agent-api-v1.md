@@ -123,8 +123,12 @@ handle for the existing Workout skill boundary. It does not perform an
 implicit live source refresh or widen the requested period.
 
 The daily context resource is an exact-date, source-separated projection of
-the daily Hub. Route index/detail/history resources expose confirmed route
-metadata and safe activity history with the same bounded date and pagination
+the daily Hub. Its `sync_evidence` is `synced` only when that exact local date
+has a persisted archive publication record; otherwise it is `not_synced`.
+When a date has a newer publication status, that status and freshness take
+precedence over older activity rows retained for historical context. Route
+index/detail/history resources expose confirmed route metadata and safe activity
+history with the same bounded date and pagination
 rules. Direction signatures, GPS, FIT paths/bytes, and high-frequency
 telemetry remain outside the Agent API.
 

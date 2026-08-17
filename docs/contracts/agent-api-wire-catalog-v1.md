@@ -350,6 +350,7 @@ AgentDailyContext = {
   source_ref: string,
   local_date: LocalDate,
   timezone: IanaTimezone,
+  sync_evidence: "synced"|"not_synced",
   context: object
 }
 

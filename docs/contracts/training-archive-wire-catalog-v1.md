@@ -56,7 +56,8 @@ SyncReceiptV1 = {
     status: SourceStatus,
     published_count: number,
     attempts: number,
-    retryable: boolean
+    retryable: boolean,
+    idempotency_key: string|null
   },
   records_written: { daily_hubs: number, workout_sessions: number, activities: number },
   records_published: { activities: number },
@@ -82,6 +83,7 @@ AerobicProjectionV1 = {
   timezone: string,
   source_status: SourceStatus,
   source_statuses: { workout: SourceStatus, coros: SourceStatus },
+  workout_source_status: SourceStatus,
   source_data_as_of: { workout: Instant|null, coros: Instant|null },
   data_as_of: Instant|null,
   activities: SafeAerobicActivity[],
@@ -233,6 +235,11 @@ FitArtifact = {
 `relative_path` points to the byte-preserved sidecar under
 `data/coros/`. A missing or failed FIT download is represented by its status;
 it is not silently treated as an empty file.
+
+The generated Obsidian activity note projects this artifact into three local
+Properties: `fit_status`, `fit_path` (the same safe relative path), and
+`fit_file` (a wikilink only for `complete`, otherwise `null`). These note-only
+links never enter the safe cloud activity envelope.
 
 ### Activity summary
 

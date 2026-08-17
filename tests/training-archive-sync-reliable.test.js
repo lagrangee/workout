@@ -6,7 +6,9 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeCorosActivity, publishAerobicProjection } from "../src/training-archive.js";
+import { syncAerobicProjection } from "../src/training-archive-projection.js";
 import { syncTrainingArchive } from "../src/training-archive-sync.js";
+import { emptyAthlete } from "../src/store.js";
 
 const firstNow = new Date("2026-08-17T08:00:00.000Z");
 
@@ -71,7 +73,7 @@ test("ticket 02 keeps a local success and retries only the missing cloud publica
       publish: async (projection, context) => {
         publishCalls += 1;
         assert.equal(projection.publication_key, "training-archive:2026-08-16");
-        assert.equal(context.idempotency_key, "training-archive:2026-08-16");
+        assert.match(context.idempotency_key, /^training-archive:2026-08-16:[0-9a-f]{64}$/);
         return { status: "complete", published_count: projection.activities.length };
       },
     }));
@@ -89,6 +91,100 @@ test("ticket 02 keeps a local success and retries only the missing cloud publica
     assert.equal((daily.match(/\[\[data\/coros\/2026-08-16-coros-reliable-1\]\]/g) || []).length, 1);
     const syncDir = await readdir(join(archiveDir, ".sync", "training-archive"));
     assert.deepEqual(syncDir, ["2026-08-16.json"]);
+  } finally {
+    await rm(archiveDir, { recursive: true, force: true });
+  }
+});
+
+test("ticket 02 cloud-only retry preserves the full endpoint projection contract", async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), "workout-training-archive-retry-contract-"));
+  const cloudState = emptyAthlete({ email: "retry@example.invalid", displayName: "Retry", timezone: "Asia/Shanghai" });
+  try {
+    const first = await syncTrainingArchive(syncOptions(archiveDir, {
+      publish: async () => { throw Object.assign(new Error("D1 unavailable"), { retryable: false }); },
+    }));
+    assert.equal(first.cloud_publication.status, "error");
+
+    const second = await syncTrainingArchive(syncOptions(archiveDir, {
+      now: new Date("2026-08-17T09:00:00.000Z"),
+      publish: async (projection) => {
+        assert.deepEqual(Object.keys(projection).sort(), [
+          "activities", "data_as_of", "publication_key", "routes", "schema_version",
+          "source_data_as_of", "source_ref", "source_status", "source_statuses",
+          "target_date", "timezone", "workout_source_status",
+        ].sort());
+        const response = syncAerobicProjection(cloudState, JSON.stringify({ projection }), new Date("2026-08-17T09:00:00.000Z"));
+        assert.equal(response.status, 200);
+        return response.body;
+      },
+    }));
+
+    assert.equal(second.cloud_publication.status, "complete");
+    assert.equal(cloudState.aerobic_activities.length, 1);
+  } finally {
+    await rm(archiveDir, { recursive: true, force: true });
+  }
+});
+
+test("ticket 02 binds the cloud request idempotency key to the exact projection body", async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), "workout-training-archive-idempotency-"));
+  const keys = [];
+  try {
+    const first = syncOptions(archiveDir, {
+      publish: async (_projection, context) => {
+        keys.push(context.idempotency_key);
+        return { status: "complete", published_count: 1 };
+      },
+    });
+    await syncTrainingArchive(first);
+    await syncTrainingArchive({
+      ...first,
+      now: new Date("2026-08-17T09:00:00.000Z"),
+      corosSource: { read: async () => ({
+        source_status: "complete",
+        data_as_of: "2026-08-17T00:59:00.000Z",
+        activities: [activity({ summary: { ...activity().summary, distance_km: 5.35 } })],
+      }) },
+    });
+
+    assert.equal(keys.length, 2);
+    assert.notEqual(keys[0], keys[1]);
+    assert.match(keys[0], /^training-archive:2026-08-16:[0-9a-f]{64}$/);
+    assert.match(keys[1], /^training-archive:2026-08-16:[0-9a-f]{64}$/);
+  } finally {
+    await rm(archiveDir, { recursive: true, force: true });
+  }
+});
+
+test("ticket 02 wires the application publisher into the one sync operation", async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), "workout-training-archive-app-publisher-"));
+  const requests = [];
+  try {
+    const result = await syncTrainingArchive({
+      ...syncOptions(archiveDir),
+      publish: undefined,
+      applicationOrigin: "https://workout.example",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init });
+        const body = JSON.parse(init.body);
+        return new Response(JSON.stringify({
+          schema_version: 1,
+          publication_key: body.projection.publication_key,
+          target_date: body.projection.target_date,
+          status: "complete",
+          published_count: body.projection.activities.length,
+          activity_count: body.projection.activities.length,
+          route_count: body.projection.routes.length,
+          source_statuses: body.projection.source_statuses,
+          data_as_of: body.projection.data_as_of,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    assert.equal(result.cloud_publication.status, "complete");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "https://workout.example/api/private/records/aerobic/sync");
+    assert.equal(requests[0].init.credentials, "include");
   } finally {
     await rm(archiveDir, { recursive: true, force: true });
   }

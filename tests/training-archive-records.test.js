@@ -107,9 +107,50 @@ test("ticket 01 sync defaults to the previous Athlete-local date and writes a li
     assert.match(activityNote, /sport_type: 101/);
     assert.match(activityNote, /source_status: [\"]?complete[\"]?/);
     assert.match(activityNote, /route_key: null/);
+    assert.match(activityNote, /fit_status: [\"]?partial[\"]?/);
+    assert.match(activityNote, /fit_path: [\"]?data\/coros\/2026-08-16-coros-activity-1\.fit[\"]?/);
+    assert.match(activityNote, /fit_file: null/);
+    assert.doesNotMatch(activityNote, /\[\[data\/coros\/2026-08-16-coros-activity-1\.fit\]\]/);
     assert.doesNotMatch(activityNote, /\[\[.*route/i);
     assert.equal(JSON.parse(activityRecord).activity_ref, "coros-activity-1");
     assert.doesNotMatch(activityRecord, /gps|raw_fit|provider-bytes/);
+  } finally {
+    await rm(archiveDir, { recursive: true, force: true });
+  }
+});
+
+test("ticket 01 activity note links a completed local FIT sidecar without exposing it to cloud projection", async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), "workout-training-archive-fit-link-"));
+  let publishedProjection;
+  try {
+    const receipt = await syncTrainingArchive({
+      archiveDir,
+      timezone: "Asia/Shanghai",
+      targetDate: "2026-08-16",
+      now,
+      workoutSource: { read: async () => ({ source_status: "none", data_as_of: null, sessions: [] }) },
+      corosSource: { read: async () => ({
+        source_status: "complete",
+        data_as_of: "2026-08-16T23:59:00.000Z",
+        activities: [activity({ fit_bytes: [0, 1, 2, 3, 4] })],
+      }) },
+      publish: async (projection) => {
+        publishedProjection = projection;
+        return { status: "complete", published_count: projection.activities.length };
+      },
+    });
+
+    assert.equal(receipt.local_archive.fit_bytes, 5);
+    const note = await readFile(join(archiveDir, "data/coros/2026-08-16-coros-activity-1.md"), "utf8");
+    const record = JSON.parse(await readFile(join(archiveDir, "data/coros/2026-08-16-coros-activity-1.json"), "utf8"));
+    assert.match(note, /fit_status: [\"]?complete[\"]?/);
+    assert.match(note, /fit_path: [\"]?data\/coros\/2026-08-16-coros-activity-1\.fit[\"]?/);
+    assert.match(note, /fit_file: [\"]?\[\[data\/coros\/2026-08-16-coros-activity-1\.fit\]\][\"]?/);
+    assert.match(note, /- FIT：\[\[data\/coros\/2026-08-16-coros-activity-1\.fit\]\]/);
+    assert.equal(record.fit_file.relative_path, "data/coros/2026-08-16-coros-activity-1.fit");
+    assert.equal(record.fit_file.bytes, 5);
+    assert.equal(publishedProjection.activities[0].fit_status, "complete");
+    assert.doesNotMatch(JSON.stringify(publishedProjection), /fit_file|fit_path|\.fit\b|raw_fit|gps/i);
   } finally {
     await rm(archiveDir, { recursive: true, force: true });
   }

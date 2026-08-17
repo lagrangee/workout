@@ -2,10 +2,11 @@
 
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { addDays, isValidLocalDate, localDate } from "./util.js";
+import { addDays, canonicalJson, isValidLocalDate, localDate, sha256Hex } from "./util.js";
 import { COROS_SPORT_TYPES, SOURCE_STATUSES, containsSensitiveText, normalizeCorosActivity, normalizeTimezone, safeAerobicActivity } from "./training-archive.js";
 import { dailyHubModel, dailyHubNote, normalizeWorkoutSessionRecord, workoutIndexNote, workoutSessionNote } from "./training-records.js";
 import { assignRoute, readRouteRegistry, routeFilePath, routeLink, safeRouteProjection, writeRouteRegistry } from "./route-registry.js";
+import { createAerobicProjectionPublisher } from "./training-archive-cloud-publisher.js";
 
 const MAX_PUBLICATION_ATTEMPTS = 3;
 const SYNC_RECEIPT_DIR = [".sync", "training-archive"];
@@ -15,14 +16,16 @@ const SYNC_RECEIPT_DIR = [".sync", "training-archive"];
  * publisher are injected so this seam remains local, deterministic, and free
  * of COROS credentials, a real vault, or production D1.
  *
- * @param {{ archiveDir: string, timezone: string, targetDate?: string, now?: Date, workoutSource?: { read: Function }, corosSource?: { read: Function, readFit?: Function }, publish?: Function, maxPublicationAttempts?: number }} options
+ * @param {{ archiveDir: string, timezone: string, targetDate?: string, now?: Date, workoutSource?: { read: Function }, corosSource?: { read: Function, readFit?: Function }, publish?: Function, applicationOrigin?: string, fetchImpl?: Function, credentials?: string, maxPublicationAttempts?: number }} options
  */
 export async function syncTrainingArchive(options = {}) {
   const now = options.now instanceof Date ? options.now : new Date(options.now ?? Date.now());
   const timezone = normalizeTimezone(options.timezone);
   const targetDate = resolveSyncTargetDate(options.targetDate, now, timezone);
   if (typeof options.archiveDir !== "string" || !options.archiveDir.trim()) throw new Error("WORKOUT_ARCHIVE_DIR is required");
-  const publish = options.publish;
+  const publish = options.publish ?? (options.applicationOrigin
+    ? createAerobicProjectionPublisher({ origin: options.applicationOrigin, fetchImpl: options.fetchImpl, credentials: options.credentials })
+    : null);
   if (typeof publish !== "function") throw new Error("A safe aerobic projection publisher is required");
 
   const priorReceipt = await readSyncReceipt(options.archiveDir, targetDate);
@@ -83,6 +86,7 @@ export async function syncTrainingArchive(options = {}) {
       published_count: 0,
       attempts: 0,
       retryable: false,
+      idempotency_key: null,
       error: { code: "local_archive_write_failed", message: "Local archive stage failed; cloud publication was not attempted" },
       errors: [],
     };
@@ -417,21 +421,33 @@ function buildProjection({ targetDate, timezone, workout, coros, activities, rou
 
 async function publishProjection(publish, projection, options) {
   const maxAttempts = publicationAttempts(options);
+  const idempotencyKey = await projectionRequestIdempotencyKey(projection);
   let last = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const result = await publish(projection, { idempotency_key: projection.publication_key, attempt, max_attempts: maxAttempts });
+      const result = await publish(projection, { idempotency_key: idempotencyKey, attempt, max_attempts: maxAttempts });
       const status = publicationStatus(result?.status ?? (projection.activities.length ? "complete" : "none"));
       const publishedCount = boundedCount(result?.published_count, status === "complete" ? projection.activities.length : 0, projection.activities.length);
       const error = result?.error ? safeError(result.error, "cloud", result.error.code ?? "projection_publish_failed") : (status === "partial" || status === "error" ? { code: status === "partial" ? "projection_partial" : "projection_publish_failed", message: "Cloud publication did not complete" } : null);
-      last = { status, published_count: publishedCount, attempts: attempt, retryable: status === "partial" || status === "error", error, errors: error ? [error] : [] };
+      last = { status, published_count: publishedCount, attempts: attempt, retryable: status === "partial" || status === "error", idempotency_key: idempotencyKey, error, errors: error ? [error] : [] };
       if (status === "complete" || (status === "none" && projection.activities.length === 0)) return last;
     } catch (error) {
       const normalized = safeError(error, "cloud", "projection_publish_failed");
-      last = { status: "error", published_count: 0, attempts: attempt, retryable: true, error: normalized, errors: [normalized] };
+      last = { status: "error", published_count: 0, attempts: attempt, retryable: error?.retryable !== false, idempotency_key: idempotencyKey, error: normalized, errors: [normalized] };
     }
   }
-  return last ?? { status: "error", published_count: 0, attempts: maxAttempts, retryable: true, error: { code: "projection_publish_failed", message: "Cloud publication did not complete" }, errors: [] };
+  return last ?? { status: "error", published_count: 0, attempts: maxAttempts, retryable: true, idempotency_key: idempotencyKey, error: { code: "projection_publish_failed", message: "Cloud publication did not complete" }, errors: [] };
+}
+
+/**
+ * Keep the logical publication identity stable while binding the HTTP retry
+ * key to the exact safe projection body. This lets a same-date refresh update
+ * D1 without colliding with the private mutation idempotency record.
+ * @param {any} projection
+ */
+export async function projectionRequestIdempotencyKey(projection) {
+  if (!projection || typeof projection.publication_key !== "string" || !projection.publication_key.trim()) throw new Error("projection.publication_key is required");
+  return `${projection.publication_key}:${await sha256Hex(canonicalJson(projection))}`;
 }
 
 function publicationAttempts(options) {
@@ -563,8 +579,7 @@ async function writeRetriedFitArtifact(archiveDir, targetDate, activityRef, byte
 
   const notePath = join(archiveDir, "data", "coros", `${stem}.md`);
   try {
-    const note = await readFile(notePath, "utf8");
-    await writeFile(notePath, note.replace(/^fit_status:.*$/m, 'fit_status: "complete"'));
+    await writeFile(notePath, activityNote(record), "utf8");
   } catch {
     // The JSON sidecar is the required record; an absent note is not a reason to duplicate source reads.
   }
@@ -653,11 +668,15 @@ function safePendingProjection(value) {
       workout: persistedStatus(value.source_statuses?.workout, "source_statuses.workout"),
       coros: persistedStatus(value.source_statuses?.coros, "source_statuses.coros"),
     },
-      workout_source_status: persistedStatus(value.workout_source_status, "workout_source_status"),
-      data_as_of: safeInstant(value.data_as_of),
-      activities: value.activities.map(safeAerobicActivity),
-      routes: Array.isArray(value.routes) ? value.routes.map((route) => safeRouteProjection(route)) : [],
-    };
+    workout_source_status: persistedStatus(value.workout_source_status ?? value.source_statuses?.workout, "workout_source_status"),
+    source_data_as_of: {
+      workout: safeInstant(value.source_data_as_of?.workout),
+      coros: safeInstant(value.source_data_as_of?.coros),
+    },
+    data_as_of: safeInstant(value.data_as_of),
+    activities: value.activities.map(safeAerobicActivity),
+    routes: Array.isArray(value.routes) ? value.routes.map((route) => safeRouteProjection(route)) : [],
+  };
 }
 
 function persistedStatus(value, field) {
@@ -765,6 +784,9 @@ function activityNote(activity) {
   const routeLines = activity.route_key
     ? [`route_key: ${yamlValue(activity.route_key)}`, `route_direction: ${yamlValue(activity.route_direction)}`, `route_match_status: ${yamlValue(activity.route_match_status ?? "matched")}`, `route: ${yamlValue(routeLink(activity.route_key))}`]
     : [`route_key: null`, `route_direction: null`, `route_match_status: ${yamlValue(activity.route_match_status ?? "unmatched")}`];
+  const fitStatus = activity.fit_file?.status ?? null;
+  const fitPath = activity.fit_file?.relative_path ?? null;
+  const fitLink = fitStatus === "complete" && fitPath ? `[[${fitPath}]]` : null;
   const summary = activity.summary;
   return [
     "---",
@@ -784,7 +806,9 @@ function activityNote(activity) {
     `data_as_of: ${yamlValue(activity.data_as_of)}`,
     `updated_at: ${yamlValue(activity.updated_at)}`,
     ...routeLines,
-    `fit_status: ${yamlValue(activity.fit_file?.status ?? null)}`,
+    `fit_status: ${yamlValue(fitStatus)}`,
+    `fit_path: ${yamlValue(fitPath)}`,
+    `fit_file: ${yamlValue(fitLink)}`,
     "---",
     "",
     "## 摘要",
@@ -795,7 +819,7 @@ function activityNote(activity) {
     "",
     "## 来源",
     `- COROS activity_ref：${activity.activity_ref}`,
-    `- FIT：${activity.fit_file?.status ?? "—"}`,
+    `- FIT：${fitLink ?? fitStatus ?? "—"}`,
     activity.route_key ? `- 路线：${routeLink(activity.route_key)}` : "- 路线：未匹配（不适用或尚未确认）",
     "",
   ].join("\n");

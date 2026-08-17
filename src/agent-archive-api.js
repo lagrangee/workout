@@ -171,29 +171,49 @@ export function agentAerobicActivityDetail(state, activityRef, now) {
 
 export function agentDailyContext(state, date, now) {
   if (!isValidLocalDate(date)) return { error: { code: "invalid_request", field: "local_date", message: "local_date must be a valid YYYY-MM-DD date" } };
-  const source = archiveSource(state);
-  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
-  const latestSessionUpdated = sessions.map((session) => safeInstant(session.updated_at)).filter(Boolean).sort().at(-1) ?? null;
+  const dateProjection = state.aerobic_date_projections?.[date] ?? null;
+  const activities = archiveActivities(state).filter((activity) => activity.local_date === date);
+  const sessions = (Array.isArray(state.sessions) ? state.sessions : []).filter((session) => (session.scheduled_date ?? session.local_date) === date);
+  const sourceStatuses = {
+    workout: dateProjection ? safeStatus(dateProjection.source_statuses?.workout) : (sessions.length ? statusFromValues(sessions.map((session) => session.source_status ?? "complete")) : "none"),
+    coros: dateProjection ? safeStatus(dateProjection.source_statuses?.coros) : (activities.length ? statusFromValues(activities.map((activity) => activity.source_status)) : "none"),
+  };
+  const latestSessionUpdated = (dateProjection ? [safeInstant(dateProjection.source_data_as_of?.workout)] : sessions.map((session) => safeInstant(session.data_as_of ?? session.updated_at))).filter(Boolean).sort().at(-1) ?? null;
+  const latestActivityAsOf = (dateProjection ? [safeInstant(dateProjection.source_data_as_of?.coros)] : activities.map((activity) => activity.data_as_of)).filter(Boolean).sort().at(-1) ?? null;
   const hub = dailyHubModel({
     targetDate: date,
     timezone: state.timezone,
     now,
-    workout: { source_status: sessions.length ? "complete" : "none", data_as_of: latestSessionUpdated, sessions },
-    coros: { source_status: source.source_statuses.coros, data_as_of: source.data_as_of, activities: archiveActivities(state) },
-    activities: archiveActivities(state),
+    workout: { source_status: sourceStatuses.workout, data_as_of: latestSessionUpdated, sessions },
+    coros: { source_status: sourceStatuses.coros, data_as_of: latestActivityAsOf, activities },
+    activities,
     errors: [],
   });
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
-    data_as_of: source.data_as_of ?? latestSessionUpdated,
+    data_as_of: latestActivityAsOf ?? latestSessionUpdated,
     source_status: hub.source_status,
     source_statuses: hub.source_status,
     source_ref: `agent:daily:${date}`,
     local_date: date,
     timezone: state.timezone,
+    sync_evidence: dateProjection ? "synced" : "not_synced",
     context: hub,
   };
+}
+
+function statusFromValues(values) {
+  const statuses = values.filter((value) => SOURCE_STATUSES.includes(value));
+  if (!statuses.length || statuses.every((value) => value === "none")) return "none";
+  if (statuses.some((value) => value === "error") && statuses.some((value) => value === "complete" || value === "partial")) return "partial";
+  if (statuses.some((value) => value === "partial")) return "partial";
+  if (statuses.some((value) => value === "error")) return "error";
+  return "complete";
+}
+
+function safeStatus(value) {
+  return SOURCE_STATUSES.includes(value) ? value : "none";
 }
 
 export function agentRoutes(state, url, now) {
@@ -267,13 +287,32 @@ export function agentSchemaResource(name, now) {
   if (!AGENT_ARCHIVE_SCHEMA_NAMES.includes(name)) return { error: { code: "not_found", message: "Schema not found" } };
   if (name === "schema_catalog") return agentSchemaCatalog(now);
   const required = ["schema_version", "generated_at", "data_as_of", "source_status", "source_ref"];
+  const nullableInstant = { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] };
+  const sourceStatus = { type: "string", enum: SOURCE_STATUSES };
+  const sourceStatuses = { type: "object", required: ["workout", "coros"], properties: { workout: sourceStatus, coros: sourceStatus }, additionalProperties: false };
+  const properties = {
+    schema_version: { type: "integer", const: 1 },
+    generated_at: { type: "string", format: "date-time" },
+    data_as_of: nullableInstant,
+    source_status: sourceStatus,
+    source_statuses: sourceStatuses,
+    source_ref: { type: "string" },
+  };
+  if (name === "daily_context") {
+    required.push("local_date", "timezone", "sync_evidence", "context");
+    properties.source_status = sourceStatuses;
+    properties.local_date = { type: "string", format: "date" };
+    properties.timezone = { type: "string" };
+    properties.sync_evidence = { type: "string", enum: ["synced", "not_synced"] };
+    properties.context = { type: "object" };
+  }
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: `https://workout.lagrangee.xyz/agent-schemas/${name}.json`,
     title: `Workout Agent ${name}`,
     type: "object",
     required,
-    properties: Object.fromEntries(required.map((field) => [field, { type: field === "schema_version" ? "integer" : "string" }])),
+    properties,
     additionalProperties: true,
   };
 }

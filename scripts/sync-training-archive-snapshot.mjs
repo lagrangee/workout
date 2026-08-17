@@ -9,6 +9,7 @@ import { buildRegistrationProposal } from "../skills/workout/scripts/route-match
 import { normalizeRouteRecord, readRouteRegistry, writeRouteRegistry } from "../src/route-registry.js";
 import { aerobicDetailModel, aerobicListModel, publishAerobicProjection } from "../src/training-archive.js";
 import { compactAerobicSummary } from "../src/training-records.js";
+import { createAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
 import { syncTrainingArchive } from "../src/training-archive-sync.js";
 import { emptyAthlete } from "../src/store.js";
 import { routeDetailModel, routeHistoryModel, routeListModel } from "../src/training-routes.js";
@@ -16,8 +17,9 @@ import { routeDetailModel, routeHistoryModel, routeListModel } from "../src/trai
 /**
  * Execute the archive orchestrator from one already-collected source snapshot.
  * The caller is responsible for collecting that snapshot through the live
- * Workout/COROS read boundaries; this runner owns only local archive writes,
- * safe projection publication, and idempotent reruns.
+ * Workout/COROS read boundaries. This runner always performs local page
+ * readback, but it reports cloud publication as an error unless an actual
+ * authenticated application publisher is supplied.
  */
 export async function runSnapshot(payload) {
   if (!payload || typeof payload !== "object") throw new Error("A source snapshot object is required");
@@ -33,6 +35,11 @@ export async function runSnapshot(payload) {
   await seedConfirmedRoute(payload);
 
   const state = emptyAthlete({ email: "snapshot-sync@example.invalid", displayName: "Snapshot sync", timezone });
+  const applicationPublisher = typeof payload.publish === "function"
+    ? payload.publish
+    : (typeof payload.applicationOrigin === "string" && payload.applicationOrigin.trim()
+      ? createAerobicProjectionPublisher({ origin: payload.applicationOrigin, fetchImpl: payload.fetchImpl })
+      : null);
   const run = (targetDate) => syncTrainingArchive({
     archiveDir,
     timezone,
@@ -40,9 +47,15 @@ export async function runSnapshot(payload) {
     now,
     workoutSource: { read: async (date) => payload.workoutByDate?.[date] ?? { source_status: "none", data_as_of: null, sessions: [] } },
     corosSource: { read: async (date) => payload.corosByDate?.[date] ?? { source_status: "none", data_as_of: null, activities: [] } },
-    publish: async (projection) => {
-      const result = publishAerobicProjection(state, projection, now);
-      return { ...result, status: "complete", published_count: projection.activities.length };
+    publish: async (projection, context) => {
+      publishAerobicProjection(state, projection, now);
+      if (!applicationPublisher) return {
+        status: "error",
+        published_count: 0,
+        retryable: false,
+        error: { code: "cloud_publisher_not_configured", message: "No authenticated Workout application publisher was supplied" },
+      };
+      return applicationPublisher(projection, context);
     },
   });
 
