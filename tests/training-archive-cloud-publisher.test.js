@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAerobicProjectionPublisher, createAuthenticatedAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
+import { createAerobicProjectionPublisher, createAgentAerobicProjectionPublisher, createAuthenticatedAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
 
 function projection() {
   return {
@@ -56,6 +56,53 @@ test("cloud publisher sends one safe projection through the application sync bou
   assert.equal(requests[0].init.headers["Idempotency-Key"], "training-archive:2026-08-15:request-key");
   assert.deepEqual(JSON.parse(requests[0].init.body), { projection: projection() });
   assert.doesNotMatch(JSON.stringify(requests[0]), /raw_fit|gps|Bearer|agent.token|\/Users\//i);
+});
+
+test("Agent cloud publisher reuses the typed Agent API client and sends only the safe projection", async () => {
+  const requests = [];
+  const token = "agent-token-not-for-output";
+  const publisher = createAgentAerobicProjectionPublisher({
+    origin: "https://workout.example",
+    token,
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init: { ...init, headers: Object.fromEntries(new Headers(init?.headers)) } });
+      return new Response(JSON.stringify({
+        schema_version: 1,
+        publication_key: projection().publication_key,
+        target_date: projection().target_date,
+        status: "none",
+        published_count: 0,
+        activity_count: 0,
+        route_count: 0,
+        source_statuses: projection().source_statuses,
+        data_as_of: projection().data_as_of,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const result = await publisher(projection(), { idempotency_key: "training-archive:2026-08-15:agent-key" });
+
+  assert.equal(result.status, "none");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://workout.example/api/agent/v1/aerobic/sync");
+  assert.equal(requests[0].init.method, "POST");
+  assert.equal(requests[0].init.headers.authorization, `Bearer ${token}`);
+  assert.equal(requests[0].init.headers["idempotency-key"], "training-archive:2026-08-15:agent-key");
+  assert.deepEqual(JSON.parse(requests[0].init.body), { projection: projection() });
+  assert.doesNotMatch(requests[0].init.body, /raw_fit|gps|telemetry|\.fit/i);
+});
+
+test("Agent cloud publisher marks authentication and validation failures as non-retryable", async () => {
+  const publisher = createAgentAerobicProjectionPublisher({
+    origin: "https://workout.example",
+    token: "agent-token-not-for-output",
+    fetchImpl: async () => new Response(JSON.stringify({ error: { code: "agent_unauthorized", message: "A valid Agent Token is required" } }), { status: 401 }),
+  });
+
+  await assert.rejects(
+    () => publisher(projection(), { idempotency_key: "training-archive:2026-08-15:agent-error" }),
+    (error) => error.code === "agent_unauthorized" && error.retryable === false && !/agent-token-not-for-output/.test(error.message),
+  );
 });
 
 test("cloud publisher turns an application boundary error into a retryable structured error", async () => {

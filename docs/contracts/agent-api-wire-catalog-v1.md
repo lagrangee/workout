@@ -50,12 +50,12 @@ AgentManifest = {
   query_rules: object,
   links: { overview: string, plan: string, schedule: string, sessions: string,
            progress: string, exercise: string, plan_update_validate: string,
-           plan_update_apply: string, schemas: string,
+           plan_update_apply: string, aerobic_sync: string, schemas: string,
            aerobic_activities: string, aerobic_activity: string,
            daily_context: string, routes: string, route: string,
            route_history: string },
   endpoints: object,
-  capabilities: ["read", "plan:write"]
+  capabilities: ["read", "plan:write", "aerobic:write"]
 }
 ```
 
@@ -83,8 +83,22 @@ plan_update_apply: {
     idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" }
   },
   rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true }
+},
+aerobic_sync: {
+  method: "POST",
+  path: "/api/agent/v1/aerobic/sync",
+  parameters: {
+    projection: { type: "object", content: "AerobicProjectionV1" },
+    idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" }
+  },
+  rules: { mutates: true, idempotent: true, idempotency_window_hours: 24, strict_projection: true, excludes_raw_fit_gps: true }
 }
 ```
+
+`aerobic_sync` returns the same safe publication receipt as the private
+application-session sync boundary. It is the preferred write transport for the
+local runner; the private endpoint remains the browser/compatibility adapter.
+Both paths call the same domain projection validator and D1 mutation.
 
 ## Read resources
 

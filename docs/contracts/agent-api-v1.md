@@ -66,6 +66,7 @@ GET /api/agent/v1/routes/:route_key/history[?from=&to=&limit=&cursor=]
 GET /api/agent/v1/schemas[/:schema_name]
 POST /api/agent/v1/plan-updates/validate
 POST /api/agent/v1/plan-updates/apply
+POST /api/agent/v1/aerobic/sync
 ```
 
 The versioned wire shapes are defined in
@@ -147,7 +148,7 @@ past/current effective dates, duplicate members, and semantic no-ops return
 field-addressed `invalid_plan_package` errors without changing Plan Revision
 history or Current Plan state.
 
-`plan-updates/apply` is the only mutating Agent operation. Its request body is
+`plan-updates/apply` is the mutating Agent operation for Plan state. Its request body is
 exactly `{ "package_text": string, "package_digest": string,
 "base_plan_digest": string, "confirmed": true }` and it additionally
 requires a non-empty `Idempotency-Key` header. Idempotency records are retained
@@ -168,6 +169,19 @@ successful application, the typed MCP flow reads `/plan` and the inclusive
 seven-day Schedule starting at `effective_from`; if that readback is
 temporarily unavailable, it reports the applied result with a structured
 readback failure rather than retrying or applying again.
+
+`aerobic/sync` is the mutating Agent operation for the safe Training Archive
+projection. Its request body is exactly `{ "projection": AerobicProjectionV1 }`
+and it requires a non-empty `Idempotency-Key` header. It applies the same strict
+projection validator and D1 mutation used by the private application-session
+boundary; the Agent path is the preferred transport for the local sync runner,
+while the private path remains the browser/compatibility adapter. Idempotency
+records are retained for 24 hours. The projection may contain source summaries,
+route references, and provenance, but never raw provider payloads, FIT bytes,
+GPS/coordinates, high-frequency telemetry, or local paths. A successful `200`
+response is the safe publication receipt; invalid projection, conflicting key,
+or concurrent state errors return `invalid_projection`, `idempotency_conflict`,
+or `session_state_conflict` without a partial write.
 
 ## Response and privacy rules
 

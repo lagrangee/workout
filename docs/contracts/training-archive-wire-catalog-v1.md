@@ -98,24 +98,32 @@ AerobicProjectionV1 = {
 }
 ```
 
-The authenticated cloud publication boundary accepts only
+The preferred local-runner cloud publication boundary accepts only
 `{ projection: AerobicProjectionV1 }` at
-`POST /api/private/records/aerobic/sync`. It requires the existing private
-Athlete session and `Idempotency-Key`; it rejects unknown fields, provider
-payloads, raw FIT/GPS/coordinate fields, unsupported sport types, invalid
-Athlete-local dates, and route assignments that do not reference a projected
-route. The response is a safe publication receipt with the target date,
-source statuses, published count, and aggregate read-model counts. It is a
-cloud stage inside `sync data`, not a second user-facing publish operation.
+`POST /api/agent/v1/aerobic/sync`, authenticated by the existing Agent Token
+and `Idempotency-Key`. It rejects unknown fields, provider payloads, raw
+FIT/GPS/coordinate fields, unsupported sport types, invalid Athlete-local
+dates, and route assignments that do not reference a projected route. The
+response is a safe publication receipt with the target date, source statuses,
+published count, and aggregate read-model counts. It is a cloud stage inside
+`sync data`, not a second user-facing publish operation.
 
-The local Node runner may obtain the same application session through the
-normal `/api/auth/login` endpoint using process-local
+The browser/compatibility adapter is
+`POST /api/private/records/aerobic/sync`, which accepts the same projection and
+uses the existing private Athlete session. Both endpoints share the same
+strict domain validator and D1 mutation; choosing the Agent path does not
+create a second publication implementation.
+
+The local Node runner prefers `WORKOUT_AGENT_API_ORIGIN` and
+`WORKOUT_AGENT_TOKEN` from the owner-only `~/.config/workout-agent/agent.env`
+configuration (or the equivalent `WORKOUT_AGENT_CONFIG_FILE`). It may fall
+back to obtaining an application session through the normal `/api/auth/login`
+endpoint using process-local
 `WORKOUT_APPLICATION_ORIGIN`, `WORKOUT_SYNC_EMAIL`, and
 `WORKOUT_SYNC_PASSWORD`, or a short-lived `WORKOUT_SYNC_SESSION_COOKIE`.
-Those values are transport inputs only: they are never persisted in the
-Training Archive receipt or sent to COROS/D1 as source data. If no
-authenticated boundary is available, the receipt must remain
-local-success/cloud-error.
+All credentials are transport inputs only: they are never persisted in the
+Training Archive receipt or sent to COROS/D1 as source data. If no authenticated
+boundary is available, the receipt must remain local-success/cloud-error.
 
 ```text
 SafeRouteProjection = {
