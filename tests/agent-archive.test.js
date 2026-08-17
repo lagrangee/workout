@@ -56,6 +56,10 @@ test("private Agent manifest and schema catalog advertise the archive read surfa
   assert.equal(manifest.body.links.aerobic_activities, "/api/agent/v1/aerobic/activities");
   assert.equal(manifest.body.links.daily_context, "/api/agent/v1/daily/{local_date}");
   assert.equal(manifest.body.links.route_history, "/api/agent/v1/routes/{route_key}/history");
+  assert.equal(manifest.body.links.aerobic_sync, "/api/agent/v1/aerobic/sync");
+  assert.deepEqual(manifest.body.capabilities, ["read", "plan:write", "aerobic:write"]);
+  assert.equal(manifest.body.endpoints.aerobic_sync.method, "POST");
+  assert.equal(manifest.body.endpoints.aerobic_sync.rules.strict_projection, true);
   assert.equal(manifest.body.endpoints.aerobic_activities.rules.cursor_ttl_minutes, 15);
   const catalog = await agentRequest(handler, token, "/api/agent/v1/schemas");
   assert.equal(catalog.response.status, 200);

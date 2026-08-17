@@ -9,19 +9,20 @@ import { buildRegistrationProposal } from "../skills/workout/scripts/route-match
 import { normalizeRouteRecord, readRouteRegistry, writeRouteRegistry } from "../src/route-registry.js";
 import { aerobicDetailModel, aerobicListModel, publishAerobicProjection } from "../src/training-archive.js";
 import { compactAerobicSummary } from "../src/training-records.js";
-import { createAerobicProjectionPublisher, createAuthenticatedAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
+import { createAerobicProjectionPublisher, createAgentAerobicProjectionPublisher, createAuthenticatedAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
 import { syncTrainingArchive } from "../src/training-archive-sync.js";
 import { emptyAthlete } from "../src/store.js";
 import { routeDetailModel, routeHistoryModel, routeListModel } from "../src/training-routes.js";
+import { loadAgentConfig } from "../mcp/launch.mjs";
 
 /**
  * Execute the archive orchestrator from one already-collected source snapshot.
  * The caller is responsible for collecting that snapshot through the live
  * Workout/COROS read boundaries. This runner always performs local page
- * readback. For cloud publication it uses an injected publisher, a
- * process-local session cookie, or the normal application login credentials
- * supplied through WORKOUT_* environment variables; without one it reports a
- * cloud error rather than treating local readback as D1 success.
+ * readback. For cloud publication it prefers the existing owner-only Agent
+ * API configuration, then supports an injected publisher, a process-local
+ * session cookie, or the normal application login credentials; without one it
+ * reports a cloud error rather than treating local readback as D1 success.
  */
 export async function runSnapshot(payload) {
   if (!payload || typeof payload !== "object") throw new Error("A source snapshot object is required");
@@ -37,19 +38,24 @@ export async function runSnapshot(payload) {
   await seedConfirmedRoute(payload);
 
   const state = emptyAthlete({ email: "snapshot-sync@example.invalid", displayName: "Snapshot sync", timezone });
+  const agentConfig = await resolveAgentConfig(payload);
+  const agentPublisher = agentConfig
+    ? createAgentAerobicProjectionPublisher({ origin: agentConfig.WORKOUT_AGENT_API_ORIGIN, token: agentConfig.WORKOUT_AGENT_TOKEN, fetchImpl: payload.fetchImpl })
+    : null;
   const applicationOrigin = payload.applicationOrigin ?? process.env.WORKOUT_APPLICATION_ORIGIN;
   const sessionCookie = payload.applicationSessionCookie ?? process.env.WORKOUT_SYNC_SESSION_COOKIE;
   const applicationEmail = payload.applicationEmail ?? process.env.WORKOUT_SYNC_EMAIL;
   const applicationPassword = payload.applicationPassword ?? process.env.WORKOUT_SYNC_PASSWORD;
   const applicationPublisher = typeof payload.publish === "function"
     ? payload.publish
-    : (typeof applicationOrigin === "string" && applicationOrigin.trim()
-      ? (typeof sessionCookie === "string" && sessionCookie.trim()
-        ? createAuthenticatedAerobicProjectionPublisher({ origin: applicationOrigin, sessionCookie, fetchImpl: payload.fetchImpl })
-        : (typeof applicationEmail === "string" && typeof applicationPassword === "string"
-          ? createAuthenticatedAerobicProjectionPublisher({ origin: applicationOrigin, email: applicationEmail, password: applicationPassword, fetchImpl: payload.fetchImpl })
-          : createAerobicProjectionPublisher({ origin: applicationOrigin, fetchImpl: payload.fetchImpl })))
-      : null);
+    : (agentPublisher
+      ?? (typeof applicationOrigin === "string" && applicationOrigin.trim()
+        ? (typeof sessionCookie === "string" && sessionCookie.trim()
+          ? createAuthenticatedAerobicProjectionPublisher({ origin: applicationOrigin, sessionCookie, fetchImpl: payload.fetchImpl })
+          : (typeof applicationEmail === "string" && typeof applicationPassword === "string"
+            ? createAuthenticatedAerobicProjectionPublisher({ origin: applicationOrigin, email: applicationEmail, password: applicationPassword, fetchImpl: payload.fetchImpl })
+            : createAerobicProjectionPublisher({ origin: applicationOrigin, fetchImpl: payload.fetchImpl })))
+        : null));
   const run = (targetDate) => syncTrainingArchive({
     archiveDir,
     timezone,
@@ -63,7 +69,7 @@ export async function runSnapshot(payload) {
         status: "error",
         published_count: 0,
         retryable: false,
-        error: { code: "cloud_publisher_not_configured", message: "No authenticated Workout application publisher was supplied" },
+        error: { code: "cloud_publisher_not_configured", message: "No authenticated Workout cloud publisher was supplied" },
       };
       return applicationPublisher(projection, context);
     },
@@ -113,6 +119,21 @@ export async function runSnapshot(payload) {
     })),
     route_history_rows: state.aerobic_activities.filter((activity) => activity.route_key === payload.routeKey).length,
   };
+}
+
+async function resolveAgentConfig(payload) {
+  const origin = payload.agentApiOrigin ?? process.env.WORKOUT_AGENT_API_ORIGIN;
+  const token = payload.agentToken ?? process.env.WORKOUT_AGENT_TOKEN;
+  if (origin !== undefined || token !== undefined) {
+    if (typeof origin !== "string" || !origin.trim() || typeof token !== "string" || !token) throw new Error("Both Workout Agent API origin and token are required");
+    return { WORKOUT_AGENT_API_ORIGIN: origin, WORKOUT_AGENT_TOKEN: token };
+  }
+  try {
+    return await loadAgentConfig(payload.agentConfigFile);
+  } catch (error) {
+    if (error?.message?.startsWith("Workout MCP configuration file is missing:")) return null;
+    throw error;
+  }
 }
 
 function buildWorkoutPageReadback(state, dates, routeKey, now) {

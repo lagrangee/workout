@@ -122,8 +122,10 @@ unmatched without a name prompt. Include route outcomes and any pending name in
 the sync receipt.
 
 S4b. **Publish the safe cloud projection inside the same operation.** After a
-successful local write, send the projection through the authenticated Workout
-application request boundary used by `createAerobicProjectionPublisher`. Do
+successful local write, send the projection through the existing typed Agent
+API boundary at `/api/agent/v1/aerobic/sync`, using the Agent API client and
+`WORKOUT_AGENT_API_ORIGIN` plus `WORKOUT_AGENT_TOKEN` from the owner-only
+`~/.config/workout-agent/agent.env` configuration. Do
 not ask the Athlete to run a second publish command. Keep local success when
 the cloud stage fails, record both statuses in the one receipt, and let the
 next `sync data` run retry the pending safe projection. The logical
@@ -132,17 +134,17 @@ includes the exact projection body so a same-date refresh can update D1
 without an idempotency collision. The cloud payload contains no FIT bytes,
 GPS points, high-frequency telemetry, or local paths.
 
-The publisher must receive the normal authenticated application fetch
-boundary. `credentials: "include"` preserves a browser session; it does not
-create a session for a bare Node fetch. The Node runner can establish that
-boundary through the normal `/api/auth/login` endpoint when the local process
-has `WORKOUT_APPLICATION_ORIGIN` plus `WORKOUT_SYNC_EMAIL` and
-`WORKOUT_SYNC_PASSWORD`, or it can use a short-lived
-`WORKOUT_SYNC_SESSION_COOKIE`; these values stay in the local environment and
-are never written to receipts. A local runner without that boundary must
+The browser/compatibility publisher still uses the private application
+request boundary and `credentials: "include"`; a bare Node fetch does not
+create that session. If the Agent API configuration is unavailable, the Node
+runner may establish the compatibility boundary through `/api/auth/login` with
+`WORKOUT_APPLICATION_ORIGIN` plus `WORKOUT_SYNC_EMAIL` and
+`WORKOUT_SYNC_PASSWORD`, or a short-lived `WORKOUT_SYNC_SESSION_COOKIE`. Agent
+Tokens, session cookies, and passwords stay in the local environment and are
+never written to receipts. A runner without any authenticated boundary must
 record a cloud error and retain the local archive, never return a fake cloud
-success. When the application boundary is available, it is still one
-`sync data` operation and uses the same receipt.
+success. Every path remains one `sync data` operation and uses the same
+receipt.
 
 S5. **Keep daily output factual.** Daily notes contain source facts and
 transparent derived summaries. Do not generate daily coaching analysis as

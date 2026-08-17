@@ -8,7 +8,7 @@ import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
-import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
+import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentSyncAerobicProjection, agentValidatePlanUpdate } from "./agent-api.js";
 import { aerobicDetailModel, aerobicListModel } from "./training-archive.js";
 import { MAX_AEROBIC_SYNC_BODY_BYTES, syncAerobicProjection } from "./training-archive-projection.js";
 import { compactAerobicSummary, recordsOverviewModel } from "./training-records.js";
@@ -59,15 +59,17 @@ async function agentRoute(request, env, getStore, url) {
   if (!state) return agentUnauthorized();
   const isPlanValidationPath = url.pathname === "/api/agent/v1/plan-updates/validate";
   const isPlanApplyPath = url.pathname === "/api/agent/v1/plan-updates/apply";
+  const isAerobicSyncPath = url.pathname === "/api/agent/v1/aerobic/sync";
   const isPlanValidation = request.method === "POST" && isPlanValidationPath;
   const isPlanApply = request.method === "POST" && isPlanApplyPath;
-  if ((isPlanValidationPath || isPlanApplyPath) && request.method !== "POST") return agentMethodNotAllowed("POST");
-  if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation && !isPlanApply) return agentMethodNotAllowed();
+  const isAerobicSync = request.method === "POST" && isAerobicSyncPath;
+  if ((isPlanValidationPath || isPlanApplyPath || isAerobicSyncPath) && request.method !== "POST") return agentMethodNotAllowed("POST");
+  if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation && !isPlanApply && !isAerobicSync) return agentMethodNotAllowed();
   if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
   const queryError = agentQueryError(url.pathname, url);
   if (queryError) return jsonError(queryError.code, queryError.message, [], 400);
   const now = new Date();
-  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write"] } : isPlanValidation ? await agentValidatePlanUpdate(state, await request.text(), now) : isPlanApply ? await agentApplyRoute(request, store, state, now) : agentResource(state, url.pathname, url, now);
+  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write", "aerobic:write"] } : isPlanValidation ? await agentValidatePlanUpdate(state, await request.text(), now) : isPlanApply ? await agentApplyRoute(request, store, state, now) : isAerobicSync ? await agentAerobicSyncRoute(request, store, state, now) : agentResource(state, url.pathname, url, now);
   if (resource instanceof Response) return resource;
   if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
   return maybeHead(jsonResponse(resource), request);
@@ -78,23 +80,35 @@ function agentMethodNotAllowed(allow = "GET, HEAD") { const response = jsonError
 
 /** @param {Request} request @param {any} store @param {any} authenticatedState @param {Date} now */
 async function agentApplyRoute(request, store, authenticatedState, now) {
+  const rawBody = await request.text();
+  return agentMutationRoute({ request, store, authenticatedState, now, path: "/api/agent/v1/plan-updates/apply", rawBody, status: 201, apply: (state) => agentApplyPlanUpdate(state, rawBody, now) });
+}
+
+/** @param {Request} request @param {any} store @param {any} authenticatedState @param {Date} now */
+async function agentAerobicSyncRoute(request, store, authenticatedState, now) {
+  const rawBody = await request.text();
+  if (new TextEncoder().encode(rawBody).byteLength > MAX_AEROBIC_SYNC_BODY_BYTES) return jsonError("payload_too_large", "The aerobic projection body is too large", [], 413);
+  return agentMutationRoute({ request, store, authenticatedState, now, path: "/api/agent/v1/aerobic/sync", rawBody, status: 200, apply: (state) => agentSyncAerobicProjection(state, rawBody, now) });
+}
+
+/** @param {{ request: Request, store: any, authenticatedState: any, now: Date, path: string, rawBody: string, status: number, apply: (state: any) => any|Promise<any> }} options */
+async function agentMutationRoute({ request, store, authenticatedState, now, path, rawBody, status, apply }) {
   const key = request.headers.get("Idempotency-Key") ?? "";
   if (!key || key.length > 200 || key.trim().length === 0) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
-  const rawBody = await request.text();
   const bodyDigest = await sha256Hex(rawBody);
   const execute = async (transactionStore) => {
     const state = transactionStore === store ? authenticatedState : await transactionStore.getByEmail(authenticatedState.email);
     if (!state) return jsonError("forbidden", "Identity is not configured", [], 403);
     state.idempotency_records ??= [];
-    const existing = findIdempotencyRecord(state, key, request.method, "/api/agent/v1/plan-updates/apply", now);
+    const existing = findIdempotencyRecord(state, key, request.method, path, now);
     if (existing) {
       if (existing.body_digest !== bodyDigest) return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
       return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
     }
-    const resource = await agentApplyPlanUpdate(state, rawBody, now);
+    const resource = await apply(state);
     if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
-    const response = jsonResponse(resource, 201);
-    await rememberIdempotencyResponse(state, key, request.method, "/api/agent/v1/plan-updates/apply", bodyDigest, response, now);
+    const response = jsonResponse(resource, status);
+    await rememberIdempotencyResponse(state, key, request.method, path, bodyDigest, response, now);
     await transactionStore.save(state);
     return response;
   };

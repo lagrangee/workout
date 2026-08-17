@@ -5,6 +5,7 @@ import { appendPlanRevision, planUpdateBase, scheduleEntry, validatePlanForState
 import { coachOverview, coachResource, prescriptionProjection } from "./coach.js";
 import { parseStrictJson, validatePlanPackage } from "./validation.js";
 import { AGENT_ARCHIVE_LIMIT, agentAerobicActivities, agentAerobicActivityDetail, agentDailyContext, agentRouteDetail, agentRouteHistory, agentRoutes, agentSchemaCatalog, agentSchemaResource } from "./agent-archive-api.js";
+import { syncAerobicProjection } from "./training-archive-projection.js";
 
 const AGENT_PREFIX = "/api/agent/v1";
 
@@ -49,6 +50,7 @@ export function agentManifest(state, now) {
       exercise: `${AGENT_PREFIX}/exercises/{exercise_key}`,
       plan_update_validate: `${AGENT_PREFIX}/plan-updates/validate`,
       plan_update_apply: `${AGENT_PREFIX}/plan-updates/apply`,
+      aerobic_sync: `${AGENT_PREFIX}/aerobic/sync`,
       schemas: `${AGENT_PREFIX}/schemas`,
       aerobic_activities: `${AGENT_PREFIX}/aerobic/activities`,
       aerobic_activity: `${AGENT_PREFIX}/aerobic/activities/{activity_ref}`,
@@ -79,6 +81,7 @@ export function agentManifest(state, now) {
       route_history: { method: "GET", path: `${AGENT_PREFIX}/routes/{route_key}/history`, parameters: { route_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 }, cursor: { type: "string", format: "opaque" } }, rules: { max_days: 3660, response_schema: "route_history" } },
       plan_update_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/validate`, parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" } }, rules: { mutates: false, strict_package: true } },
       plan_update_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/apply`, parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" }, package_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true } },
+      aerobic_sync: { method: "POST", path: `${AGENT_PREFIX}/aerobic/sync`, parameters: { projection: { type: "object", content: "AerobicProjectionV1" }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, idempotent: true, idempotency_window_hours: 24, strict_projection: true, excludes_raw_fit_gps: true } },
     },
   };
 }
@@ -142,6 +145,12 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
     base_plan_digest: basePlanDigest,
     preview: { ...result.preview, source_ref: "plan-update:preview" },
   };
+}
+
+/** @param {any} state @param {string} rawBody @param {Date} now */
+export function agentSyncAerobicProjection(state, rawBody, now) {
+  const result = syncAerobicProjection(state, rawBody, now);
+  return result.error ? result : result.body;
 }
 
 /** @param {any} state @param {any} packageValue */

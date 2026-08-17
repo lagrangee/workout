@@ -1,6 +1,9 @@
 // @ts-check
 
+import { WorkoutApiClient } from "../mcp/bridge.mjs";
+
 const AEROBIC_SYNC_PATH = "/api/private/records/aerobic/sync";
+const AGENT_AEROBIC_SYNC_PATH = "/aerobic/sync";
 const PUBLICATION_STATUSES = new Set(["complete", "none", "partial", "error"]);
 
 /** @typedef {{ origin?: string, fetchImpl?: typeof fetch, credentials?: RequestCredentials }} PublisherOptions */
@@ -55,6 +58,49 @@ export function createAerobicProjectionPublisher(options = {}) {
       source_statuses: payload.source_statuses,
       data_as_of: payload.data_as_of ?? null,
     };
+  };
+}
+
+/**
+ * Create the preferred local-runner publisher through the existing typed Agent
+ * API client. The Agent Token remains transport-only and is never placed in a
+ * projection or a sync receipt.
+ *
+ * @param {{ origin?: string, token?: string, fetchImpl?: typeof fetch }} options
+ */
+export function createAgentAerobicProjectionPublisher(options = {}) {
+  if (typeof options.origin !== "string" || !options.origin.trim()) throw new Error("A Workout Agent API origin is required");
+  if (typeof options.token !== "string" || !options.token) throw new Error("A Workout Agent Token is required");
+  /** @type {any} */
+  const client = new WorkoutApiClient(/** @type {any} */ ({ origin: options.origin, token: options.token, fetchImpl: options.fetchImpl }));
+
+  /** @param {any} projection @param {{ idempotency_key?: string }} [context] */
+  return async function publish(projection, context = {}) {
+    const idempotencyKey = typeof context.idempotency_key === "string" ? context.idempotency_key : "";
+    if (!idempotencyKey.trim() || idempotencyKey.length > 200) throw new Error("A bounded projection idempotency key is required");
+    try {
+      const payload = await client.post(AGENT_AEROBIC_SYNC_PATH, { projection }, { "Idempotency-Key": idempotencyKey });
+      if (!isValidPublicationResponse(payload, projection)) {
+        throw Object.assign(new Error("Workout Agent sync returned an invalid response"), { code: "invalid_sync_response", retryable: false });
+      }
+      return {
+        status: payload.status,
+        published_count: Number.isInteger(payload.published_count) ? payload.published_count : 0,
+        source_statuses: payload.source_statuses,
+        data_as_of: payload.data_as_of ?? null,
+      };
+    } catch (caught) {
+      /** @type {any} */
+      const error = caught;
+      if (error?.code === "invalid_sync_response") throw error;
+      const status = Number.isInteger(error?.status) ? error.status : 0;
+      throw Object.assign(new Error(error?.message ?? "Workout Agent sync failed"), {
+        code: error?.code ?? (status ? `http_${status}` : "agent_sync_failed"),
+        status,
+        details: Array.isArray(error?.details) ? error.details : [],
+        retryable: status === 0 || status === 408 || status === 425 || status === 429 || status >= 500,
+      });
+    }
   };
 }
 
