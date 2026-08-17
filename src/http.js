@@ -10,6 +10,7 @@ import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, creat
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
 import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
 import { aerobicDetailModel, aerobicListModel } from "./training-archive.js";
+import { compactAerobicSummary, recordsOverviewModel } from "./training-records.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -163,11 +164,20 @@ async function privateGet(state, path, url, now, env) {
   if (path === "/api/private/schedule") {
     const expandValue = url.searchParams.get("expand");
     if (expandValue && expandValue !== "prescription") return jsonError("invalid_request", "expand must be prescription", [], 400);
+    const includeValue = url.searchParams.get("include");
+    if (includeValue && includeValue !== "aerobic_summary") return jsonError("invalid_request", "include must be aerobic_summary", [], 400);
     const result = scheduleModel(state, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, now, expandValue === "prescription");
+    if (Array.isArray(result) && includeValue === "aerobic_summary") for (const entry of result) entry.aerobic_summary = compactAerobicSummary(state, entry.date, now);
     return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse({ timezone: state.timezone, from: result[0]?.date ?? null, to: result.at(-1)?.date ?? null, entries: result });
   }
   if (path === "/api/private/sessions") return listPrivateSessions(state, url);
   if (path.startsWith("/api/private/sessions/")) { const session = findSession(state, path.split("/").at(-1)); return session ? jsonResponse(sessionDetail(session)) : jsonError("not_found", "Session not found", [], 404); }
+  if (path === "/api/private/records/overview") {
+    const period = recordPeriod(url);
+    if (period.error) return jsonError(period.error.code, period.error.message, [], 400);
+    const result = recordsOverviewModel(state, period.from, period.to, now);
+    return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result);
+  }
   if (path === "/api/private/records/aerobic") { const result = aerobicListModel(state, url, now); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }
   if (path.startsWith("/api/private/records/aerobic/")) {
     let activityRef;
@@ -181,6 +191,13 @@ async function privateGet(state, path, url, now, env) {
   if (path === "/api/private/coach-share") { const share = state.coach_share && !state.coach_share.revoked_at ? await authenticatedCoachUrl(state, env) : null; return jsonResponse(share ? { active: true, share_key: share.share_key, url: share.url } : { active: false, share_key: null, url: null }); }
   if (path === "/api/private/export") return exportResponse(state, now);
   return jsonError("not_found", "Resource not found", [], 404);
+}
+
+function recordPeriod(url) {
+  const from = url.searchParams.get("from") ?? undefined;
+  const to = url.searchParams.get("to") ?? undefined;
+  if ((from === undefined) !== (to === undefined)) return { error: { code: "invalid_period", message: "from and to must be provided together" } };
+  return { from, to };
 }
 
 async function privateMutation(request, env, store, originalState, path, url, now) {

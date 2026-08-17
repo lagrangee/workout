@@ -74,7 +74,7 @@ function createBrowserAudio() {
 
 const actionAudio = workoutTestSeams.audio || createBrowserAudio();
 const blankTimedAction = () => ({ itemKey: null, phase: "idle", targetSec: null, deadlineMs: null, remainingMs: null, remainingSec: null, lastCueSecond: null });
-const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, recordsTab: "overview", aerobic: { list: null, detail: null, loading: false, detailLoading: false, error: null, month: "all", sportType: "all" }, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
+const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, recordsTab: "overview", recordsOverview: null, recordsOverviewLoading: false, aerobic: { list: null, detail: null, loading: false, detailLoading: false, error: null, month: "all", sportType: "all", from: null, to: null }, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
 
 const app = document.querySelector("#app");
 async function api(path, options = {}) {
@@ -303,18 +303,33 @@ async function loadProgress(range) {
   render();
 }
 
+async function loadRecordsOverview() {
+  state.recordsOverviewLoading = true;
+  state.error = null;
+  render();
+  try {
+    state.recordsOverview = await api("/api/private/records/overview");
+  } catch (error) {
+    state.error = error.data?.error?.message || error.message;
+  }
+  state.recordsOverviewLoading = false;
+  if (state.view === "progress" && state.recordsTab === "overview") render();
+}
+
 async function loadAerobicActivities() {
   state.aerobic.loading = true;
   state.aerobic.error = null;
   render();
   try {
-    state.aerobic.list = await api("/api/private/records/aerobic?limit=200");
+    const query = [`limit=200`];
+    if (state.aerobic.from && state.aerobic.to) { query.push(`from=${encodeURIComponent(state.aerobic.from)}`, `to=${encodeURIComponent(state.aerobic.to)}`); }
+    state.aerobic.list = await api(`/api/private/records/aerobic?${query.join("&")}`);
     state.aerobic.error = null;
   } catch (error) {
     state.aerobic.error = error.data?.error?.message || error.message;
   }
   state.aerobic.loading = false;
-  render();
+  if (state.view === "progress" && state.recordsTab === "aerobic") render();
 }
 
 async function openAerobicDetail(activityRef) {
@@ -697,7 +712,9 @@ function calendarView() {
   const sessions = new Map(state.calendar.sessions.map((session) => [session.session_key, session]));
   const rows = state.calendar.entries.map((entry) => {
     const beforePlan = Boolean(first && entry.date < first); const session = sessions.get(entry.session_key); const status = beforePlan ? { key: "before-plan", label: "计划尚未开始" } : calendarStatus(entry, session); const selectedClass = entry.date === selected ? " selected" : "";
-    return `<button class="calendar-day ${status.key}${selectedClass}" data-action="calendar-select" data-date="${entry.date}" ${beforePlan ? "disabled" : ""}><span class="calendar-day-label">${weekdayLabels[entry.weekday]}</span><span class="calendar-day-date">${entry.date.slice(5)}</span><span class="calendar-day-summary">${entry.kind === "workout" ? escapeHtml(entry.title) : status.label}</span><span class="calendar-day-meta">${entry.kind === "workout" ? `${entry.module_count || 0} 个模块 · ${entry.estimated_duration_min} 分钟 · ${status.label}` : entry.kind === "rest" ? "恢复，不创建训练记录" : beforePlan ? "" : "未安排内容"}</span></button>`;
+    const aerobicCount = entry.aerobic_summary?.activity_count || 0;
+    const aerobicMeta = aerobicCount ? ` · ${aerobicCount} 次有氧` : "";
+    return `<button class="calendar-day ${status.key}${selectedClass}" data-action="calendar-select" data-date="${entry.date}" ${beforePlan ? "disabled" : ""}><span class="calendar-day-label">${weekdayLabels[entry.weekday]}</span><span class="calendar-day-date">${entry.date.slice(5)}</span><span class="calendar-day-summary">${entry.kind === "workout" ? escapeHtml(entry.title) : status.label}</span><span class="calendar-day-meta">${entry.kind === "workout" ? `${entry.module_count || 0} 个模块 · ${entry.estimated_duration_min} 分钟 · ${status.label}${aerobicMeta}` : entry.kind === "rest" ? `恢复，不创建训练记录${aerobicMeta}` : beforePlan ? "" : `未安排内容${aerobicMeta}`}</span></button>`;
   }).join("");
   const detail = state.calendarDay && state.calendarDay.entry.date === selected ? (state.correction ? correctionView(state.calendarDay.session, state.calendarDay.entry) : calendarDayDetail(state.calendarDay.entry, state.calendarDay.session)) : `<section class="quiet-card"><strong>选择一天</strong><p>查看这一天的训练处方和完成情况。</p></section>`;
   const maintenance = state.calendar.expiredCount > 0 ? `<button class="secondary calendar-maintenance-button" data-action="normalize-expired" ${state.calendarMaintenance.pending ? "disabled aria-busy=\"true\"" : ""}>${state.calendarMaintenance.pending ? "整理中…" : `整理 ${state.calendar.expiredCount} 条`}</button>` : "";
@@ -707,10 +724,19 @@ function calendarView() {
 
 function calendarDayDetail(entry, detail) {
   const status = calendarStatus(entry, detail); const items = detail?.snapshot?.completion_items || []; const completed = detail?.completion_results?.length || 0; const canCorrect = detail && ["completed", "partial", "skipped"].includes(detail.status);
-  if (entry.kind === "rest") return `<section class="calendar-detail quiet-card"><span class="status-pill">休息日</span><h2>恢复日</h2><p class="muted">${entry.date} 不安排训练，也不会创建训练记录。</p></section>`;
-  if (entry.kind === "no_plan") return `<section class="calendar-detail quiet-card"><span class="status-pill">无计划</span><h2>未安排内容</h2><p class="muted">${entry.date} 没有生效的 Weekly Template 槽位。</p></section>`;
-  if (!entry.prescription) return `<section class="calendar-detail error-card"><p>这一天的训练处方暂时无法读取。</p></section>`;
-  return `<section class="calendar-detail"><div class="calendar-detail-head"><div><p class="eyebrow">${entry.date} · ${entry.weekday}</p><h2>${escapeHtml(entry.title)}</h2><p class="muted">约 ${entry.estimated_duration_min} 分钟 · ${status.label}</p></div><span class="status-pill ${status.key}">${status.label}</span></div>${detail ? `<div class="calendar-session-summary"><strong>Session ${detail.status === "skipped" ? "已跳过" : "完成情况"} · 训练计划快照</strong><span>快照：${escapeHtml(detail.snapshot.title)} · ${pct(detail.completion_fraction)} · ${completed}/${items.length} 项已完成</span>${detail.skip_reason ? `<p class="muted">跳过原因：${escapeHtml(detail.skip_reason)}</p>` : ""}${canCorrect ? `<button class="secondary" data-action="calendar-correct">校正记录</button>` : ""}</div>` : status.key === "overdue" ? `<div class="calendar-session-summary"><strong>逾期未开始</strong><span>没有 Session 记录，也不会生成历史训练记录。</span></div>` : ""}<div class="calendar-prescription"><h3>训练处方</h3>${renderCalendarPrescription(detail?.snapshot || entry.prescription, detail)}</div></section>`;
+  const aerobic = calendarAerobicSummary(entry);
+  if (entry.kind === "rest") return `${aerobic}<section class="calendar-detail quiet-card"><span class="status-pill">休息日</span><h2>恢复日</h2><p class="muted">${entry.date} 不安排训练，也不会创建训练记录。</p></section>`;
+  if (entry.kind === "no_plan") return `${aerobic}<section class="calendar-detail quiet-card"><span class="status-pill">无计划</span><h2>未安排内容</h2><p class="muted">${entry.date} 没有生效的 Weekly Template 槽位。</p></section>`;
+  if (!entry.prescription) return `${aerobic}<section class="calendar-detail error-card"><p>这一天的训练处方暂时无法读取。</p></section>`;
+  return `<section class="calendar-detail"><div class="calendar-detail-head"><div><p class="eyebrow">${entry.date} · ${entry.weekday}</p><h2>${escapeHtml(entry.title)}</h2><p class="muted">约 ${entry.estimated_duration_min} 分钟 · ${status.label}</p></div><span class="status-pill ${status.key}">${status.label}</span></div>${detail ? `<div class="calendar-session-summary"><strong>Session ${detail.status === "skipped" ? "已跳过" : "完成情况"} · 训练计划快照</strong><span>快照：${escapeHtml(detail.snapshot.title)} · ${pct(detail.completion_fraction)} · ${completed}/${items.length} 项已完成</span>${detail.skip_reason ? `<p class="muted">跳过原因：${escapeHtml(detail.skip_reason)}</p>` : ""}${canCorrect ? `<button class="secondary" data-action="calendar-correct">校正记录</button>` : ""}</div>` : status.key === "overdue" ? `<div class="calendar-session-summary"><strong>逾期未开始</strong><span>没有 Session 记录，也不会生成历史训练记录。</span></div>` : ""}<div class="calendar-prescription"><h3>训练处方</h3>${renderCalendarPrescription(detail?.snapshot || entry.prescription, detail)}</div></section>${aerobic}`;
+}
+
+function calendarAerobicSummary(entry) {
+  const summary = entry?.aerobic_summary;
+  if (!summary || !summary.activity_count) return "";
+  const distance = summary.distance_km == null ? "—" : `${summary.distance_km} km`;
+  const duration = aerobicDuration(summary.duration_sec);
+  return `<section class="calendar-aerobic-summary" aria-label="${entry.date} 有氧摘要"><div><p class="eyebrow">COROS · AEROBIC SUMMARY</p><h3>有氧摘要</h3><p class="muted">${summary.activity_count} 次活动 · ${distance} · ${duration}</p></div><span class="status-pill ${escapeHtml(summary.source_status)}">${escapeHtml(aerobicStatusLabel(summary.source_status))}</span><button class="secondary" data-action="open-aerobic-date" data-date="${entry.date}">查看有氧记录</button></section>`;
 }
 
 function renderCalendarPrescription(prescription, detail) {
@@ -731,7 +757,7 @@ function planView() {
 function planSheet() { if (state.preview) return `<div class="modal-backdrop" data-action="close-sheet"><section class="bottom-sheet"><div class="sheet-handle"></div><h2>确认更新计划</h2><p class="muted">${escapeHtml(state.preview.effective_from)} 生效 · ${state.preview.changed_weekday_slot_count} 个日期槽位发生变化</p><div class="preview-week">${Object.entries(state.preview.week).map(([day, slot]) => `<div class="week-row"><span class="day-label">${weekdayLabels[day]}</span><div><strong>${slot?.kind === "workout" ? escapeHtml(slot.title) : slot?.kind === "rest" ? "休息日" : "无计划"}</strong><p>${slot?.kind === "workout" ? `${slot.blocks.length} 个训练模块 · ${slot.estimated_duration_min} 分钟` : "今天不创建训练记录"}</p></div></div>`).join("")}</div><div class="sheet-actions"><button class="secondary" data-action="close-sheet">取消</button><button class="primary" data-action="confirm-plan">确认应用</button></div></section></div>`; return `<div class="modal-backdrop" data-action="close-sheet"><section class="bottom-sheet"><div class="sheet-handle"></div><h2>${state.planError ? "计划需要修正" : "更新计划"}</h2><p class="muted">粘贴完整 JSON，检查后预览并确认。</p><textarea id="plan-json" placeholder='{"schema_version":1,"effective_from":"2026-08-01","week":{...}}'>${escapeHtml(state.draft)}</textarea>${state.planError ? `<div class="validation-error"><strong>计划无法更新</strong><p>${escapeHtml(state.planError).replace(/\n/g, "<br>")}</p><button class="secondary" data-action="copy-error">复制错误详情</button></div>` : ""}<div class="sheet-actions"><button class="secondary" data-action="close-sheet">取消</button><button class="primary" data-action="validate-plan">检查计划</button></div></section></div>`; }
 
 function formatHours(seconds) { const value = Math.round((Number(seconds) || 0) / 360) / 10; return `${Number.isInteger(value) ? value : value.toFixed(1)} 小时`; }
-function progressView() { if (state.exercise) return exerciseView(); const metric = state.progress?.metrics; const rate = metric?.completion_rate; const tabs = [["current", "当月"], ["previous", "上月"], ["all", "累计"]].map(([range, label]) => `<button class="progress-range-tab ${state.progressRange === range ? "is-selected" : ""}" data-action="progress-range" data-range="${range}" role="tab" aria-selected="${state.progressRange === range}">${label}</button>`).join(""); if (state.progressLoading) return `<section class="page-head progress-head"><p class="eyebrow">PROGRESS</p><h1>进展</h1><div class="progress-range-tabs" role="tablist" aria-label="进展时间范围">${tabs}</div></section><section class="loading compact-loading"><span class="spinner"></span><p>正在读取${progressRangeLabel(state.progressRange)}数据…</p></section>`; return `<section class="page-head progress-head"><p class="eyebrow">PROGRESS · ${progressRangeLabel(state.progressRange)}</p><h1>进展</h1><p class="muted">${state.progress?.period?.from || ""} – ${state.progress?.period?.to || ""} · ${state.progress?.period?.timezone || ""}</p><div class="progress-range-tabs" role="tablist" aria-label="进展时间范围">${tabs}</div></section><div class="metric-grid"><article><span>完成率</span><strong>${rate?.value == null ? "—" : pct(rate.value)}</strong><small>${rate?.evidence?.due_workouts || 0} 个到期训练</small></article><article><span>训练时长</span><strong>${formatHours(metric?.training_duration?.value_sec)}</strong><small>只计已结束区间</small></article><article><span>力量训练日</span><strong>${metric?.strength_training_days?.value || 0}</strong><small>按日期计一次</small></article><article><span>平均 RPE</span><strong>${metric?.average_session_rpe?.value ?? "—"}</strong><small>${metric?.average_session_rpe?.included_count || 0} 个有效记录</small></article></div><section class="quiet-card"><strong>训练连续性</strong><p>${state.progress?.current_streak?.value || 0} 天连续完成 100% 训练；休息日和无计划日保持中性。</p></section><section class="list-card"><h2>动作进展</h2>${(state.progress?.exercises || []).length ? state.progress.exercises.map((exercise) => `<button class="list-row" data-exercise="${escapeHtml(exercise.exercise_key)}"><span><strong>${escapeHtml(exercise.current_name)}</strong><small>${exercise.performed_session_count} 次训练</small></span><span>›</span></button>`).join("") : `<p class="muted">还没有可展示的动作记录。</p>`}</section>`; }
+function progressView() { if (state.exercise) return exerciseView(); const metric = state.progress?.metrics; const rate = metric?.completion_rate; const tabs = [["current", "当月"], ["previous", "上月"], ["all", "累计"]].map(([range, label]) => `<button class="progress-range-tab ${state.progressRange === range ? "is-selected" : ""}" data-action="progress-range" data-range="${range}" role="tab" aria-selected="${state.progressRange === range}">${label}</button>`).join(""); const heading = state.recordsTab === "strength" ? "力量" : "进展"; if (state.progressLoading) return `<section class="page-head progress-head"><p class="eyebrow">RECORDS · STRENGTH</p><h1>${heading}</h1><div class="progress-range-tabs" role="tablist" aria-label="力量记录时间范围">${tabs}</div></section><section class="loading compact-loading"><span class="spinner"></span><p>正在读取${progressRangeLabel(state.progressRange)}数据…</p></section>`; return `<section class="page-head progress-head"><p class="eyebrow">RECORDS · STRENGTH · ${progressRangeLabel(state.progressRange)}</p><h1>${heading}</h1><p class="muted">${state.progress?.period?.from || ""} – ${state.progress?.period?.to || ""} · ${state.progress?.period?.timezone || ""}</p><div class="progress-range-tabs" role="tablist" aria-label="力量记录时间范围">${tabs}</div></section><div class="metric-grid"><article><span>完成率</span><strong>${rate?.value == null ? "—" : pct(rate.value)}</strong><small>${rate?.evidence?.due_workouts || 0} 个到期训练</small></article><article><span>训练时长</span><strong>${formatHours(metric?.training_duration?.value_sec)}</strong><small>只计已结束区间</small></article><article><span>力量训练日</span><strong>${metric?.strength_training_days?.value || 0}</strong><small>按日期计一次</small></article><article><span>平均 RPE</span><strong>${metric?.average_session_rpe?.value ?? "—"}</strong><small>${metric?.average_session_rpe?.included_count || 0} 个有效记录</small></article></div><section class="quiet-card"><strong>训练连续性</strong><p>${state.progress?.current_streak?.value || 0} 天连续完成 100% 训练；休息日和无计划日保持中性。</p></section><section class="list-card"><h2>动作进展</h2>${(state.progress?.exercises || []).length ? state.progress.exercises.map((exercise) => `<button class="list-row" data-exercise="${escapeHtml(exercise.exercise_key)}"><span><strong>${escapeHtml(exercise.current_name)}</strong><small>${exercise.performed_session_count} 次训练</small></span><span>›</span></button>`).join("") : `<p class="muted">还没有可展示的动作记录。</p>`}</section>`; }
 
 function exerciseView() { return `<section class="page-head"><button class="text-button" data-action="close-exercise">← 返回进展</button><p class="eyebrow">动作记录</p><h1>${escapeHtml(state.exercise.exercise_key)}</h1><p class="muted">${state.exercise.performed_session_count} 次有实际完成结果的训练</p></section><section class="list-card">${state.exercise.observations.length ? state.exercise.observations.map((observation) => `<article class="week-row"><div><strong>${observation.scheduled_date}</strong><p>${observation.sets.map((set) => `${escapeHtml(set.side)} · ${set.actual.value} ${set.actual.metric}`).join("，")}</p></div></article>`).join("") : `<p class="muted">这个动作目前没有可展示的完成记录。</p>`}</section>`; }
 
@@ -741,8 +767,16 @@ function recordsTabs(active) {
 
 function recordsView() {
   if (state.exercise) return exerciseView();
+  if (state.recordsTab === "overview") return recordsOverviewView();
   if (state.recordsTab === "aerobic") return aerobicView();
   return `${recordsTabs(state.recordsTab)}${progressView()}`;
+}
+
+function recordsOverviewView() {
+  if (state.recordsOverviewLoading || !state.recordsOverview) return `${recordsTabs("overview")}<section class="page-head"><p class="eyebrow">RECORDS · OVERVIEW</p><h1>总览</h1></section><section class="loading compact-loading"><span class="spinner"></span><p>正在读取训练记录…</p></section>`;
+  const overview = state.recordsOverview;
+  const days = (overview.days || []).filter((day) => day.workout_session_count || day.aerobic_activity_count).slice(-8).reverse();
+  return `${recordsTabs("overview")}<section class="page-head records-overview-head"><p class="eyebrow">RECORDS · OVERVIEW</p><h1>总览</h1><p class="muted">力量与有氧各自保留来源；同一日期只提供上下文。</p></section><div class="metric-grid records-overview-metrics"><article><span>力量 Session</span><strong>${overview.workout?.session_count || 0}</strong><small>Workout source</small></article><article><span>有氧活动</span><strong>${overview.aerobic?.activity_count || 0}</strong><small>COROS source</small></article><article><span>记录天数</span><strong>${days.length}</strong><small>有记录的日期</small></article></div><section class="list-card records-overview-days"><h2>最近记录日期</h2>${days.length ? days.map((day) => `<article class="records-overview-day"><div><strong>${escapeHtml(day.local_date)}</strong><small>${day.schedule_kind === "rest" ? "休息日" : day.schedule_kind === "no_plan" ? "无计划" : "计划日"}</small></div><div><span>${day.workout_session_count ? `${day.workout_session_count} 次力量` : "无力量 Session"}</span><span>${day.aerobic_activity_count ? `${day.aerobic_activity_count} 次有氧` : "无有氧活动"}</span></div></article>`).join("") : `<p class="muted">还没有可展示的训练记录。</p>`}</section><section class="quiet-card records-source-boundary"><strong>来源边界</strong><p>Workout Session 和 COROS Activity Archive 不会因为 local date 相同而被判定为同一训练事件。</p></section>`;
 }
 
 const aerobicSportLabels = { 100: "户外跑", 101: "室内运动", 102: "越野跑", 104: "徒步", 200: "骑行" };
@@ -786,7 +820,8 @@ function aerobicView() {
   if (state.aerobic.loading || !list) return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1></section>${filters}<section class="loading compact-loading"><span class="spinner"></span><p>正在读取有氧记录…</p></section>`;
   if (state.aerobic.error) return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1></section><section class="error-card"><p>${escapeHtml(state.aerobic.error)}</p><button class="primary" data-action="aerobic-retry">重新读取</button></section>`;
   const filtered = filteredAerobicItems();
-  return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1><p class="muted">按活动时间倒序 · ${list.source_status === "partial" ? "当前同步包含部分数据" : "COROS 活动记录"}</p></section>${filters}<section class="aerobic-activity-list" aria-label="有氧活动列表">${filtered.length ? filtered.map(aerobicActivityCard).join("") : `<div class="quiet-card"><strong>还没有有氧记录</strong><p>暂无 COROS aerobic activity，完成一次 sync data 后会显示在这里。</p></div>`}</section>`;
+  const dateScope = state.aerobic.from && state.aerobic.to ? `<span class="records-context">日期：${escapeHtml(state.aerobic.from)}${state.aerobic.from === state.aerobic.to ? "" : ` – ${escapeHtml(state.aerobic.to)}`}</span>` : "";
+  return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1><p class="muted">按活动时间倒序 · ${list.source_status === "partial" ? "当前同步包含部分数据" : "COROS 活动记录"}</p>${dateScope}</section>${filters}<section class="aerobic-activity-list" aria-label="有氧活动列表">${filtered.length ? filtered.map(aerobicActivityCard).join("") : `<div class="quiet-card"><strong>还没有有氧记录</strong><p>暂无 COROS aerobic activity，完成一次 sync data 后会显示在这里。</p></div>`}</section>`;
 }
 
 function agentAccessView() { const access = state.agentAccess; const active = access?.active; const token = state.agentAccessToken; const actions = active ? `<button class="secondary" data-action="rotate-agent-token">重新生成 Token</button><button class="secondary" data-action="revoke-agent-token">撤销 Token</button>` : `<button class="primary" data-action="create-agent-token">创建 Token</button>`; return `<section class="quiet-card"><h2>Agent access</h2><p>${active ? "Agent API 访问已启用。Token 只在创建或重新生成后显示一次。" : "为训练数据 Agent API 创建一个可撤销的访问 Token。"}</p>${token ? `<label>本次 Token（请立即保存）<input aria-label="本次 Agent Token" readonly value="${escapeHtml(token)}" /></label><p class="muted">出于安全考虑，之后的状态读取不会再次返回完整 Token。</p>` : ""}<div class="hero-actions">${actions}${token ? `<button class="secondary" data-action="copy-agent-token">复制 Token</button>` : ""}</div></section>`; }
@@ -800,7 +835,7 @@ async function loadCalendarWeek(from, selectedDate = null) {
   state.calendarLoading = true; state.calendarError = null; state.calendarDay = null; state.correction = false; render();
   try {
     const to = addCalendarDays(from, 6);
-    const [schedule, sessions] = await Promise.all([api(`/api/private/schedule?from=${from}&to=${to}`), api(`/api/private/sessions?from=${from}&to=${to}&limit=200`)]);
+    const [schedule, sessions] = await Promise.all([api(`/api/private/schedule?from=${from}&to=${to}&include=aerobic_summary`), api(`/api/private/sessions?from=${from}&to=${to}&limit=200`)]);
     const first = calendarFirstDate(); const requestedDate = selectedDate || from; const normalizedSelectedDate = first && requestedDate < first ? first : requestedDate;
     state.calendar = { from, to, selectedDate: normalizedSelectedDate >= from && normalizedSelectedDate <= to ? normalizedSelectedDate : from, entries: schedule.entries, sessions: sessions.items, expiredCount: sessions.items.filter(isExpiredSession).length };
     state.calendarLoading = false;
@@ -830,14 +865,14 @@ async function loadCalendarDay(date, shouldRender = true) {
   if (!date || (first && date < first)) return;
   state.calendar.selectedDate = date; state.calendarDay = null; state.calendarDayLoading = true; state.calendarError = null; if (shouldRender) render();
   try {
-    const schedule = await api(`/api/private/schedule?from=${date}&to=${date}&expand=prescription`);
+    const schedule = await api(`/api/private/schedule?from=${date}&to=${date}&expand=prescription&include=aerobic_summary`);
     const entry = schedule.entries[0]; const detail = entry?.session_key ? await api(`/api/private/sessions/${entry.session_key}`) : null;
     state.calendarDay = entry ? { entry, session: detail } : null;
   } catch (error) { state.calendarError = error.data?.error?.message || error.message; }
   state.calendarDayLoading = false; if (shouldRender) render();
 }
 function bind() {
-  app.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => { const destination = button.dataset.view; if (destination !== "today" && state.view === "today" && !(await ensureSessionPaused("navigation"))) return; const wasCalendar = state.view === "calendar"; state.view = destination; if (state.view === "settings") { await Promise.all([loadMe(), loadShare(), loadAgentAccess()]); render(); } else if (state.view === "calendar") { if (!calendarFirstDate()) return render(); await loadCalendarWeek(wasCalendar && state.calendar.from ? state.calendar.from : initialCalendarWeek(), wasCalendar ? state.calendar.selectedDate : state.today.date); } else render(); }));
+  app.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => { const destination = button.dataset.view; if (destination !== "today" && state.view === "today" && !(await ensureSessionPaused("navigation"))) return; const wasCalendar = state.view === "calendar"; state.view = destination; if (state.view === "settings") { await Promise.all([loadMe(), loadShare(), loadAgentAccess()]); render(); } else if (state.view === "calendar") { if (!calendarFirstDate()) return render(); await loadCalendarWeek(wasCalendar && state.calendar.from ? state.calendar.from : initialCalendarWeek(), wasCalendar ? state.calendar.selectedDate : state.today.date); } else if (state.view === "progress" && state.recordsTab === "overview" && !state.recordsOverview) { await loadRecordsOverview(); } else render(); }));
   app.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", () => action(element.dataset.action, element.dataset.index ?? element.dataset.exerciseKey ?? element.dataset.rpe ?? element.dataset.range ?? element.dataset.tab ?? element.dataset.activityRef, element.dataset.date)));
   app.querySelectorAll("[data-aerobic-filter]").forEach((element) => element.addEventListener("change", () => { state.aerobic[element.dataset.aerobicFilter] = element.value; render(); }));
   app.querySelectorAll(".bottom-sheet").forEach((sheet) => sheet.addEventListener("click", (event) => event.stopPropagation()));
@@ -862,7 +897,8 @@ async function action(name, value, date) {
     if (name === "calendar-next") return loadCalendarWeek(addCalendarDays(state.calendar.from, 7), addCalendarDays(state.calendar.selectedDate || state.calendar.from, 7));
     if (name === "calendar-select") return loadCalendarDay(date);
     if (name === "progress-range") return loadProgress(value);
-    if (name === "records-tab") { state.recordsTab = value; state.exercise = null; state.aerobic.detail = null; if (value === "aerobic" && !state.aerobic.list) return loadAerobicActivities(); return render(); }
+    if (name === "records-tab") { state.recordsTab = value; state.exercise = null; state.aerobic.detail = null; if (value === "overview" && !state.recordsOverview) return loadRecordsOverview(); if (value === "aerobic" && !state.aerobic.list) return loadAerobicActivities(); return render(); }
+    if (name === "open-aerobic-date") { state.view = "progress"; state.recordsTab = "aerobic"; state.exercise = null; state.aerobic.detail = null; state.aerobic.from = date; state.aerobic.to = date; state.aerobic.month = "all"; state.aerobic.sportType = "all"; return loadAerobicActivities(); }
     if (name === "aerobic-retry") return loadAerobicActivities();
     if (name === "aerobic-detail") return openAerobicDetail(value);
     if (name === "aerobic-back") { state.aerobic.detail = null; return render(); }

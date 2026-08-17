@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { addDays, isValidLocalDate, localDate } from "./util.js";
 import { COROS_SPORT_TYPES, SOURCE_STATUSES, containsSensitiveText, normalizeCorosActivity, normalizeTimezone, safeAerobicActivity } from "./training-archive.js";
+import { dailyHubModel, dailyHubNote, normalizeWorkoutSessionRecord, workoutIndexNote, workoutSessionNote } from "./training-records.js";
 
 const MAX_PUBLICATION_ATTEMPTS = 3;
 const SYNC_RECEIPT_DIR = [".sync", "training-archive"];
@@ -58,7 +59,7 @@ export async function syncTrainingArchive(options = {}) {
   } catch (error) {
     const localError = safeError(error, "local", "local_archive_write_failed");
     errors.push(localError);
-    localWrite = { write_status: "error", written_paths: [], fit_bytes: 0 };
+    localWrite = { write_status: "error", written_paths: [], fit_bytes: 0, workout_sessions: 0 };
   }
 
   const projection = buildProjection({
@@ -123,7 +124,7 @@ async function readSource(adapter, source, targetDate, timezone, now) {
   try {
     const result = await adapter.read(targetDate, { timezone, now });
     const activities = Array.isArray(result?.activities) ? result.activities : [];
-    const sessions = safeSessions(result?.sessions);
+    const sessions = safeSessions(result?.sessions, targetDate, timezone, result?.data_as_of, result?.source_status);
     const inferredStatus = activities.length || sessions.length ? "complete" : "none";
     const sourceStatus = result?.source_status ?? inferredStatus;
     if (!SOURCE_STATUSES.includes(sourceStatus)) throw new Error(`Unsupported source_status: ${String(sourceStatus)}`);
@@ -146,12 +147,27 @@ function emptySource(sourceStatus) {
   return { source_status: sourceStatus, data_as_of: null, activities: [], sessions: [], errors: [] };
 }
 
-function safeSessions(value) {
+function safeSessions(value, targetDate, timezone, dataAsOf, sourceStatus) {
   if (!Array.isArray(value)) return [];
-  return value.map((session) => ({
-    session_key: safeReference(session?.session_key ?? session?.sessionKey),
-    source_ref: safeReference(session?.source_ref ?? session?.sourceRef),
-  })).filter((session) => session.session_key || session.source_ref);
+  return value.map((session) => {
+    const sessionKey = safeReference(session?.session_key ?? session?.sessionKey);
+    if (!sessionKey) return null;
+    const scheduledDate = typeof (session?.scheduled_date ?? session?.local_date) === "string" && isValidLocalDate(session.scheduled_date ?? session.local_date) ? (session.scheduled_date ?? session.local_date) : targetDate;
+    return {
+      session_key: sessionKey,
+      source_ref: safeReference(session?.source_ref ?? session?.sourceRef) ?? `session:${scheduledDate}:${sessionKey}`,
+      scheduled_date: scheduledDate,
+      title: typeof session?.title === "string" ? session.title : "Workout Session",
+      status: session?.status,
+      completion_fraction: typeof session?.completion_fraction === "number" ? session.completion_fraction : null,
+      training_duration_sec: typeof session?.training_duration_sec === "number" ? session.training_duration_sec : null,
+      session_rpe: typeof session?.session_rpe === "number" ? session.session_rpe : null,
+      source_status: SOURCE_STATUSES.includes(session?.source_status) ? session.source_status : sourceStatus,
+      data_as_of: safeInstant(session?.data_as_of ?? session?.dataAsOf) ?? safeInstant(dataAsOf),
+      updated_at: safeInstant(session?.updated_at ?? session?.updatedAt),
+      timezone,
+    };
+  }).filter(Boolean);
 }
 
 function prepareCorosActivities(coros, targetDate, timezone, now) {
@@ -275,9 +291,27 @@ function toBytes(value) {
 async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workout, coros, activitiesToWrite, activitiesForNote, fitBytesByRef, errors }) {
   const dailyPath = join(archiveDir, "daily", `${targetDate}.md`);
   const activityPaths = [];
+  const workoutPaths = [];
   let fitBytes = 0;
   await mkdir(join(archiveDir, "daily"), { recursive: true });
   await mkdir(join(archiveDir, "data", "coros"), { recursive: true });
+  await mkdir(join(archiveDir, "workout", "sessions"), { recursive: true });
+
+  const workoutRecords = (workout.sessions ?? [])
+    .map((session) => normalizeWorkoutSessionRecord(session, {
+      timezone,
+      dataAsOf: workout.data_as_of,
+      sourceStatus: workout.source_status,
+    }))
+    .filter((record) => record.local_date === targetDate);
+  for (const record of workoutRecords) {
+    const sessionPath = join(archiveDir, "workout", "sessions", `${fileComponent(record.session_key)}.md`);
+    await writeFile(sessionPath, workoutSessionNote(record), "utf8");
+    workoutPaths.push(relativePath(archiveDir, sessionPath));
+  }
+  const indexPath = join(archiveDir, "workout", "index.md");
+  await writeFile(indexPath, workoutIndexNote(), "utf8");
+  workoutPaths.push(relativePath(archiveDir, indexPath));
   for (const activity of activitiesToWrite) {
     const stem = `${targetDate}-${fileComponent(activity.activity_ref)}`;
     const jsonPath = join(archiveDir, "data", "coros", `${stem}.json`);
@@ -295,7 +329,7 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
     activityPaths.push(relativePath(archiveDir, jsonPath), relativePath(archiveDir, notePath));
   }
   await writeFile(dailyPath, dailyNote({ targetDate, timezone, now, workout, coros, activities: activitiesForNote, errors }), "utf8");
-  return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...activityPaths], fit_bytes: fitBytes };
+  return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...workoutPaths, ...activityPaths], fit_bytes: fitBytes, workout_sessions: workoutRecords.length };
 }
 
 function buildProjection({ targetDate, timezone, workout, coros, activities }) {
@@ -361,7 +395,7 @@ function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, 
       reused: false,
     },
     cloud_publication: cloudPublication,
-    records_written: { daily_hubs: localWrite.write_status === "complete" ? 1 : 0, activities: activitiesWritten },
+    records_written: { daily_hubs: localWrite.write_status === "complete" ? 1 : 0, workout_sessions: localWrite.write_status === "complete" ? (localWrite.workout_sessions ?? 0) : 0, activities: activitiesWritten },
     records_published: { activities: activitiesPublished },
     pending_artifacts: pendingArtifacts,
     ignored_sport_types: ignoredSportTypes,
@@ -428,7 +462,7 @@ async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezo
       fit_bytes: Number(priorReceipt.local_archive?.fit_bytes ?? 0) + fitBytes,
     },
     cloud_publication: cloudPublication,
-    records_written: { daily_hubs: 0, activities: 0 },
+    records_written: { daily_hubs: 0, workout_sessions: 0, activities: 0 },
     records_published: { activities: cloudPublication.published_count ?? 0 },
     ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
     pending_artifacts: remainingArtifacts,
@@ -496,7 +530,7 @@ async function retryPendingPublication({ options, priorReceipt, targetDate, time
     source_status: sourceStatus,
     local_archive: { ...priorReceipt.local_archive, reused: true },
     cloud_publication: { ...cloudPublication, retried: true },
-    records_written: { daily_hubs: 0, activities: 0 },
+    records_written: { daily_hubs: 0, workout_sessions: 0, activities: 0 },
     records_published: { activities: cloudPublication.published_count },
     ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
     errors: cloudPublication.errors ?? [],
@@ -697,49 +731,6 @@ function activityNote(activity) {
 }
 
 function dailyNote({ targetDate, timezone, now, workout, coros, activities, errors }) {
-  const workoutSessions = workout.sessions ?? [];
-  const workoutSourceRefs = workoutSessions.map((session) => session.source_ref ?? session.session_key).filter(Boolean);
-  const fitFiles = activities.map((activity) => activity.fit_file?.relative_path ?? (activity.fit_status ? `data/coros/${targetDate}-${fileComponent(activity.activity_ref)}.fit` : null)).filter(Boolean);
-  const activityLinks = activities.map((activity) => `[[data/coros/${targetDate}-${fileComponent(activity.activity_ref)}]]`);
-  const distances = activities.map((activity) => activity.summary?.distance_km).filter((value) => typeof value === "number" && Number.isFinite(value));
-  const distance = distances.length === activities.length && distances.length > 0 ? distances.reduce((total, value) => total + value, 0).toFixed(2) : "—";
-  const limitations = [...errors.map((error) => `${error.source ?? "source"}: ${error.message}`), ...(coros.source_status === "partial" ? ["COROS 数据不完整，缺失字段保持 null。"] : []), ...(coros.source_status === "error" ? ["COROS source 读取失败，保留已有本地记录并等待重试。"] : []), ...(activities.length === 0 && coros.source_status === "none" ? ["当天没有 in-scope COROS aerobic activity。"] : [])];
-  return [
-    "---",
-    "kind: training-day",
-    "schema_version: 1",
-    `date: ${targetDate}`,
-    `timezone: ${yamlValue(timezone)}`,
-    `captured_at: ${yamlValue(now.toISOString())}`,
-    `updated_at: ${yamlValue(now.toISOString())}`,
-    "source_status:",
-    `  workout: ${yamlValue(workout.source_status)}`,
-    `  coros: ${yamlValue(coros.source_status)}`,
-    "workout:",
-    `  data_as_of: ${yamlValue(workout.data_as_of)}`,
-    "  session_keys:",
-    listYaml(workoutSessions.map((session) => session.session_key).filter(Boolean)),
-    "  source_refs:",
-    listYaml(workoutSourceRefs),
-    "coros:",
-    `  data_as_of: ${yamlValue(coros.data_as_of)}`,
-    "  activity_refs:",
-    listYaml(activities.map((activity) => activity.activity_ref)),
-    "  fit_files:",
-    listYaml(fitFiles),
-    "---",
-    "",
-    "## 无氧训练",
-    workoutSessions.length ? workoutSessions.map((session) => `- ${session.session_key ?? "Workout Session"}`).join("\n") : "- 暂无 Workout Session 归档。",
-    "",
-    "## 有氧训练",
-    activityLinks.length ? activityLinks.map((link, index) => `- ${link} · ${activities[index].sport_name} · ${activities[index].summary?.distance_km ?? "—"} km`).join("\n") : "- 暂无 COROS aerobic activity。",
-    "",
-    "## 当日汇总",
-    `- COROS 有氧：${activities.length} 次 · ${distance === "—" ? "—" : `${distance} km`}`,
-    "",
-    "## 限制与待补",
-    limitations.length ? limitations.map((item) => `- ${item}`).join("\n") : "- 无。",
-    "",
-  ].join("\n");
+  const hub = dailyHubModel({ targetDate, timezone, now, workout, coros, activities, errors });
+  return dailyHubNote(hub);
 }

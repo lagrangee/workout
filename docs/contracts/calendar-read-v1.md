@@ -12,6 +12,30 @@ The range is inclusive, interpreted in the authenticated Athlete's IANA timezone
 
 The first effective plan date is exposed by the private plan read as `first_effective_from`. The Calendar UI does not navigate before that date. Explicit schedule reads may still return `no_plan` for a pre-plan date.
 
+The optional `include=aerobic_summary` parameter adds one compact, date-scoped
+COROS read model to every entry. Unknown `include` values fail with `400
+invalid_request`.
+
+```text
+aerobic_summary = {
+  schema_version: 1,
+  generated_at: Instant,
+  local_date: LocalDate,
+  source: "coros",
+  source_status: complete|none|partial|error,
+  data_as_of: Instant|null,
+  activity_count: number,
+  distance_km: number|null,
+  duration_sec: number|null,
+  records_href: string
+}
+```
+
+The summary has no activity rows, raw FIT/GPS data, or Workout Session
+reference. Calendar renders it only when `activity_count > 0` and offers a
+Records link for full aerobic history. This is date context, not a cross-source
+event join.
+
 ## Selected-day detail
 
 `GET /api/private/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD&expand=prescription`
@@ -24,7 +48,7 @@ When the expanded entry has a `session_key`, the UI makes the separate authentic
 
 ## Calendar and Today boundary
 
-The Calendar navigation is `今日 | 日历 | 进展 | 设置`. Calendar provides no start, continue, restart, skip, record, or end action. Today remains the only execution surface. Historical completed, partial, and skipped Session details may link to the existing `校正记录` flow; correction preserves the Scheduled Workout date and immutable Training Plan Snapshot.
+The Calendar navigation is `今日 | 日历 | 记录 | 设置`. Calendar provides no start, continue, restart, skip, record, or end action. Today remains the only execution surface. Historical completed, partial, and skipped Session details may link to the existing `校正记录` flow; correction preserves the Scheduled Workout date and immutable Training Plan Snapshot.
 
 Calendar may expose one explicit maintenance action for stale execution state:
 

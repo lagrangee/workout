@@ -43,6 +43,8 @@ Obsidian location.
 $WORKOUT_ARCHIVE_DIR/
   daily/YYYY-MM-DD.md
   weekly/YYYY-Www.md
+  workout/index.md
+  workout/sessions/<session_key>.md
   data/coros/YYYY-MM-DD-<activity_ref>.json
   data/coros/YYYY-MM-DD-<activity_ref>.fit
   .sync/training-archive/YYYY-MM-DD.json
@@ -54,6 +56,27 @@ it is not a route identifier. `route_direction` is an activity-level derived
 field: it is `forward`, `reverse`, or `null` and is meaningful only when the
 activity has a `route_key`. The FIT path is a byte-preserved private sidecar
 for the same activity; it is not imported into Workout.
+
+### Obsidian structured record graph
+
+The daily note is a date-scoped `daily-hub` record. Its native Properties keep
+source status, freshness, machine references, and wikilinks to the Workout
+Session records and COROS Activity Archive records for that local date. It is
+a compact navigation and context surface; detailed Session or COROS facts are
+not copied into it. `legacy_kind: training-day` may remain during the v1
+migration for readers of the previous daily-note shape.
+
+Each Workout Session is written once at
+`workout/sessions/<session_key>.md` with `kind: workout-session`, a stable
+`source_id`/`session_key`, the Workout source reference, status, completion,
+duration, RPE, freshness, and a link back to its daily Hub. `workout/index.md`
+is a derived Obsidian Dataview/Base-compatible view over those Properties; it
+is not a second manually maintained table or source of facts.
+
+The daily Hub keeps Workout and COROS links and machine references in separate
+fields. Matching `local_date` provides context only and never creates an
+implicit Workout Session-to-COROS activity relationship. The explicit
+`relation_policy` value is `same_local_date_context_only`.
 
 ## Source routing
 
@@ -91,7 +114,8 @@ local value. A normal analysis read never writes the archive.
   activity detail, lap data, and FIT file for each returned activity.
 - It writes one daily Markdown note, one sanitized COROS detail file, and one
   byte-preserved FIT sidecar per activity. Re-running the same date updates the
-  same files idempotently.
+  same files idempotently. The local stage also updates the date Hub, the
+  corresponding Workout Session notes, and the derived Workout table.
 - After a usable FIT is written, it automatically runs the route matcher. A
   unique existing-route match writes `route_key` and `route_direction` into the
   activity archive.
@@ -135,7 +159,7 @@ SyncReceiptV1 = {
     attempts: number,
     retryable: boolean
   },
-  records_written: { daily_hubs: number, activities: number },
+  records_written: { daily_hubs: number, workout_sessions: number, activities: number },
   records_published: { activities: number },
   pending_artifacts: [{ kind: fit, activity_ref: string, relative_path: string, status: partial|error }],
   errors: StructuredError[]

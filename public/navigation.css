@@ -98,6 +98,43 @@
   color: white;
 }
 
+.records-context {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.records-overview-days {
+  display: grid;
+  gap: 0;
+}
+
+.records-overview-day {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.records-overview-day > div {
+  display: grid;
+  gap: 4px;
+}
+
+.records-overview-day > div:last-child {
+  justify-items: end;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.records-overview-day small {
+  color: var(--muted);
+}
+
 .aerobic-filters {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -443,6 +480,37 @@
   margin-bottom: 0;
 }
 
+.calendar-aerobic-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #d9e0ca;
+  border-radius: 18px;
+  background: #f3f7ea;
+}
+
+.calendar-aerobic-summary h3,
+.calendar-aerobic-summary p {
+  margin: 0;
+}
+
+.calendar-aerobic-summary h3 {
+  margin: 2px 0 4px;
+}
+
+.calendar-aerobic-summary .eyebrow {
+  font-size: 10px;
+}
+
+.calendar-aerobic-summary button {
+  min-height: 42px;
+  padding: 9px 12px;
+  font-size: 12px;
+}
+
 .calendar-prescription h3 {
   margin: 24px 0 8px;
 }
@@ -487,6 +555,19 @@
 }
 
 @media (max-width: 520px) {
+  .calendar-aerobic-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .calendar-aerobic-summary button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .records-overview-day {
+    align-items: start;
+  }
+
   .calendar-week {
     grid-template-columns: 1fr;
     gap: 6px;
