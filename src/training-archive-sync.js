@@ -1,82 +1,109 @@
 // @ts-nocheck
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { addDays, isValidLocalDate, localDate } from "./util.js";
-import { COROS_SPORT_TYPES, SOURCE_STATUSES, normalizeCorosActivity, safeAerobicActivity } from "./training-archive.js";
+import { COROS_SPORT_TYPES, SOURCE_STATUSES, containsSensitiveText, normalizeCorosActivity, normalizeTimezone, safeAerobicActivity } from "./training-archive.js";
+
+const MAX_PUBLICATION_ATTEMPTS = 3;
+const SYNC_RECEIPT_DIR = [".sync", "training-archive"];
 
 /**
- * Run the first Training Archive sync slice. Source adapters are deliberately
- * injected so this seam can be exercised without COROS credentials or a real
- * Obsidian vault.
+ * Run the two-stage Training Archive sync. Source adapters and the safe cloud
+ * publisher are injected so this seam remains local, deterministic, and free
+ * of COROS credentials, a real vault, or production D1.
  *
- * @param {{ archiveDir: string, timezone: string, targetDate?: string, now?: Date, workoutSource?: { read: Function }, corosSource: { read: Function }, publish: Function }} options
+ * @param {{ archiveDir: string, timezone: string, targetDate?: string, now?: Date, workoutSource?: { read: Function }, corosSource?: { read: Function, readFit?: Function }, publish?: Function, maxPublicationAttempts?: number }} options
  */
-export async function syncTrainingArchive(options) {
-  const now = options.now ?? new Date();
-  const targetDate = resolveSyncTargetDate(options.targetDate, now, options.timezone);
+export async function syncTrainingArchive(options = {}) {
+  const now = options.now instanceof Date ? options.now : new Date(options.now ?? Date.now());
+  const timezone = normalizeTimezone(options.timezone);
+  const targetDate = resolveSyncTargetDate(options.targetDate, now, timezone);
   if (typeof options.archiveDir !== "string" || !options.archiveDir.trim()) throw new Error("WORKOUT_ARCHIVE_DIR is required");
-  if (typeof options.publish !== "function") throw new Error("A safe aerobic projection publisher is required");
+  const publish = options.publish;
+  if (typeof publish !== "function") throw new Error("A safe aerobic projection publisher is required");
 
-  const workoutResult = await readSource(options.workoutSource, targetDate, options.timezone, now);
-  const corosResult = await readSource(options.corosSource, targetDate, options.timezone, now);
-  const ignoredSportTypes = [];
-  const errors = [...(workoutResult.errors ?? []), ...(corosResult.errors ?? [])];
-  const activities = [];
-  for (const raw of corosResult.activities ?? []) {
-    const rawSportType = raw?.sport_type ?? raw?.sportType;
-    if (!isInScopeSportType(rawSportType)) {
-      if (rawSportType !== undefined && rawSportType !== null) ignoredSportTypes.push(rawSportType);
-      continue;
-    }
-    try {
-      const activity = normalizeCorosActivity(raw, {
-        timezone: options.timezone,
-        targetDate,
-        dataAsOf: corosResult.data_as_of,
-        sourceStatus: corosResult.source_status,
-        updatedAt: now.toISOString(),
-      });
-      if (activity.local_date !== targetDate) continue;
-      activity.fit_file.relative_path = `data/coros/${targetDate}-${fileComponent(activity.activity_ref)}.fit`;
-      activities.push(activity);
-    } catch (error) {
-      errors.push({ source: "coros", code: "invalid_activity", message: error.message, activity_ref: raw?.activity_ref ?? raw?.activityRef ?? raw?.labelId ?? null });
-    }
+  const priorReceipt = await readSyncReceipt(options.archiveDir, targetDate);
+  if (shouldRetryMissingArtifacts(priorReceipt, options)) {
+    return retryMissingArtifacts({ options, priorReceipt, targetDate, timezone, now, publish });
   }
-  const uniqueActivities = [...new Map(activities.map((activity) => [activity.activity_ref, activity])).values()];
-  const writtenPaths = await writeLocalArchive(options.archiveDir, targetDate, options.timezone, now, workoutResult, corosResult, uniqueActivities, errors);
-  const projection = {
-    schema_version: 1,
-    source_ref: `training-archive:${targetDate}`,
-    target_date: targetDate,
-    timezone: options.timezone,
-    source_status: corosResult.source_status,
-    data_as_of: corosResult.data_as_of,
-    activities: uniqueActivities.map(safeAerobicActivity),
-  };
-  let cloudPublication;
+  if (shouldRetryCloudOnly(priorReceipt, options)) {
+    return retryPendingPublication({ options, priorReceipt, targetDate, timezone, now, publish });
+  }
+
+  const workoutResult = await readSource(options.workoutSource, "workout", targetDate, timezone, now);
+  const corosResult = await readSource(options.corosSource, "coros", targetDate, timezone, now);
+  const prepared = prepareCorosActivities(corosResult, targetDate, timezone, now);
+  const errors = [...workoutResult.errors, ...corosResult.errors, ...prepared.errors];
+  const previousActivities = previousActivitiesForFailedSource(priorReceipt, corosResult.source_status);
+  const activities = mergeActivities(prepared.activities, previousActivities);
+  const protectedActivityRefs = new Set(previousActivities.map((activity) => activity.activity_ref));
+  const activitiesToWrite = prepared.activities.filter((activity) => !protectedActivityRefs.has(activity.activity_ref));
+  const sourceStatus = aggregateSourceStatus([workoutResult.source_status, corosResult.source_status]);
+
+  let localWrite;
   try {
-    const result = await options.publish(projection);
-    cloudPublication = { status: result?.status ?? "complete", published_count: result?.published_count ?? uniqueActivities.length, error: result?.error ?? null };
+    localWrite = await writeLocalArchive({
+      archiveDir: options.archiveDir,
+      targetDate,
+      timezone,
+      now,
+      workout: workoutResult,
+      coros: corosResult,
+      activitiesToWrite,
+      activitiesForNote: activities,
+      fitBytesByRef: prepared.fitBytesByRef,
+      errors,
+    });
   } catch (error) {
-    cloudPublication = { status: "error", published_count: 0, error: { code: error.code ?? "projection_publish_failed", message: error.message } };
+    const localError = safeError(error, "local", "local_archive_write_failed");
+    errors.push(localError);
+    localWrite = { write_status: "error", written_paths: [], fit_bytes: 0 };
   }
-  const localStatus = writtenPaths.length >= 1 ? "complete" : "error";
-  return {
-    schema_version: 1,
-    sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
-    target_date: targetDate,
-    timezone: options.timezone,
-    captured_at: now.toISOString(),
-    data_as_of: corosResult.data_as_of ?? workoutResult.data_as_of ?? null,
-    source_status: { workout: workoutResult.source_status, coros: corosResult.source_status },
-    local_archive: { status: localStatus, written_paths: writtenPaths },
-    cloud_publication: cloudPublication,
-    records_written: { daily_hubs: 1, activities: uniqueActivities.length },
-    ignored_sport_types: ignoredSportTypes,
+
+  const projection = buildProjection({
+    targetDate,
+    timezone,
+    workout: workoutResult,
+    coros: corosResult,
+    activities,
+  });
+
+  let cloudPublication;
+  if (localWrite.write_status !== "complete") {
+    cloudPublication = {
+      status: "error",
+      published_count: 0,
+      attempts: 0,
+      retryable: false,
+      error: { code: "local_archive_write_failed", message: "Local archive stage failed; cloud publication was not attempted" },
+      errors: [],
+    };
+  } else {
+    cloudPublication = await publishProjection(publish, projection, options);
+  }
+  errors.push(...(cloudPublication.errors ?? []));
+
+  const receipt = makeReceipt({
+    targetDate,
+    timezone,
+    now,
+    sourceStatus: { workout: workoutResult.source_status, coros: corosResult.source_status },
+    sourceDataAsOf: { workout: workoutResult.data_as_of, coros: corosResult.data_as_of },
+    sourceStatusAggregate: sourceStatus,
+    dataAsOf: corosResult.data_as_of ?? workoutResult.data_as_of ?? null,
+    localWrite,
+    localStatus: localWrite.write_status === "complete" ? sourceStatus : "error",
+    cloudPublication,
+    activitiesWritten: activitiesToWrite.length,
+    activitiesPublished: cloudPublication.published_count,
+    ignoredSportTypes: prepared.ignoredSportTypes,
     errors,
-  };
+    pendingArtifacts: prepared.pendingArtifacts,
+    projection,
+  });
+  await persistReceipt(options.archiveDir, receipt, projection);
+  return receipt;
 }
 
 /** @param {string|undefined} targetDate @param {Date} now @param {string} timezone */
@@ -86,16 +113,521 @@ export function resolveSyncTargetDate(targetDate, now, timezone) {
   return targetDate;
 }
 
-async function readSource(adapter, targetDate, timezone, now) {
-  if (!adapter || typeof adapter.read !== "function") return { source_status: "none", data_as_of: null, activities: [], sessions: [], errors: [] };
+async function readSource(adapter, source, targetDate, timezone, now) {
+  if (!adapter || typeof adapter.read !== "function") {
+    return {
+      ...emptySource("error"),
+      errors: [{ source, code: "source_not_configured", message: "Source adapter is not configured" }],
+    };
+  }
   try {
     const result = await adapter.read(targetDate, { timezone, now });
-    const sourceStatus = result?.source_status ?? (Array.isArray(result?.activities) && result.activities.length ? "complete" : "none");
+    const activities = Array.isArray(result?.activities) ? result.activities : [];
+    const sessions = safeSessions(result?.sessions);
+    const inferredStatus = activities.length || sessions.length ? "complete" : "none";
+    const sourceStatus = result?.source_status ?? inferredStatus;
     if (!SOURCE_STATUSES.includes(sourceStatus)) throw new Error(`Unsupported source_status: ${String(sourceStatus)}`);
-    return { source_status: sourceStatus, data_as_of: result?.data_as_of ?? null, activities: Array.isArray(result?.activities) ? result.activities : [], sessions: Array.isArray(result?.sessions) ? result.sessions : [], errors: Array.isArray(result?.errors) ? result.errors : [] };
+    return {
+      source_status: sourceStatus,
+      data_as_of: safeInstant(result?.data_as_of),
+      activities,
+      sessions,
+      errors: safeErrors(result?.errors, source),
+    };
   } catch (error) {
-    return { source_status: "error", data_as_of: null, activities: [], sessions: [], errors: [{ source: adapter === undefined ? "unknown" : "source", code: error.code ?? "source_read_failed", message: error.message }] };
+    return {
+      ...emptySource("error"),
+      errors: [safeError(error, source, "source_read_failed")],
+    };
   }
+}
+
+function emptySource(sourceStatus) {
+  return { source_status: sourceStatus, data_as_of: null, activities: [], sessions: [], errors: [] };
+}
+
+function safeSessions(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((session) => ({
+    session_key: safeReference(session?.session_key ?? session?.sessionKey),
+    source_ref: safeReference(session?.source_ref ?? session?.sourceRef),
+  })).filter((session) => session.session_key || session.source_ref);
+}
+
+function prepareCorosActivities(coros, targetDate, timezone, now) {
+  const byRef = new Map();
+  const fitBytesByRef = new Map();
+  const pendingArtifacts = [];
+  const ignoredSportTypes = [];
+  const errors = [];
+  for (const raw of coros.activities) {
+    const rawSportType = raw?.sport_type ?? raw?.sportType;
+    if (!isInScopeSportType(rawSportType)) {
+      if (rawSportType !== undefined && rawSportType !== null) ignoredSportTypes.push(rawSportType);
+      continue;
+    }
+    const activityRef = safeReference(raw?.activity_ref ?? raw?.activityRef ?? raw?.labelId);
+    try {
+      const fitBytes = extractFitBytes(raw);
+      const fitStatus = deriveFitStatus(raw, fitBytes);
+      const activityStatus = deriveActivityStatus(raw, coros.source_status, fitStatus);
+      const fitFile = {
+        ...(raw?.fit_file && typeof raw.fit_file === "object" ? raw.fit_file : {}),
+        status: fitStatus,
+        bytes: fitBytes ? fitBytes.byteLength : raw?.fit_file?.bytes ?? raw?.fitFile?.bytes ?? null,
+      };
+      const activity = normalizeCorosActivity({ ...raw, source_status: activityStatus, fit_file: fitFile }, {
+        timezone,
+        targetDate,
+        dataAsOf: coros.data_as_of,
+        sourceStatus: activityStatus,
+        updatedAt: now.toISOString(),
+      });
+      if (activity.local_date !== targetDate) continue;
+      activity.fit_file.relative_path = `data/coros/${targetDate}-${fileComponent(activity.activity_ref)}.fit`;
+      byRef.set(activity.activity_ref, activity);
+      if (fitBytes && fitBytes.byteLength > 0) fitBytesByRef.set(activity.activity_ref, fitBytes);
+      if (fitStatus !== "complete" && hasFitOutcome(raw)) {
+        pendingArtifacts.push({ kind: "fit", activity_ref: activity.activity_ref, relative_path: activity.fit_file.relative_path, status: fitStatus });
+      }
+      errors.push(...activityDiagnostics(raw, activity.activity_ref, fitStatus));
+    } catch (error) {
+      errors.push(safeError(error, "coros", "invalid_activity", activityRef));
+    }
+  }
+  return { activities: [...byRef.values()], fitBytesByRef, pendingArtifacts, ignoredSportTypes: [...new Set(ignoredSportTypes)], errors };
+}
+
+function activityDiagnostics(raw, activityRef, fitStatus) {
+  const errors = [];
+  for (const [field, code, label] of [
+    ["detail_status", "coros_detail_partial", "COROS detail data is incomplete"],
+    ["lap_status", "coros_lap_partial", "COROS lap data is incomplete"],
+  ]) {
+    const status = activityPartStatus(raw, field.replace("_status", ""));
+    if (["partial", "error"].includes(status)) errors.push({ source: "coros", code, message: label, activity_ref: activityRef });
+  }
+  if (fitStatus !== "complete" && hasFitOutcome(raw)) {
+    const fitError = raw?.fit_error ?? raw?.fit?.error ?? raw?.fitFile?.error ?? raw?.fit_file?.error;
+    errors.push(safeError(fitError ?? { code: fitStatus === "error" ? "fit_download_failed" : "fit_unavailable", message: fitStatus === "error" ? "FIT download failed" : "FIT artifact is incomplete" }, "coros", fitStatus === "error" ? "fit_download_failed" : "fit_unavailable", activityRef));
+  }
+  return errors;
+}
+
+function deriveActivityStatus(raw, sourceStatus, fitStatus) {
+  const explicit = raw?.source_status ?? raw?.sourceStatus;
+  if (explicit === "error") return "error";
+  if (sourceStatus === "error") return "error";
+  const fitFailure = fitStatus !== "complete" && hasFitOutcome(raw);
+  if (explicit === "partial" || sourceStatus === "partial" || fitFailure || [activityPartStatus(raw, "detail"), activityPartStatus(raw, "lap")].some((status) => ["partial", "error"].includes(status))) return "partial";
+  return sourceStatus;
+}
+
+function activityPartStatus(raw, part) {
+  const value = raw?.[`${part}_status`] ?? raw?.[part];
+  if (typeof value === "string") return value;
+  return value?.status ?? value?.source_status ?? null;
+}
+
+function hasFitOutcome(raw) {
+  return raw?.fit_status !== undefined
+    || raw?.fitStatus !== undefined
+    || raw?.fit_error !== undefined
+    || raw?.fit?.status !== undefined
+    || raw?.fit?.fit_status !== undefined
+    || raw?.fit_file?.status !== undefined
+    || raw?.fit_file?.fit_status !== undefined
+    || raw?.fitFile?.status !== undefined
+    || raw?.fitFile?.fit_status !== undefined
+    || extractFitBytes(raw) !== null;
+}
+
+function deriveFitStatus(raw, fitBytes) {
+  const declared = raw?.fit_file?.status ?? raw?.fit_file?.fit_status ?? raw?.fit?.status ?? raw?.fit?.fit_status ?? raw?.fit_status ?? raw?.fitStatus;
+  if (fitBytes && fitBytes.byteLength > 0) return "complete";
+  if (declared === "error") return "error";
+  if (declared === "complete") return "error";
+  return declared === "partial" ? "partial" : "partial";
+}
+
+function extractFitBytes(raw) {
+  for (const value of [raw?.fit_bytes, raw?.fitBytes, raw?.fit_data, raw?.fitData, raw?.fit_content, raw?.fit?.data, raw?.fit?.content, raw?.fit?.bytes, raw?.fit_file?.data, raw?.fitFile?.data, raw?.fit_file?.content, raw?.fitFile?.content, raw?.fit_file?.bytes, raw?.fitFile?.bytes]) {
+    const bytes = toBytes(value);
+    if (bytes) return bytes;
+  }
+  return null;
+}
+
+function toBytes(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) return new Uint8Array(value);
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (typeof ArrayBuffer !== "undefined" && value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) return Uint8Array.from(value);
+  if (value && typeof value === "object" && Array.isArray(value.data)) return toBytes(value.data);
+  if (typeof value === "string" && value.startsWith("base64:")) {
+    try { return new Uint8Array(Buffer.from(value.slice("base64:".length), "base64")); } catch { return null; }
+  }
+  return null;
+}
+
+async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workout, coros, activitiesToWrite, activitiesForNote, fitBytesByRef, errors }) {
+  const dailyPath = join(archiveDir, "daily", `${targetDate}.md`);
+  const activityPaths = [];
+  let fitBytes = 0;
+  await mkdir(join(archiveDir, "daily"), { recursive: true });
+  await mkdir(join(archiveDir, "data", "coros"), { recursive: true });
+  for (const activity of activitiesToWrite) {
+    const stem = `${targetDate}-${fileComponent(activity.activity_ref)}`;
+    const jsonPath = join(archiveDir, "data", "coros", `${stem}.json`);
+    const notePath = join(archiveDir, "data", "coros", `${stem}.md`);
+    const fitPath = join(archiveDir, "data", "coros", `${stem}.fit`);
+    const bytes = fitBytesByRef.get(activity.activity_ref);
+    if (bytes && bytes.byteLength > 0) {
+      await writeFile(fitPath, bytes);
+      activity.fit_file = { ...activity.fit_file, relative_path: `data/coros/${stem}.fit`, status: "complete", mime_type: "application/octet-stream", bytes: bytes.byteLength };
+      fitBytes += bytes.byteLength;
+      activityPaths.push(relativePath(archiveDir, fitPath));
+    }
+    await writeFile(jsonPath, `${JSON.stringify(activity, null, 2)}\n`, "utf8");
+    await writeFile(notePath, activityNote(activity), "utf8");
+    activityPaths.push(relativePath(archiveDir, jsonPath), relativePath(archiveDir, notePath));
+  }
+  await writeFile(dailyPath, dailyNote({ targetDate, timezone, now, workout, coros, activities: activitiesForNote, errors }), "utf8");
+  return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...activityPaths], fit_bytes: fitBytes };
+}
+
+function buildProjection({ targetDate, timezone, workout, coros, activities }) {
+  const sourceStatus = aggregateSourceStatus([workout.source_status, coros.source_status]);
+  return {
+    schema_version: 1,
+    publication_key: `training-archive:${targetDate}`,
+    source_ref: `training-archive:${targetDate}`,
+    target_date: targetDate,
+    timezone,
+    source_status: sourceStatus,
+    source_statuses: { workout: workout.source_status, coros: coros.source_status },
+    workout_source_status: workout.source_status,
+    source_data_as_of: { workout: workout.data_as_of, coros: coros.data_as_of },
+    data_as_of: coros.data_as_of ?? workout.data_as_of ?? null,
+    activities: activities.map(safeAerobicActivity),
+  };
+}
+
+async function publishProjection(publish, projection, options) {
+  const maxAttempts = publicationAttempts(options);
+  let last = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await publish(projection, { idempotency_key: projection.publication_key, attempt, max_attempts: maxAttempts });
+      const status = publicationStatus(result?.status ?? (projection.activities.length ? "complete" : "none"));
+      const publishedCount = boundedCount(result?.published_count, status === "complete" ? projection.activities.length : 0, projection.activities.length);
+      const error = result?.error ? safeError(result.error, "cloud", result.error.code ?? "projection_publish_failed") : (status === "partial" || status === "error" ? { code: status === "partial" ? "projection_partial" : "projection_publish_failed", message: "Cloud publication did not complete" } : null);
+      last = { status, published_count: publishedCount, attempts: attempt, retryable: status === "partial" || status === "error", error, errors: error ? [error] : [] };
+      if (status === "complete" || (status === "none" && projection.activities.length === 0)) return last;
+    } catch (error) {
+      const normalized = safeError(error, "cloud", "projection_publish_failed");
+      last = { status: "error", published_count: 0, attempts: attempt, retryable: true, error: normalized, errors: [normalized] };
+    }
+  }
+  return last ?? { status: "error", published_count: 0, attempts: maxAttempts, retryable: true, error: { code: "projection_publish_failed", message: "Cloud publication did not complete" }, errors: [] };
+}
+
+function publicationAttempts(options) {
+  const requested = options.maxPublicationAttempts ?? 1;
+  const number = Number(requested);
+  if (!Number.isFinite(number)) return 1;
+  return Math.min(MAX_PUBLICATION_ATTEMPTS, Math.max(1, Math.floor(number)));
+}
+
+function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], projection }) {
+  return {
+    schema_version: 1,
+    sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
+    publication_key: projection.publication_key,
+    target_date: targetDate,
+    timezone,
+    captured_at: now.toISOString(),
+    data_as_of: dataAsOf,
+    source_data_as_of: sourceDataAsOf,
+    status: localWrite.write_status !== "complete" ? "error" : (cloudPublication.status === "error" || cloudPublication.status === "partial" ? "partial" : sourceStatusAggregate),
+    source_status: sourceStatus,
+    local_archive: {
+      status: localStatus,
+      write_status: localWrite.write_status,
+      written_paths: localWrite.written_paths,
+      fit_bytes: localWrite.fit_bytes,
+      reused: false,
+    },
+    cloud_publication: cloudPublication,
+    records_written: { daily_hubs: localWrite.write_status === "complete" ? 1 : 0, activities: activitiesWritten },
+    records_published: { activities: activitiesPublished },
+    pending_artifacts: pendingArtifacts,
+    ignored_sport_types: ignoredSportTypes,
+    errors,
+    receipt_path: receiptRelativePath(targetDate),
+  };
+}
+
+function shouldRetryMissingArtifacts(priorReceipt, options) {
+  return typeof options.corosSource?.readFit === "function"
+    && Array.isArray(priorReceipt?.pending_artifacts)
+    && priorReceipt.pending_artifacts.some((artifact) => artifact?.kind === "fit" && safeReference(artifact.activity_ref));
+}
+
+async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezone, now, publish }) {
+  const pending = (priorReceipt.pending_artifacts ?? []).filter((artifact) => artifact?.kind === "fit" && safeReference(artifact.activity_ref));
+  const localActivities = Array.isArray(priorReceipt.local_projection?.activities) ? priorReceipt.local_projection.activities.map(safeAerobicActivity) : [];
+  const resolvedRefs = new Set();
+  const retryErrors = [];
+  let fitBytes = 0;
+
+  for (const artifact of pending) {
+    const activityRef = safeReference(artifact.activity_ref);
+    try {
+      const result = await options.corosSource.readFit(activityRef, { targetDate, timezone, now, relative_path: artifact.relative_path });
+      const bytes = extractRetryFitBytes(result);
+      if (!bytes || bytes.byteLength === 0) throw Object.assign(new Error("FIT artifact was not returned"), { code: "fit_retry_empty" });
+      await writeRetriedFitArtifact(options.archiveDir, targetDate, activityRef, bytes);
+      resolvedRefs.add(activityRef);
+      fitBytes += bytes.byteLength;
+    } catch (error) {
+      retryErrors.push(safeError(error, "coros", "fit_retry_failed", activityRef));
+    }
+  }
+
+  const updatedActivities = localActivities.map((activity) => resolvedRefs.has(activity.activity_ref) ? { ...activity, fit_status: "complete" } : activity);
+  const remainingArtifacts = pending.filter((artifact) => !resolvedRefs.has(artifact.activity_ref));
+  let projection = safePendingProjection(priorReceipt.pending_projection);
+  if (projection) projection = { ...projection, activities: updatedActivities.map(safeAerobicActivity) };
+  let cloudPublication = priorReceipt.cloud_publication ?? { status: "none", published_count: 0, attempts: 0, retryable: false, errors: [] };
+  if (projection && cloudPublication.status !== "complete") cloudPublication = { ...await publishProjection(publish, projection, options), retried: true };
+
+  const sourceStatus = priorReceipt.source_status && typeof priorReceipt.source_status === "object"
+    ? priorReceipt.source_status
+    : { workout: "none", coros: "none" };
+  const sourceStatusAggregate = aggregateSourceStatus([sourceStatus.workout, sourceStatus.coros]);
+  const priorErrors = Array.isArray(priorReceipt.errors) ? priorReceipt.errors.filter((error) => !resolvedRefs.has(error.activity_ref)) : [];
+  const receipt = {
+    schema_version: 1,
+    sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
+    publication_key: projection?.publication_key ?? priorReceipt.publication_key ?? `training-archive:${targetDate}`,
+    retry_of: priorReceipt.sync_ref ?? null,
+    target_date: targetDate,
+    timezone,
+    captured_at: now.toISOString(),
+    data_as_of: priorReceipt.data_as_of ?? null,
+    source_data_as_of: priorReceipt.source_data_as_of ?? null,
+    status: cloudPublication.status === "error" || cloudPublication.status === "partial" || remainingArtifacts.length ? "partial" : sourceStatusAggregate,
+    source_status: sourceStatus,
+    local_archive: {
+      ...(priorReceipt.local_archive ?? {}),
+      status: remainingArtifacts.length ? "partial" : (priorReceipt.local_archive?.status ?? "complete"),
+      reused: true,
+      fit_bytes: Number(priorReceipt.local_archive?.fit_bytes ?? 0) + fitBytes,
+    },
+    cloud_publication: cloudPublication,
+    records_written: { daily_hubs: 0, activities: 0 },
+    records_published: { activities: cloudPublication.published_count ?? 0 },
+    ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
+    pending_artifacts: remainingArtifacts,
+    errors: [...priorErrors, ...retryErrors, ...(cloudPublication.errors ?? [])],
+    receipt_path: receiptRelativePath(targetDate),
+  };
+  const persistedProjection = projection ?? { schema_version: 1, publication_key: receipt.publication_key, source_ref: receipt.publication_key, target_date: targetDate, timezone, source_status: sourceStatusAggregate, source_statuses: sourceStatus, data_as_of: receipt.data_as_of, activities: updatedActivities };
+  await persistReceipt(options.archiveDir, receipt, persistedProjection, updatedActivities);
+  return receipt;
+}
+
+function extractRetryFitBytes(result) {
+  const value = result && typeof result === "object" && !(result instanceof Uint8Array) && !(typeof Buffer !== "undefined" && Buffer.isBuffer(result))
+    ? (result.bytes ?? result.fit_bytes ?? result.data ?? result.content)
+    : result;
+  return toBytes(value);
+}
+
+async function writeRetriedFitArtifact(archiveDir, targetDate, activityRef, bytes) {
+  const stem = `${targetDate}-${fileComponent(activityRef)}`;
+  const relativeFitPath = `data/coros/${stem}.fit`;
+  const fitPath = join(archiveDir, relativeFitPath);
+  await mkdir(dirname(fitPath), { recursive: true });
+  await writeFile(fitPath, bytes);
+
+  const jsonPath = join(archiveDir, "data", "coros", `${stem}.json`);
+  const record = JSON.parse(await readFile(jsonPath, "utf8"));
+  record.fit_file = { ...(record.fit_file ?? {}), relative_path: relativeFitPath, status: "complete", mime_type: "application/octet-stream", bytes: bytes.byteLength };
+  await writeFile(jsonPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+
+  const notePath = join(archiveDir, "data", "coros", `${stem}.md`);
+  try {
+    const note = await readFile(notePath, "utf8");
+    await writeFile(notePath, note.replace(/^fit_status:.*$/m, 'fit_status: "complete"'));
+  } catch {
+    // The JSON sidecar is the required record; an absent note is not a reason to duplicate source reads.
+  }
+}
+
+function shouldRetryCloudOnly(priorReceipt, options) {
+  return options.retryCloudOnly !== false
+    && priorReceipt?.local_archive?.write_status === "complete"
+    && priorReceipt?.cloud_publication?.status !== "complete"
+    && priorReceipt?.pending_projection
+    && Array.isArray(priorReceipt.pending_projection.activities);
+}
+
+async function retryPendingPublication({ options, priorReceipt, targetDate, timezone, now, publish }) {
+  const projection = safePendingProjection(priorReceipt.pending_projection);
+  if (!projection) return syncTrainingArchive({ ...options, timezone, retryCloudOnly: false });
+  const cloudPublication = await publishProjection(publish, projection, options);
+  const sourceStatus = priorReceipt.source_status ?? projection.source_statuses ?? { workout: "none", coros: projection.source_status ?? "none" };
+  const sourceStatusAggregate = aggregateSourceStatus([sourceStatus.workout, sourceStatus.coros]);
+  const receipt = {
+    schema_version: 1,
+    sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
+    publication_key: projection.publication_key,
+    retry_of: priorReceipt.sync_ref ?? null,
+    target_date: targetDate,
+    timezone,
+    captured_at: now.toISOString(),
+    data_as_of: priorReceipt.data_as_of ?? null,
+    source_data_as_of: priorReceipt.source_data_as_of ?? null,
+    status: cloudPublication.status === "error" || cloudPublication.status === "partial" ? "partial" : (sourceStatusAggregate === "error" ? "error" : sourceStatusAggregate),
+    source_status: sourceStatus,
+    local_archive: { ...priorReceipt.local_archive, reused: true },
+    cloud_publication: { ...cloudPublication, retried: true },
+    records_written: { daily_hubs: 0, activities: 0 },
+    records_published: { activities: cloudPublication.published_count },
+    ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
+    errors: cloudPublication.errors ?? [],
+    receipt_path: receiptRelativePath(targetDate),
+  };
+  await persistReceipt(options.archiveDir, receipt, projection, priorReceipt.local_projection?.activities ?? projection.activities);
+  return receipt;
+}
+
+async function persistReceipt(archiveDir, receipt, projection, localActivities = projection.activities) {
+  const path = join(archiveDir, ...SYNC_RECEIPT_DIR, `${receipt.target_date}.json`);
+  const persisted = {
+    ...receipt,
+    local_projection: { activities: localActivities.map(safeAerobicActivity) },
+    pending_artifacts: receipt.pending_artifacts ?? [],
+    pending_projection: receipt.cloud_publication.status === "complete" || (receipt.cloud_publication.status === "none" && projection.activities.length === 0) ? null : projection,
+  };
+  const temporaryPath = `${path}.tmp-${Date.now()}`;
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(temporaryPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+    await rename(temporaryPath, path);
+    receipt.receipt_persisted = true;
+  } catch (error) {
+    receipt.receipt_persisted = false;
+    receipt.errors.push(safeError(error, "local", "sync_receipt_write_failed"));
+    if (receipt.status === "complete") receipt.status = "partial";
+  }
+}
+
+async function readSyncReceipt(archiveDir, targetDate) {
+  if (typeof archiveDir !== "string" || !archiveDir.trim()) return null;
+  try {
+    const value = JSON.parse(await readFile(join(archiveDir, ...SYNC_RECEIPT_DIR, `${targetDate}.json`), "utf8"));
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function safePendingProjection(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || !Array.isArray(value.activities)) throw new Error("Persisted pending projection is invalid");
+  return {
+    schema_version: 1,
+    publication_key: requiredReference(value.publication_key, "publication_key"),
+    source_ref: safeReference(value.source_ref),
+    target_date: value.target_date,
+    timezone: normalizeTimezone(value.timezone),
+    source_status: persistedStatus(value.source_status, "source_status"),
+    source_statuses: {
+      workout: persistedStatus(value.source_statuses?.workout, "source_statuses.workout"),
+      coros: persistedStatus(value.source_statuses?.coros, "source_statuses.coros"),
+    },
+    workout_source_status: persistedStatus(value.workout_source_status, "workout_source_status"),
+    data_as_of: safeInstant(value.data_as_of),
+    activities: value.activities.map(safeAerobicActivity),
+  };
+}
+
+function persistedStatus(value, field) {
+  if (value === undefined || value === null) return "none";
+  if (!SOURCE_STATUSES.includes(value)) throw new Error(`Invalid persisted ${field}`);
+  return value;
+}
+
+function requiredReference(value, field) {
+  const reference = safeReference(value);
+  if (!reference) throw new Error(`Invalid persisted ${field}`);
+  return reference;
+}
+
+function previousActivitiesForFailedSource(priorReceipt, sourceStatus) {
+  if (!["partial", "error"].includes(sourceStatus) || !Array.isArray(priorReceipt?.local_projection?.activities)) return [];
+  return priorReceipt.local_projection.activities.flatMap((activity) => {
+    try { return [safeAerobicActivity(activity)]; } catch { return []; }
+  });
+}
+
+function mergeActivities(current, previous) {
+  const merged = new Map(previous.map((activity) => [activity.activity_ref, activity]));
+  for (const activity of current) {
+    const previousActivity = merged.get(activity.activity_ref);
+    if (previousActivity && previousActivity.source_status === "complete" && ["partial", "error"].includes(activity.source_status)) continue;
+    merged.set(activity.activity_ref, activity);
+  }
+  return [...merged.values()].sort((left, right) => (right.started_at ?? "").localeCompare(left.started_at ?? "") || right.activity_ref.localeCompare(left.activity_ref));
+}
+
+function aggregateSourceStatus(statuses) {
+  const filtered = statuses.filter((status) => SOURCE_STATUSES.includes(status));
+  if (!filtered.length || filtered.every((status) => status === "none")) return "none";
+  if (filtered.every((status) => status === "complete" || status === "none")) return "complete";
+  if (filtered.some((status) => status === "partial") || filtered.some((status) => status === "error" && filtered.some((other) => other === "complete" || other === "partial"))) return "partial";
+  return "error";
+}
+
+function publicationStatus(value) {
+  return SOURCE_STATUSES.includes(value) ? value : "error";
+}
+
+function boundedCount(value, fallback, maximum) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(maximum, Math.floor(number)));
+}
+
+function safeErrors(value, source) {
+  return Array.isArray(value) ? value.map((error) => safeError(error, source, error?.code ?? "source_error")) : [];
+}
+
+function safeError(error, source, fallbackCode, activityRef = null) {
+  const code = safeCode(error?.code ?? fallbackCode) ?? fallbackCode;
+  const rawMessage = typeof error?.message === "string" ? error.message : (typeof error === "string" ? error : "Operation failed");
+  const message = containsSensitiveText(rawMessage) ? "Operation failed; sensitive details redacted" : rawMessage.slice(0, 240);
+  return { source, code, message, ...(activityRef ? { activity_ref: activityRef } : {}) };
+}
+
+function safeCode(value) {
+  return typeof value === "string" && /^[a-z0-9_.-]{1,80}$/i.test(value) ? value : null;
+}
+
+function safeReference(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const reference = value.trim();
+  return containsSensitiveText(reference) || reference.includes("/") || reference.includes("\\") ? null : reference;
+}
+
+function safeInstant(value) {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return null;
+  return new Date(value).toISOString();
 }
 
 function isInScopeSportType(value) {
@@ -103,29 +635,17 @@ function isInScopeSportType(value) {
   return Number.isInteger(number) && Object.hasOwn(COROS_SPORT_TYPES, number);
 }
 
-async function writeLocalArchive(archiveDir, targetDate, timezone, now, workout, coros, activities, errors) {
-  const dailyPath = join(archiveDir, "daily", `${targetDate}.md`);
-  const activityPaths = [];
-  await mkdir(join(archiveDir, "daily"), { recursive: true });
-  await mkdir(join(archiveDir, "data", "coros"), { recursive: true });
-  for (const activity of activities) {
-    const stem = `${targetDate}-${fileComponent(activity.activity_ref)}`;
-    const jsonPath = join(archiveDir, "data", "coros", `${stem}.json`);
-    const notePath = join(archiveDir, "data", "coros", `${stem}.md`);
-    await writeFile(jsonPath, `${JSON.stringify(activity, null, 2)}\n`, "utf8");
-    await writeFile(notePath, activityNote(activity), "utf8");
-    activityPaths.push(relativePath(archiveDir, jsonPath), relativePath(archiveDir, notePath));
-  }
-  await writeFile(dailyPath, dailyNote({ targetDate, timezone, now, workout, coros, activities, errors }), "utf8");
-  return [relativePath(archiveDir, dailyPath), ...activityPaths];
-}
-
 function fileComponent(value) {
   return encodeURIComponent(value).replaceAll("%", "_");
 }
 
 function relativePath(root, value) {
-  return value.slice(root.endsWith("/") ? root.length : root.length + 1).replaceAll("\\", "/");
+  const prefix = root.endsWith("/") ? root : `${root}/`;
+  return value.slice(prefix.length).replaceAll("\\", "/");
+}
+
+function receiptRelativePath(targetDate) {
+  return `${SYNC_RECEIPT_DIR.join("/")}/${targetDate}.json`;
 }
 
 function yamlValue(value) {
@@ -179,10 +699,11 @@ function activityNote(activity) {
 function dailyNote({ targetDate, timezone, now, workout, coros, activities, errors }) {
   const workoutSessions = workout.sessions ?? [];
   const workoutSourceRefs = workoutSessions.map((session) => session.source_ref ?? session.session_key).filter(Boolean);
-  const fitFiles = activities.map((activity) => activity.fit_file?.relative_path).filter(Boolean);
+  const fitFiles = activities.map((activity) => activity.fit_file?.relative_path ?? (activity.fit_status ? `data/coros/${targetDate}-${fileComponent(activity.activity_ref)}.fit` : null)).filter(Boolean);
   const activityLinks = activities.map((activity) => `[[data/coros/${targetDate}-${fileComponent(activity.activity_ref)}]]`);
-  const distance = activities.reduce((total, activity) => total + (activity.summary.distance_km ?? 0), 0);
-  const limitations = [...errors.map((error) => `${error.source ?? "source"}: ${error.message}`), ...(coros.source_status === "partial" ? ["COROS 数据不完整，缺失字段保持 null。"] : []), ...(activities.length === 0 && coros.source_status === "none" ? ["当天没有 in-scope COROS aerobic activity。"] : [])];
+  const distances = activities.map((activity) => activity.summary?.distance_km).filter((value) => typeof value === "number" && Number.isFinite(value));
+  const distance = distances.length === activities.length && distances.length > 0 ? distances.reduce((total, value) => total + value, 0).toFixed(2) : "—";
+  const limitations = [...errors.map((error) => `${error.source ?? "source"}: ${error.message}`), ...(coros.source_status === "partial" ? ["COROS 数据不完整，缺失字段保持 null。"] : []), ...(coros.source_status === "error" ? ["COROS source 读取失败，保留已有本地记录并等待重试。"] : []), ...(activities.length === 0 && coros.source_status === "none" ? ["当天没有 in-scope COROS aerobic activity。"] : [])];
   return [
     "---",
     "kind: training-day",
@@ -212,10 +733,10 @@ function dailyNote({ targetDate, timezone, now, workout, coros, activities, erro
     workoutSessions.length ? workoutSessions.map((session) => `- ${session.session_key ?? "Workout Session"}`).join("\n") : "- 暂无 Workout Session 归档。",
     "",
     "## 有氧训练",
-    activityLinks.length ? activityLinks.map((link, index) => `- ${link} · ${activities[index].sport_name} · ${activities[index].summary.distance_km ?? "—"} km`).join("\n") : "- 暂无 COROS aerobic activity。",
+    activityLinks.length ? activityLinks.map((link, index) => `- ${link} · ${activities[index].sport_name} · ${activities[index].summary?.distance_km ?? "—"} km`).join("\n") : "- 暂无 COROS aerobic activity。",
     "",
     "## 当日汇总",
-    `- COROS 有氧：${activities.length} 次 · ${activities.length ? `${distance.toFixed(2)} km` : "—"}`,
+    `- COROS 有氧：${activities.length} 次 · ${distance === "—" ? "—" : `${distance} km`}`,
     "",
     "## 限制与待补",
     limitations.length ? limitations.map((item) => `- ${item}`).join("\n") : "- 无。",
