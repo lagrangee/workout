@@ -72,6 +72,173 @@
   font-weight: 500;
 }
 
+.records-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 18px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.records-tab {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.records-tab.is-selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.aerobic-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.aerobic-filters label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.aerobic-filters select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+}
+
+.aerobic-activity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.aerobic-activity-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 86px;
+  padding: 15px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+  text-align: left;
+}
+
+.aerobic-activity-card:hover,
+.aerobic-activity-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 8px 20px rgba(214, 93, 63, .12);
+}
+
+.aerobic-activity-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.aerobic-activity-main strong,
+.aerobic-activity-main span,
+.aerobic-activity-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aerobic-activity-main strong {
+  font-size: 15px;
+}
+
+.aerobic-activity-main span {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.aerobic-activity-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.aerobic-activity-arrow {
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.aerobic-detail-card {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+}
+
+.aerobic-detail-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.aerobic-metrics {
+  margin: 0;
+}
+
+.aerobic-source {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.aerobic-source div {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.aerobic-source dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.aerobic-source dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 760px) {
+  .aerobic-activity-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .calendar-head {
   padding-bottom: 12px;
 }
