@@ -58,7 +58,7 @@ SyncReceiptV1 = {
     attempts: number,
     retryable: boolean
   },
-  records_written: { daily_hubs: number, activities: number },
+  records_written: { daily_hubs: number, workout_sessions: number, activities: number },
   records_published: { activities: number },
   pending_artifacts: [{ kind: fit, activity_ref: string, relative_path: string, status: partial|error }],
   errors: StructuredError[]
@@ -88,30 +88,37 @@ AerobicProjectionV1 = {
 }
 ```
 
-## Daily Markdown frontmatter
+## Obsidian daily Hub and Workout Session records
 
-Every `daily/YYYY-MM-DD.md` begins with YAML frontmatter equivalent to:
+Every `daily/YYYY-MM-DD.md` is a date-scoped `daily-hub` record. Its YAML
+frontmatter is equivalent to:
 
 ```yaml
-kind: training-day
+kind: daily-hub
+legacy_kind: training-day
 schema_version: 1
 date: 2026-08-16
+local_date: 2026-08-16
 timezone: Asia/Shanghai
 captured_at: 2026-08-17T09:00:00+08:00
 updated_at: 2026-08-17T09:00:00+08:00
 source_status:
   workout: complete
   coros: complete
-workout:
-  data_as_of: 2026-08-16T23:59:00Z
-  training_version: "..."
-  session_keys: []
-  source_refs: []
-coros:
-  data_as_of: 2026-08-16T23:59:00Z
-  activity_refs: []
-  fit_files: []
+data_as_of:
+  workout: 2026-08-16T23:59:00Z
+  coros: 2026-08-16T23:59:00Z
+relation_policy: same_local_date_context_only
+workout_session_keys: []
+workout_sessions: []
+coros_activity_refs: []
+coros_activities: []
 ```
+
+`workout_session_keys` and `coros_activity_refs` are machine identity fields;
+the two link arrays are navigation projections. The lists are never merged by
+date. A missing source keeps its status and freshness as `none`, `partial`, or
+`error` and does not become a fabricated zero.
 
 The body has stable headings:
 
@@ -124,6 +131,38 @@ The body has stable headings:
 
 Daily analysis is not a required section. Weekly analysis is stored in a
 separate `weekly/YYYY-Www.md` file.
+
+Every Workout Session written by the local stage has one
+`workout/sessions/<session_key>.md` record:
+
+```yaml
+kind: workout-session
+schema_version: 1
+source: workout
+source_id: sess-2026-08-16
+source_ref: "session:2026-08-16:sess-2026-08-16"
+session_key: "sess-2026-08-16"
+local_date: 2026-08-16
+timezone: Asia/Shanghai
+source_status: complete
+data_as_of: 2026-08-16T23:59:00Z
+updated_at: 2026-08-17T09:00:00Z
+title: "下肢力量"
+status: completed
+completion_fraction: 1
+training_duration_sec: 3600
+session_rpe: 7
+daily_hub: "[[daily/2026-08-16]]"
+```
+
+`workout/index.md` is a derived table/Base view over `kind =
+"workout-session"` Properties. It may sort and filter by date, status, title,
+duration, source status, and links, but does not contain independently editable
+facts.
+
+The record graph deliberately has no COROS field on a Workout Session and no
+Workout field on a COROS Activity Archive. `relation_policy:
+same_local_date_context_only` is the explicit contract for same-date coexistence.
 
 ## COROS activity archive
 

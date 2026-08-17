@@ -65,11 +65,12 @@ class Root extends Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
 }
 
-async function openBrowser(handler) {
+async function openBrowser(handler, requests = []) {
   const root = new Root();
   const document = { hidden: false, handlers: new Map(), querySelector: (selector) => selector === "#app" ? root : root.querySelector(selector), querySelectorAll: (selector) => root.querySelectorAll(selector), addEventListener(type, handler) { this.handlers.set(type, [...(this.handlers.get(type) ?? []), handler]); } };
   const server = async (input, options = {}) => {
     const url = new URL(input, "https://workout.example");
+    requests.push(`${url.pathname}${url.search}`);
     const headers = new Headers(options.headers ?? {});
     headers.set("x-athlete-email", "athlete-a@example.invalid");
     return handler.fetch(new Request(url, { ...options, headers }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example" });
@@ -107,10 +108,11 @@ async function seededBrowser({ activities = [], projectionStatus = activities.le
   state.aerobic_activities = activities;
   state.aerobic_projection = { schema_version: 1, source_status: projectionStatus, data_as_of: "2026-08-16T23:59:00.000Z", updated_at: "2026-08-17T08:00:00.000Z", activity_count: activities.length };
   await store.save(state);
-  return openBrowser(handler);
+  const requests = [];
+  return { ...(await openBrowser(handler, requests)), requests };
 }
 
-function indoorActivity() {
+function indoorActivity(overrides = {}) {
   return {
     schema_version: 1,
     activity_ref: "coros-indoor-1",
@@ -128,6 +130,7 @@ function indoorActivity() {
     route_key: null,
     route_direction: null,
     fit_status: "partial",
+    ...overrides,
   };
 }
 
@@ -167,4 +170,34 @@ test("ticket 01 browser seam: empty aerobic projection has an explicit empty sta
   await settle();
   assert.match(browser.root.innerHTML, /还没有有氧记录/);
   assert.match(browser.root.innerHTML, /暂无 COROS aerobic activity/);
+});
+
+test("ticket 03 browser seam: Records opens the source-separated overview", async () => {
+  const browser = await seededBrowser({ activities: [indoorActivity()] });
+  browser.root.querySelector('[data-view="progress"]').click();
+  await settle();
+  assert.match(browser.root.innerHTML, /总览/);
+  assert.match(browser.root.innerHTML, /力量与有氧各自保留来源/);
+  assert.match(browser.root.innerHTML, /Workout source/);
+  assert.match(browser.root.innerHTML, /COROS source/);
+  assert.match(browser.root.innerHTML, /不会因为 local date 相同而被判定为同一训练事件/);
+});
+
+test("ticket 03 browser seam: Calendar shows a compact aerobic summary and links into the date-filtered Records list", async () => {
+  const browser = await seededBrowser({ activities: [indoorActivity({ local_date: "2026-08-17" })] });
+  browser.root.querySelector('[data-view="calendar"]').click();
+  await settle();
+  const day = browser.root.querySelector('[data-action="calendar-select"][data-date="2026-08-17"]');
+  assert.ok(day);
+  day.click();
+  await settle();
+  assert.equal(browser.requests.filter((path) => path.startsWith("/api/private/records/aerobic?")).length, 0);
+  assert.match(browser.root.innerHTML, /有氧摘要/);
+  assert.match(browser.root.innerHTML, /查看有氧记录/);
+  assert.doesNotMatch(browser.root.innerHTML, /coros-indoor-1/);
+  browser.root.querySelector('[data-action="open-aerobic-date"]').click();
+  await settle();
+  assert.equal(browser.requests.filter((path) => path.startsWith("/api/private/records/aerobic?")).length, 1);
+  assert.match(browser.root.innerHTML, /coros-indoor-1/);
+  assert.match(browser.root.innerHTML, /日期：2026-08-17/);
 });
