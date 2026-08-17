@@ -58,6 +58,72 @@ export function createAerobicProjectionPublisher(options = {}) {
   };
 }
 
+/**
+ * Create the Node-side application boundary for the explicit `sync data`
+ * operation. A bare Node fetch does not own a browser cookie jar, so this
+ * adapter either uses a caller-supplied short-lived session cookie or logs in
+ * through the normal application login endpoint using credentials supplied by
+ * the local process environment. Secrets are never returned, persisted, or
+ * included in error messages.
+ *
+ * @param {{ origin?: string, email?: string, password?: string, sessionCookie?: string, fetchImpl?: typeof fetch }} options
+ */
+export function createAuthenticatedAerobicProjectionPublisher(options = {}) {
+  const origin = options.origin;
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (typeof options.sessionCookie === "string" && !normalizeSessionCookie(options.sessionCookie)) throw new Error("An application session cookie is invalid");
+  if (typeof options.sessionCookie !== "string" && !(typeof options.email === "string" && typeof options.password === "string")) {
+    throw new Error("An application session cookie or local login credentials are required");
+  }
+  let sessionCookie = typeof options.sessionCookie === "string" ? normalizeSessionCookie(options.sessionCookie) : null;
+  /** @type {Promise<string>|null} */
+  let loginPromise = null;
+
+  const ensureSessionCookie = async () => {
+    if (sessionCookie) return sessionCookie;
+    if (loginPromise) return loginPromise;
+    loginPromise = (async () => {
+      const endpoint = new URL("/api/auth/login", origin);
+      const response = await fetchImpl(endpoint, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: options.email, password: options.password }),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        const error = Object.assign(new Error(payload?.error?.message ?? `Workout application login failed (${response.status})`), {
+          code: payload?.error?.code ?? `http_${response.status}`,
+          status: response.status,
+          retryable: false,
+        });
+        throw error;
+      }
+      const cookieHeader = response.headers.get("set-cookie") ?? response.headers.get("Set-Cookie");
+      sessionCookie = normalizeSessionCookie(cookieHeader);
+      if (!sessionCookie) throw Object.assign(new Error("Workout application login did not return a session"), { code: "session_cookie_missing", retryable: false });
+      return sessionCookie;
+    })();
+    try { return await loginPromise; } finally { loginPromise = null; }
+  };
+
+  /** @param {RequestInfo|URL} url @param {RequestInit} [init] */
+  const authenticatedFetch = async (url, init = {}) => {
+    const cookie = await ensureSessionCookie();
+    const headers = new Headers(init.headers);
+    headers.set("Cookie", cookie);
+    return fetchImpl(url, { ...init, credentials: "omit", headers });
+  };
+
+  return createAerobicProjectionPublisher({ origin, fetchImpl: authenticatedFetch, credentials: "omit" });
+}
+
+/** @param {unknown} value @returns {string|null} */
+function normalizeSessionCookie(value) {
+  if (typeof value !== "string") return null;
+  const cookie = value.split(",")[0].split(";")[0].trim();
+  return /^workout_session=[^;\s]+$/.test(cookie) ? cookie : null;
+}
+
 /** @param {any} payload @param {any} projection */
 function isValidPublicationResponse(payload, projection) {
   return Boolean(payload)

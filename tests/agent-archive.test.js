@@ -62,12 +62,24 @@ test("private Agent manifest and schema catalog advertise the archive read surfa
   assert.ok(catalog.body.schemas.some((schema) => schema.name === "aerobic_activity_index"));
   const schema = await agentRequest(handler, token, "/api/agent/v1/schemas/route_history");
   assert.equal(schema.response.status, 200);
-  assert.deepEqual(schema.body.required, ["schema_version", "generated_at", "data_as_of", "source_status", "source_ref"]);
+  assert.equal(schema.body.additionalProperties, false);
+  assert.ok(schema.body.required.includes("source_statuses"));
+  assert.ok(schema.body.required.includes("route_key"));
+  assert.ok(schema.body.required.includes("history"));
+  assert.equal(schema.body.properties.history.items.properties.route_direction.anyOf[0].enum.includes("reverse"), true);
+  const activitySchema = await agentRequest(handler, token, "/api/agent/v1/schemas/aerobic_activity_index");
+  assert.equal(activitySchema.response.status, 200);
+  assert.equal(activitySchema.body.additionalProperties, false);
+  assert.ok(activitySchema.body.properties.items.items.required.includes("activity_ref"));
+  assert.ok(activitySchema.body.properties.items.items.required.includes("route_key"));
+  assert.equal(activitySchema.body.properties.items.items.properties.summary.required.includes("sport_metrics"), true);
   const dailySchema = await agentRequest(handler, token, "/api/agent/v1/schemas/daily_context");
   assert.equal(dailySchema.response.status, 200);
   assert.ok(dailySchema.body.required.includes("sync_evidence"));
   assert.deepEqual(dailySchema.body.properties.source_status.required, ["workout", "coros"]);
   assert.deepEqual(dailySchema.body.properties.data_as_of.anyOf.map((item) => item.type), ["string", "null"]);
+  assert.ok(dailySchema.body.properties.context.required.includes("machine_refs"));
+  assert.ok(dailySchema.body.properties.context.properties.machine_refs.required.includes("activity_refs"));
 });
 
 test("Agent aerobic activities are bounded, cursor-bound, and projection-safe", async () => {
@@ -218,4 +230,45 @@ test("Agent archive read resources remain read-only and explicit", async () => {
   assert.equal(missing.response.status, 404);
   assert.equal(missing.body.error.code, "not_found");
   assert.equal(typeof testAgentSecret, "string");
+});
+
+test("same-date none publication replaces the stale date slice without touching other dates", async () => {
+  const { handler, store } = appFixture();
+  await seedArchive(store);
+  const state = await store.getByEmail("athlete-a@example.invalid");
+  publishAerobicProjection(state, {
+    target_date: "2026-08-12",
+    source_status: "complete",
+    source_statuses: { workout: "none", coros: "complete" },
+    data_as_of: "2026-08-12T23:59:00.000Z",
+    activities: [activity({
+      activity_ref: "stale-date-activity",
+      source_ref: "coros:activity:stale-date-activity",
+      local_date: "2026-08-12",
+      started_at: "2026-08-12T01:00:00.000Z",
+      ended_at: "2026-08-12T02:00:00.000Z",
+      route_key: null,
+      route_direction: null,
+      route_match_status: "unmatched",
+    })],
+    routes: [],
+  }, now);
+  publishAerobicProjection(state, {
+    target_date: "2026-08-12",
+    source_status: "none",
+    source_statuses: { workout: "none", coros: "none" },
+    data_as_of: null,
+    activities: [],
+    routes: [],
+  }, new Date("2026-08-17T09:00:00.000Z"));
+  await store.save(state);
+  const token = await createAgentToken(handler);
+  const empty = await agentRequest(handler, token, "/api/agent/v1/daily/2026-08-12");
+  assert.equal(empty.response.status, 200);
+  assert.deepEqual(empty.body.context.machine_refs.activity_refs, []);
+  assert.deepEqual(empty.body.source_statuses, { workout: "none", coros: "none" });
+  const existing = await agentRequest(handler, token, "/api/agent/v1/daily/2026-08-15");
+  assert.equal(existing.response.status, 200);
+  assert.equal(existing.body.context.machine_refs.activity_refs.includes("coros-agent-1"), true);
+  assert.equal(existing.body.context.machine_refs.activity_refs.includes("stale-date-activity"), false);
 });

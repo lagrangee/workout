@@ -101,6 +101,15 @@ route. The response is a safe publication receipt with the target date,
 source statuses, published count, and aggregate read-model counts. It is a
 cloud stage inside `sync data`, not a second user-facing publish operation.
 
+The local Node runner may obtain the same application session through the
+normal `/api/auth/login` endpoint using process-local
+`WORKOUT_APPLICATION_ORIGIN`, `WORKOUT_SYNC_EMAIL`, and
+`WORKOUT_SYNC_PASSWORD`, or a short-lived `WORKOUT_SYNC_SESSION_COOKIE`.
+Those values are transport inputs only: they are never persisted in the
+Training Archive receipt or sent to COROS/D1 as source data. If no
+authenticated boundary is available, the receipt must remain
+local-success/cloud-error.
+
 ```text
 SafeRouteProjection = {
   schema_version: 1,

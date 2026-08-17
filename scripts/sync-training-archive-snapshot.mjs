@@ -9,7 +9,7 @@ import { buildRegistrationProposal } from "../skills/workout/scripts/route-match
 import { normalizeRouteRecord, readRouteRegistry, writeRouteRegistry } from "../src/route-registry.js";
 import { aerobicDetailModel, aerobicListModel, publishAerobicProjection } from "../src/training-archive.js";
 import { compactAerobicSummary } from "../src/training-records.js";
-import { createAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
+import { createAerobicProjectionPublisher, createAuthenticatedAerobicProjectionPublisher } from "../src/training-archive-cloud-publisher.js";
 import { syncTrainingArchive } from "../src/training-archive-sync.js";
 import { emptyAthlete } from "../src/store.js";
 import { routeDetailModel, routeHistoryModel, routeListModel } from "../src/training-routes.js";
@@ -18,8 +18,10 @@ import { routeDetailModel, routeHistoryModel, routeListModel } from "../src/trai
  * Execute the archive orchestrator from one already-collected source snapshot.
  * The caller is responsible for collecting that snapshot through the live
  * Workout/COROS read boundaries. This runner always performs local page
- * readback, but it reports cloud publication as an error unless an actual
- * authenticated application publisher is supplied.
+ * readback. For cloud publication it uses an injected publisher, a
+ * process-local session cookie, or the normal application login credentials
+ * supplied through WORKOUT_* environment variables; without one it reports a
+ * cloud error rather than treating local readback as D1 success.
  */
 export async function runSnapshot(payload) {
   if (!payload || typeof payload !== "object") throw new Error("A source snapshot object is required");
@@ -35,10 +37,18 @@ export async function runSnapshot(payload) {
   await seedConfirmedRoute(payload);
 
   const state = emptyAthlete({ email: "snapshot-sync@example.invalid", displayName: "Snapshot sync", timezone });
+  const applicationOrigin = payload.applicationOrigin ?? process.env.WORKOUT_APPLICATION_ORIGIN;
+  const sessionCookie = payload.applicationSessionCookie ?? process.env.WORKOUT_SYNC_SESSION_COOKIE;
+  const applicationEmail = payload.applicationEmail ?? process.env.WORKOUT_SYNC_EMAIL;
+  const applicationPassword = payload.applicationPassword ?? process.env.WORKOUT_SYNC_PASSWORD;
   const applicationPublisher = typeof payload.publish === "function"
     ? payload.publish
-    : (typeof payload.applicationOrigin === "string" && payload.applicationOrigin.trim()
-      ? createAerobicProjectionPublisher({ origin: payload.applicationOrigin, fetchImpl: payload.fetchImpl })
+    : (typeof applicationOrigin === "string" && applicationOrigin.trim()
+      ? (typeof sessionCookie === "string" && sessionCookie.trim()
+        ? createAuthenticatedAerobicProjectionPublisher({ origin: applicationOrigin, sessionCookie, fetchImpl: payload.fetchImpl })
+        : (typeof applicationEmail === "string" && typeof applicationPassword === "string"
+          ? createAuthenticatedAerobicProjectionPublisher({ origin: applicationOrigin, email: applicationEmail, password: applicationPassword, fetchImpl: payload.fetchImpl })
+          : createAerobicProjectionPublisher({ origin: applicationOrigin, fetchImpl: payload.fetchImpl })))
       : null);
   const run = (targetDate) => syncTrainingArchive({
     archiveDir,
