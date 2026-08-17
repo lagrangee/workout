@@ -102,10 +102,11 @@ async function settle() {
   for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
-async function seededBrowser({ activities = [], projectionStatus = activities.length ? "complete" : "none" } = {}) {
+async function seededBrowser({ activities = [], routes = [], projectionStatus = activities.length ? "complete" : "none" } = {}) {
   const { handler, store } = appFixture();
   const state = await store.getByEmail("athlete-a@example.invalid");
   state.aerobic_activities = activities;
+  state.routes = routes;
   state.aerobic_projection = { schema_version: 1, source_status: projectionStatus, data_as_of: "2026-08-16T23:59:00.000Z", updated_at: "2026-08-17T08:00:00.000Z", activity_count: activities.length };
   await store.save(state);
   const requests = [];
@@ -130,6 +131,29 @@ function indoorActivity(overrides = {}) {
     route_key: null,
     route_direction: null,
     fit_status: "partial",
+    ...overrides,
+  };
+}
+
+function outdoorActivity(overrides = {}) {
+  return {
+    schema_version: 1,
+    activity_ref: "coros-outdoor-1",
+    source_ref: "coros:activity:coros-outdoor-1",
+    local_date: "2026-08-15",
+    timezone: "Asia/Shanghai",
+    started_at: "2026-08-15T01:00:00.000Z",
+    ended_at: "2026-08-15T03:00:00.000Z",
+    sport_type: 100,
+    sport_name: "run",
+    source_status: "complete",
+    data_as_of: "2026-08-16T23:59:00.000Z",
+    updated_at: "2026-08-17T08:00:00.000Z",
+    summary: { duration_sec: 7200, distance_km: 12.23, average_heart_rate_bpm: 142, calories_kcal: 820, sport_metrics: {} },
+    route_key: "city-loop",
+    route_direction: "reverse",
+    route_match_status: "matched",
+    fit_status: "complete",
     ...overrides,
   };
 }
@@ -170,6 +194,50 @@ test("ticket 01 browser seam: empty aerobic projection has an explicit empty sta
   await settle();
   assert.match(browser.root.innerHTML, /还没有有氧记录/);
   assert.match(browser.root.innerHTML, /暂无 COROS aerobic activity/);
+});
+
+test("ticket 04 browser seam: route browser keeps activity context and shows history", async () => {
+  const browser = await seededBrowser({
+    activities: [outdoorActivity()],
+    routes: [{ schema_version: 1, route_key: "city-loop", route_name: "城市环线", sport_types: [100], distance_range_km: [10, 13] }],
+  });
+  browser.root.querySelector('[data-view="progress"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="records-tab"][data-tab="aerobic"]').click();
+  await settle();
+  assert.match(browser.root.innerHTML, /路线/);
+  assert.match(browser.root.innerHTML, /路线 city-loop/);
+
+  browser.root.querySelector('[data-action="routes-open"]').click();
+  await settle();
+  assert.ok(browser.requests.some((path) => path === "/api/private/records/routes?limit=200"));
+  assert.match(browser.root.innerHTML, /城市环线/);
+  assert.match(browser.root.innerHTML, /route-sidebar/);
+  assert.match(browser.root.innerHTML, /route-mobile-page/);
+
+  browser.root.querySelector('[data-action="route-detail"][data-route-key="city-loop"]').click();
+  await settle();
+  assert.ok(browser.requests.some((path) => path === "/api/private/records/routes/city-loop?limit=200"));
+  assert.match(browser.root.innerHTML, /路线历史/);
+  assert.match(browser.root.innerHTML, /累计距离/);
+  assert.match(browser.root.innerHTML, /2026-08-15/);
+
+  browser.root.querySelector('[data-action="route-detail-back"]').click();
+  await settle();
+  assert.match(browser.root.innerHTML, /城市环线/);
+  browser.root.querySelector('[data-action="routes-close"]').click();
+  await settle();
+  assert.match(browser.root.innerHTML, /coros-outdoor-1/);
+
+  browser.root.querySelector('[data-action="aerobic-detail"]').click();
+  await settle();
+  assert.match(browser.root.innerHTML, /查看路线历史/);
+  browser.root.querySelector('[data-action="route-detail"][data-route-key="city-loop"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="route-detail-back"]').click();
+  await settle();
+  assert.match(browser.root.innerHTML, /活动详情/);
+  assert.doesNotMatch(browser.root.innerHTML, /城市环线.*历史活动/);
 });
 
 test("ticket 03 browser seam: Records opens the source-separated overview", async () => {

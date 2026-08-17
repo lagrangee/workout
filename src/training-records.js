@@ -3,6 +3,7 @@
 import { addDays, dateRange, dateSpan, isValidLocalDate, localDate } from "./util.js";
 import { scheduleEntry } from "./plan.js";
 import { SOURCE_STATUSES, containsSensitiveText, normalizeTimezone, safeAerobicActivity } from "./training-archive.js";
+import { routeLink } from "./route-registry.js";
 
 export const RECORD_SCHEMA_VERSION = 1;
 export const DAILY_HUB_KIND = "daily-hub";
@@ -206,10 +207,12 @@ export function dailyHubModel(input) {
     machine_refs: {
       workout_session_keys: sessions.map((record) => record.session_key),
       activity_refs: activities.map((activity) => activity.activity_ref),
+      route_keys: [...new Set(activities.map((activity) => activity.route_key).filter(Boolean))],
     },
     links: {
       workout_sessions: sessions.map((record) => `[[workout/sessions/${record.session_key}]]`),
       coros_activities: aerobicLinks,
+      routes: [...new Set(activities.map((activity) => routeLink(activity.route_key)).filter(Boolean))],
     },
     summary: {
       workout: {
@@ -236,6 +239,7 @@ export function dailyHubModel(input) {
       data_as_of_coros: instantOrNull(coros.data_as_of),
       workout_sessions: sessions.map((record) => `[[workout/sessions/${record.session_key}]]`),
       coros_activities: aerobicLinks,
+      routes: [...new Set(activities.map((activity) => routeLink(activity.route_key)).filter(Boolean))],
       relation_policy: "same_local_date_context_only",
     },
   };
@@ -314,6 +318,8 @@ export function dailyHubNote(hub) {
   const aerobicLinks = hub.links.coros_activities;
   const workoutKeys = hub.machine_refs.workout_session_keys;
   const activityRefs = hub.machine_refs.activity_refs;
+  const routeKeys = hub.machine_refs.route_keys ?? [];
+  const routeLinks = hub.links.routes ?? [];
   const distance = hub.summary.coros.distance_km;
   const duration = hub.summary.coros.duration_sec;
   return [
@@ -341,6 +347,10 @@ export function dailyHubNote(hub) {
     listYaml(activityRefs),
     "coros_activities:",
     listYaml(aerobicLinks),
+    "route_keys:",
+    listYaml(routeKeys),
+    "routes:",
+    listYaml(routeLinks),
     "---",
     "",
     "## 无氧训练",
@@ -348,6 +358,9 @@ export function dailyHubNote(hub) {
     "",
     "## 有氧训练",
     aerobicLinks.length ? aerobicLinks.map((link, index) => `- COROS Activity：${activityRefs[index]}`).join("\n") : "- 暂无 COROS aerobic activity。",
+    "",
+    "## 路线",
+    routeLinks.length ? routeLinks.map((link, index) => `- Route：${routeKeys[index] ?? link}`).join("\n") : "- 暂无已确认路线。",
     "",
     "## 当日汇总",
     `- Workout Session：${hub.summary.workout.session_count} 次 · ${hub.summary.workout.duration_sec == null ? "—" : `${hub.summary.workout.duration_sec} 秒`}`,

@@ -154,6 +154,9 @@ export function normalizeCorosActivity(raw, context) {
   if (!localDate || !isValidLocalDate(localDate)) throw new Error(`COROS activity ${activityRef} needs an Athlete-local date`);
   const routeKey = sportType === 101 ? null : redactedStringOrNull(raw.route_key ?? raw.routeKey);
   const routeDirection = routeKey && ["forward", "reverse"].includes(raw.route_direction ?? raw.routeDirection) ? (raw.route_direction ?? raw.routeDirection) : null;
+  const routeMatchStatus = ["matched", "registered", "unmatched", "ambiguous", "ignored", "error"].includes(raw.route_match_status ?? raw.routeMatchStatus)
+    ? (raw.route_match_status ?? raw.routeMatchStatus)
+    : (sportType === 101 ? "ignored" : (routeKey ? "matched" : "unmatched"));
   const fitFile = normalizeFitArtifact(raw.fit_file ?? raw.fitFile ?? { fit_status: raw.fit_status }, activityRef);
   const status = sourceStatus(raw.source_status ?? raw.sourceStatus ?? context.sourceStatus);
   const dataAsOf = instantOrNull(raw.data_as_of ?? raw.dataAsOf) ?? instantOrNull(context.dataAsOf) ?? null;
@@ -172,6 +175,7 @@ export function normalizeCorosActivity(raw, context) {
     ended_at: endedAt,
     route_key: routeKey,
     route_direction: routeDirection,
+    route_match_status: routeMatchStatus,
     fit_file: fitFile,
     source_status: status,
     data_as_of: dataAsOf,
@@ -205,6 +209,7 @@ export function safeAerobicActivity(activity) {
     summary: normalized.summary,
     route_key: normalized.route_key,
     route_direction: normalized.route_direction,
+    route_match_status: normalized.route_match_status,
     fit_status: normalized.fit_file?.status ?? null,
   };
 }
@@ -219,6 +224,17 @@ export function publishAerobicProjection(state, projection, now = new Date()) {
   }
   const safeActivities = projection.activities.map(safeAerobicActivity);
   for (const safe of safeActivities) existing.set(safe.source_ref, safe);
+  const existingRoutes = new Map((state.routes ?? []).flatMap((route) => typeof route?.route_key === "string" ? [[route.route_key, route]] : []));
+  for (const route of projection.routes ?? []) {
+    if (typeof route?.route_key === "string" && route.route_key.trim()) existingRoutes.set(route.route_key, {
+      schema_version: 1,
+      route_key: route.route_key,
+      route_name: typeof route.route_name === "string" && route.route_name.trim() ? route.route_name.trim() : route.route_key,
+      sport_types: Array.isArray(route.sport_types) ? route.sport_types : [],
+      distance_range_km: Array.isArray(route.distance_range_km) ? route.distance_range_km : null,
+    });
+  }
+  state.routes = [...existingRoutes.values()].sort((left, right) => left.route_key.localeCompare(right.route_key));
   const sourceStatuses = projectionSourceStatuses(projection, safeActivities);
   const aggregateStatus = aggregateSourceStatus([sourceStatuses.workout, sourceStatuses.coros]);
   state.aerobic_activities = [...existing.values()].sort(compareActivities);
@@ -230,6 +246,7 @@ export function publishAerobicProjection(state, projection, now = new Date()) {
     updated_at: now.toISOString(),
     activity_count: state.aerobic_activities.length,
     publication_key: redactedStringOrNull(projection.publication_key),
+    route_count: state.routes.length,
   };
   return {
     status: aggregateStatus,

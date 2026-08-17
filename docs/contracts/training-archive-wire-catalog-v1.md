@@ -181,6 +181,7 @@ CorosActivityArchiveV1 = {
   ended_at: Instant|null,
   route_key: string|null,
   route_direction: forward|reverse|null,
+  route_match_status: matched|registered|unmatched|ambiguous|ignored|error,
   fit_file: FitArtifact|null,
   summary: ActivitySummary,
   provider_shape: ProviderLapShape,
@@ -192,6 +193,12 @@ CorosActivityArchiveV1 = {
 route key. `route_direction` is only meaningful when `route_key` is present;
 it records whether the activity matched the configured forward or reverse
 start of that route.
+
+`route_match_status` is a derived assignment result. `matched` is a unique
+configured match, `registered` is an explicitly confirmed new route,
+`unmatched` has no safe assignment, `ambiguous` has multiple candidates,
+`ignored` is indoor activity, and `error` means assignment failed. Only
+`matched` and `registered` may carry a `route_key`.
 
 ```text
 FitArtifact = {
@@ -381,6 +388,46 @@ proposal. The first observed endpoint plus the point around 200 m later form
 `forward`; the last endpoint plus the point around 200 m before the finish
 form `reverse`. The initial distance range uses a 10% tolerance.
 `ambiguous` results have no registration proposal.
+
+## Private route read model
+
+The private route views are safe projections for the Workout page and a
+private Agent API. They are Athlete-scoped and exclude GPS, direction
+signatures, raw FIT, FIT paths, and high-frequency telemetry:
+
+```text
+RouteIndexItem = {
+  route_key: string,
+  route_name: string,
+  sport_types: integer[],
+  distance_range_km: [number, number]|null,
+  activity_count: integer,
+  total_distance_km: number|null,
+  total_duration_sec: number|null,
+  latest_activity: SafeRouteHistoryRow|null
+}
+
+SafeRouteHistoryRow = {
+  activity_ref: string,
+  source_ref: string,
+  local_date: LocalDate,
+  timezone: string,
+  started_at: Instant|null,
+  ended_at: Instant|null,
+  sport_type: SportType,
+  sport_name: string,
+  route_key: string,
+  route_direction: forward|reverse|null,
+  source_status: SourceStatus,
+  sync_status: SourceStatus,
+  data_as_of: Instant|null,
+  summary: ActivitySummary
+}
+```
+
+Route detail adds `history: SafeRouteHistoryRow[]` with bounded `from`, `to`,
+and `limit` filters. The route index and detail include `data_as_of`,
+`source_status`, and a stable `source_ref` for provenance.
 
 Its route registry is `config/routes.json` and its implementation is
 [`route-matcher.mjs`](../../skills/workout/scripts/route-matcher.mjs). The
