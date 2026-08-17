@@ -84,7 +84,28 @@ AerobicProjectionV1 = {
   source_statuses: { workout: SourceStatus, coros: SourceStatus },
   source_data_as_of: { workout: Instant|null, coros: Instant|null },
   data_as_of: Instant|null,
-  activities: SafeAerobicActivity[]
+  activities: SafeAerobicActivity[],
+  routes: SafeRouteProjection[]
+}
+```
+
+The authenticated cloud publication boundary accepts only
+`{ projection: AerobicProjectionV1 }` at
+`POST /api/private/records/aerobic/sync`. It requires the existing private
+Athlete session and `Idempotency-Key`; it rejects unknown fields, provider
+payloads, raw FIT/GPS/coordinate fields, unsupported sport types, invalid
+Athlete-local dates, and route assignments that do not reference a projected
+route. The response is a safe publication receipt with the target date,
+source statuses, published count, and aggregate read-model counts. It is a
+cloud stage inside `sync data`, not a second user-facing publish operation.
+
+```text
+SafeRouteProjection = {
+  schema_version: 1,
+  route_key: string,
+  route_name: string,
+  sport_types: SportType[],
+  distance_range_km: [number, number]|null
 }
 ```
 
