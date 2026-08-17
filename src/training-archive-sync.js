@@ -10,6 +10,18 @@ import { createAerobicProjectionPublisher } from "./training-archive-cloud-publi
 
 const MAX_PUBLICATION_ATTEMPTS = 3;
 const SYNC_RECEIPT_DIR = [".sync", "training-archive"];
+const PRIVACY_OMISSIONS = Object.freeze([
+  "fit_file",
+  "fit_path",
+  "fit_bytes",
+  "raw_fit",
+  "gps",
+  "telemetry",
+  "sensor_streams",
+  "absolute_vault_path",
+  "credentials",
+  "agent_token",
+]);
 
 /**
  * Run the two-stage Training Archive sync. Source adapters and the safe cloud
@@ -113,6 +125,7 @@ export async function syncTrainingArchive(options = {}) {
     pendingArtifacts: prepared.pendingArtifacts,
     routeAssignments: prepared.routeAssignments,
     routeRegistryPath: "config/routes.json",
+    privacyEvidence: projectionPrivacyEvidence(projection, now),
     projection,
   });
   await persistReceipt(options.archiveDir, receipt, projection);
@@ -457,7 +470,7 @@ function publicationAttempts(options) {
   return Math.min(MAX_PUBLICATION_ATTEMPTS, Math.max(1, Math.floor(number)));
 }
 
-function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], routeAssignments = {}, routeRegistryPath, projection }) {
+function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], routeAssignments = {}, routeRegistryPath, privacyEvidence, projection }) {
   return {
     schema_version: 1,
     sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
@@ -482,6 +495,7 @@ function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, 
     pending_artifacts: pendingArtifacts,
     route_assignments: routeAssignments,
     route_registry_path: routeRegistryPath ?? "config/routes.json",
+    privacy_evidence: privacyEvidence ?? projectionPrivacyEvidence(projection, now),
     ignored_sport_types: ignoredSportTypes,
     errors,
     receipt_path: receiptRelativePath(targetDate),
@@ -548,6 +562,7 @@ async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezo
     cloud_publication: cloudPublication,
     records_written: { daily_hubs: 0, workout_sessions: 0, activities: 0 },
     records_published: { activities: cloudPublication.published_count ?? 0 },
+    privacy_evidence: projection ? projectionPrivacyEvidence(projection, now) : (priorReceipt.privacy_evidence ?? null),
     ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
     pending_artifacts: remainingArtifacts,
     errors: [...priorErrors, ...retryErrors, ...(cloudPublication.errors ?? [])],
@@ -615,6 +630,7 @@ async function retryPendingPublication({ options, priorReceipt, targetDate, time
     cloud_publication: { ...cloudPublication, retried: true },
     records_written: { daily_hubs: 0, workout_sessions: 0, activities: 0 },
     records_published: { activities: cloudPublication.published_count },
+    privacy_evidence: projectionPrivacyEvidence(projection, now),
     ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
     errors: cloudPublication.errors ?? [],
     receipt_path: receiptRelativePath(targetDate),
@@ -676,6 +692,28 @@ function safePendingProjection(value) {
     data_as_of: safeInstant(value.data_as_of),
     activities: value.activities.map(safeAerobicActivity),
     routes: Array.isArray(value.routes) ? value.routes.map((route) => safeRouteProjection(route)) : [],
+  };
+}
+
+function projectionPrivacyEvidence(projection, now) {
+  const serialized = JSON.stringify(projection);
+  const patterns = [
+    ["fit_file", /fit[_-]file/i],
+    ["fit_path", /fit[_-]path|\.fit\b/i],
+    ["fit_bytes", /fit[_-]bytes/i],
+    ["raw_fit", /raw[_-]?fit/i],
+    ["gps", /gps|coordinate|latitude|longitude|polyline|geometry/i],
+    ["telemetry", /telemetry|sensor/i],
+    ["absolute_vault_path", /(?:\/Users\/|\/private\/|\/var\/|[A-Za-z]:\\)/i],
+    ["credentials", /credential|password|secret|bearer|token/i],
+  ];
+  const violations = patterns.filter(([, pattern]) => pattern.test(serialized)).map(([name]) => name);
+  return {
+    status: violations.length ? "failed" : "passed",
+    checked_at: now.toISOString(),
+    scope: "safe_cloud_projection",
+    omitted_fields: [...PRIVACY_OMISSIONS],
+    violations,
   };
 }
 

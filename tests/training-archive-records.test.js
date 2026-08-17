@@ -90,6 +90,8 @@ test("ticket 01 sync defaults to the previous Athlete-local date and writes a li
     assert.equal(receipt.source_status.coros, "complete");
     assert.equal(receipt.local_archive.status, "complete");
     assert.equal(receipt.cloud_publication.status, "complete");
+    assert.equal(receipt.privacy_evidence.status, "passed");
+    assert.deepEqual(receipt.privacy_evidence.violations, []);
     assert.equal(receipt.records_written.activities, 1);
     assert.equal(published[0].activities[0].activity_ref, "coros-activity-1");
     assert.equal(published[0].activities[0].route_key, null);
