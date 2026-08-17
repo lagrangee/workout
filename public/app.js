@@ -74,7 +74,7 @@ function createBrowserAudio() {
 
 const actionAudio = workoutTestSeams.audio || createBrowserAudio();
 const blankTimedAction = () => ({ itemKey: null, phase: "idle", targetSec: null, deadlineMs: null, remainingMs: null, remainingSec: null, lastCueSecond: null });
-const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
+const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, recordsTab: "overview", aerobic: { list: null, detail: null, loading: false, detailLoading: false, error: null, month: "all", sportType: "all" }, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
 
 const app = document.querySelector("#app");
 async function api(path, options = {}) {
@@ -303,16 +303,44 @@ async function loadProgress(range) {
   render();
 }
 
+async function loadAerobicActivities() {
+  state.aerobic.loading = true;
+  state.aerobic.error = null;
+  render();
+  try {
+    state.aerobic.list = await api("/api/private/records/aerobic?limit=200");
+    state.aerobic.error = null;
+  } catch (error) {
+    state.aerobic.error = error.data?.error?.message || error.message;
+  }
+  state.aerobic.loading = false;
+  render();
+}
+
+async function openAerobicDetail(activityRef) {
+  state.aerobic.detailLoading = true;
+  state.aerobic.detail = null;
+  state.aerobic.error = null;
+  render();
+  try {
+    state.aerobic.detail = await api(`/api/private/records/aerobic/${encodeURIComponent(activityRef)}`);
+  } catch (error) {
+    state.aerobic.error = error.data?.error?.message || error.message;
+  }
+  state.aerobic.detailLoading = false;
+  render();
+}
+
 function shell(content) {
   const focused = state.view === "today" && state.sessionDetail?.status === "in_progress";
-  return `<div class="shell ${focused ? "session-shell" : ""}"><main>${content}</main>${state.message ? `<div class="notice" role="status">${escapeHtml(state.message)}</div>` : ""}${focused ? "" : `<nav class="bottom-nav" aria-label="主导航">${[["today", "今日"], ["calendar", "日历"], ["progress", "进展"], ["settings", "设置"]].map(([id, label]) => `<button class="nav-link ${state.view === id ? "active" : ""}" data-view="${id}">${label}</button>`).join("")}</nav>`}</div>`;
+  return `<div class="shell ${focused ? "session-shell" : ""}"><main>${content}</main>${state.message ? `<div class="notice" role="status">${escapeHtml(state.message)}</div>` : ""}${focused ? "" : `<nav class="bottom-nav" aria-label="主导航">${[["today", "今日"], ["calendar", "日历"], ["progress", "记录"], ["settings", "设置"]].map(([id, label]) => `<button class="nav-link ${state.view === id ? "active" : ""}" data-view="${id}">${label}</button>`).join("")}</nav>`}</div>`;
 }
 
 function render() {
   if (state.authRequired) { app.innerHTML = loginView(); bind(); syncSessionClock(); syncWakeLock(); return; }
   if (state.loading) { stopSessionClock(); app.innerHTML = shell(`<section class="loading"><span class="spinner"></span><p>正在读取你的训练状态…</p></section>`); syncWakeLock(); return; }
   if (state.error) { app.innerHTML = shell(`<section class="error-card"><p>${escapeHtml(state.error)}</p><button class="primary" data-action="refresh">重新读取</button></section>`); bind(); syncSessionClock(); syncWakeLock(); return; }
-  const content = state.view === "today" ? todayView() : state.view === "calendar" ? calendarView() : state.view === "progress" ? progressView() : settingsView();
+  const content = state.view === "today" ? todayView() : state.view === "calendar" ? calendarView() : state.view === "progress" ? recordsView() : settingsView();
   app.innerHTML = shell(content); bind(); syncSessionClock(); syncWakeLock();
 }
 
@@ -707,6 +735,60 @@ function progressView() { if (state.exercise) return exerciseView(); const metri
 
 function exerciseView() { return `<section class="page-head"><button class="text-button" data-action="close-exercise">← 返回进展</button><p class="eyebrow">动作记录</p><h1>${escapeHtml(state.exercise.exercise_key)}</h1><p class="muted">${state.exercise.performed_session_count} 次有实际完成结果的训练</p></section><section class="list-card">${state.exercise.observations.length ? state.exercise.observations.map((observation) => `<article class="week-row"><div><strong>${observation.scheduled_date}</strong><p>${observation.sets.map((set) => `${escapeHtml(set.side)} · ${set.actual.value} ${set.actual.metric}`).join("，")}</p></div></article>`).join("") : `<p class="muted">这个动作目前没有可展示的完成记录。</p>`}</section>`; }
 
+function recordsTabs(active) {
+  return `<div class="records-tabs" role="tablist" aria-label="训练记录类型">${[["overview", "总览"], ["strength", "力量"], ["aerobic", "有氧"]].map(([tab, label]) => `<button class="records-tab ${active === tab ? "is-selected" : ""}" data-action="records-tab" data-tab="${tab}" role="tab" aria-selected="${active === tab}">${label}</button>`).join("")}</div>`;
+}
+
+function recordsView() {
+  if (state.exercise) return exerciseView();
+  if (state.recordsTab === "aerobic") return aerobicView();
+  return `${recordsTabs(state.recordsTab)}${progressView()}`;
+}
+
+const aerobicSportLabels = { 100: "户外跑", 101: "室内运动", 102: "越野跑", 104: "徒步", 200: "骑行" };
+const aerobicStatusLabels = { complete: "数据完整", partial: "部分数据", error: "读取失败", none: "暂无数据" };
+
+function aerobicStatusLabel(status) { return aerobicStatusLabels[status] || "状态未知"; }
+function aerobicSportLabel(sportType, sportName) { return aerobicSportLabels[sportType] || sportName || "有氧运动"; }
+function aerobicDuration(seconds) { if (seconds == null) return "—"; const minutes = Math.round(Number(seconds) / 60); return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`; }
+function aerobicMonthOptions(items) {
+  const months = [...new Set(items.map((item) => item.local_date?.slice(0, 7)).filter(Boolean))].sort().reverse();
+  return ["<option value=\"all\">全部月份</option>", ...months.map((month) => `<option value="${month}" ${state.aerobic.month === month ? "selected" : ""}>${month}</option>`)].join("");
+}
+function aerobicSportOptions(items) {
+  const sports = [...new Set(items.map((item) => String(item.sport_type)).filter(Boolean))].sort((left, right) => Number(left) - Number(right));
+  return ["<option value=\"all\">全部运动</option>", ...sports.map((sportType) => `<option value="${sportType}" ${state.aerobic.sportType === sportType ? "selected" : ""}>${aerobicSportLabel(Number(sportType))}</option>`)].join("");
+}
+
+function filteredAerobicItems() {
+  const items = state.aerobic.list?.items || [];
+  return items.filter((item) => (state.aerobic.month === "all" || item.local_date?.startsWith(state.aerobic.month)) && (state.aerobic.sportType === "all" || String(item.sport_type) === state.aerobic.sportType));
+}
+
+function aerobicActivityCard(activity) {
+  const summary = activity.summary || {};
+  const partial = activity.source_status === "partial";
+  const indoor = activity.sport_type === 101;
+  return `<button class="aerobic-activity-card" data-action="aerobic-detail" data-activity-ref="${escapeHtml(activity.activity_ref)}"><span class="aerobic-activity-main"><strong>${escapeHtml(activity.local_date || "未知日期")} · ${escapeHtml(aerobicSportLabel(activity.sport_type, activity.sport_name))}</strong><span>${summary.distance_km == null ? "—" : `${summary.distance_km} km`} · ${aerobicDuration(summary.duration_sec)}</span><small>${escapeHtml(activity.activity_ref)} · ${partial ? "部分数据" : aerobicStatusLabel(activity.source_status)}${indoor ? " · 无路线" : ""}</small></span><span class="aerobic-activity-arrow">›</span></button>`;
+}
+
+function aerobicDetailView(detail) {
+  const summary = detail.summary || {};
+  const indoor = detail.sport_type === 101;
+  return `<section class="page-head"><button class="text-button" data-action="aerobic-back">← 返回有氧记录</button><p class="eyebrow">RECORDS · AEROBIC</p><h1>活动详情</h1><p class="muted">${escapeHtml(detail.local_date || "未知日期")} · ${escapeHtml(aerobicSportLabel(detail.sport_type, detail.sport_name))}</p></section><section class="aerobic-detail-card"><div class="aerobic-detail-status"><span class="status-pill ${escapeHtml(detail.source_status || "none")}">${escapeHtml(aerobicStatusLabel(detail.source_status))}</span><span>${indoor ? "室内运动 · 无路线" : "路线未接入本 ticket"}</span></div><div class="metric-grid aerobic-metrics"><article><span>距离</span><strong>${summary.distance_km == null ? "—" : `${summary.distance_km} km`}</strong></article><article><span>用时</span><strong>${aerobicDuration(summary.duration_sec)}</strong></article><article><span>平均心率</span><strong>${summary.average_heart_rate_bpm == null ? "—" : `${summary.average_heart_rate_bpm} bpm`}</strong></article><article><span>消耗</span><strong>${summary.calories_kcal == null ? "—" : `${summary.calories_kcal} kcal`}</strong></article></div><dl class="aerobic-source"><div><dt>COROS activity_ref</dt><dd>${escapeHtml(detail.activity_ref)}</dd></div><div><dt>数据时间</dt><dd>${escapeHtml(detail.data_as_of || "—")}</dd></div><div><dt>FIT</dt><dd>${escapeHtml(detail.fit_status || "—")}</dd></div><div><dt>路线</dt><dd>${indoor ? "不适用" : "尚未匹配"}</dd></div></dl></section>`;
+}
+
+function aerobicView() {
+  const list = state.aerobic.list;
+  const items = list?.items || [];
+  if (state.aerobic.detail) return `${recordsTabs("aerobic")}${aerobicDetailView(state.aerobic.detail)}`;
+  const filters = `<div class="aerobic-filters"><label>月份<select data-aerobic-filter="month">${aerobicMonthOptions(items)}</select></label><label>运动<select data-aerobic-filter="sportType">${aerobicSportOptions(items)}</select></label></div>`;
+  if (state.aerobic.loading || !list) return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1></section>${filters}<section class="loading compact-loading"><span class="spinner"></span><p>正在读取有氧记录…</p></section>`;
+  if (state.aerobic.error) return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1></section><section class="error-card"><p>${escapeHtml(state.aerobic.error)}</p><button class="primary" data-action="aerobic-retry">重新读取</button></section>`;
+  const filtered = filteredAerobicItems();
+  return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1><p class="muted">按活动时间倒序 · ${list.source_status === "partial" ? "当前同步包含部分数据" : "COROS 活动记录"}</p></section>${filters}<section class="aerobic-activity-list" aria-label="有氧活动列表">${filtered.length ? filtered.map(aerobicActivityCard).join("") : `<div class="quiet-card"><strong>还没有有氧记录</strong><p>暂无 COROS aerobic activity，完成一次 sync data 后会显示在这里。</p></div>`}</section>`;
+}
+
 function agentAccessView() { const access = state.agentAccess; const active = access?.active; const token = state.agentAccessToken; const actions = active ? `<button class="secondary" data-action="rotate-agent-token">重新生成 Token</button><button class="secondary" data-action="revoke-agent-token">撤销 Token</button>` : `<button class="primary" data-action="create-agent-token">创建 Token</button>`; return `<section class="quiet-card"><h2>Agent access</h2><p>${active ? "Agent API 访问已启用。Token 只在创建或重新生成后显示一次。" : "为训练数据 Agent API 创建一个可撤销的访问 Token。"}</p>${token ? `<label>本次 Token（请立即保存）<input aria-label="本次 Agent Token" readonly value="${escapeHtml(token)}" /></label><p class="muted">出于安全考虑，之后的状态读取不会再次返回完整 Token。</p>` : ""}<div class="hero-actions">${actions}${token ? `<button class="secondary" data-action="copy-agent-token">复制 Token</button>` : ""}</div></section>`; }
 function settingsView() { const current = state.plan?.current; const share = state.share; const shareActions = share?.active ? `<button class="primary" data-action="copy-share">复制分享链接</button><button class="secondary" data-action="regenerate-share">重新生成</button><button class="secondary" data-action="revoke-share">撤销分享</button>` : `<button class="primary" data-action="create-share">创建分享</button>`; return `<section class="page-head"><p class="eyebrow">SETTINGS</p><h1>设置</h1><p class="muted">管理你的个人信息、计划和分享。</p></section><form class="settings-form" data-form="settings"><label>显示名称<input name="display_name" maxlength="50" value="${escapeHtml(state.me?.display_name || "")}" /></label><label>Timezone<input name="timezone" value="${escapeHtml(state.me?.timezone || state.today?.timezone || "Asia/Shanghai")}" /></label><button class="primary wide">保存设置</button></form><section class="quiet-card"><h2>计划</h2><p>通过 JSON 更新未来训练计划。</p><div class="hero-actions"><button class="primary" data-action="open-plan-sheet">更新计划</button>${current ? `<button class="secondary" data-action="copy-current-plan">复制当前 JSON</button>` : ""}</div></section>${agentAccessView()}<section class="quiet-card"><h2>分享</h2><p>${share?.active ? "分享链接已启用，可复制、重新生成或撤销。" : "创建一个永久只读分享链接。"}</p>${share?.active ? `<label>分享链接<input aria-label="分享链接" readonly value="${escapeHtml(share.url || "")}" /></label>` : ""}<div class="hero-actions">${shareActions}<button class="secondary" data-action="export">下载训练数据</button></div></section><button class="secondary wide" data-action="logout">退出登录</button>${state.sheet ? planSheet() : ""}`; }
 
@@ -756,7 +838,8 @@ async function loadCalendarDay(date, shouldRender = true) {
 }
 function bind() {
   app.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => { const destination = button.dataset.view; if (destination !== "today" && state.view === "today" && !(await ensureSessionPaused("navigation"))) return; const wasCalendar = state.view === "calendar"; state.view = destination; if (state.view === "settings") { await Promise.all([loadMe(), loadShare(), loadAgentAccess()]); render(); } else if (state.view === "calendar") { if (!calendarFirstDate()) return render(); await loadCalendarWeek(wasCalendar && state.calendar.from ? state.calendar.from : initialCalendarWeek(), wasCalendar ? state.calendar.selectedDate : state.today.date); } else render(); }));
-  app.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", () => action(element.dataset.action, element.dataset.index ?? element.dataset.exerciseKey ?? element.dataset.rpe ?? element.dataset.range, element.dataset.date)));
+  app.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", () => action(element.dataset.action, element.dataset.index ?? element.dataset.exerciseKey ?? element.dataset.rpe ?? element.dataset.range ?? element.dataset.tab ?? element.dataset.activityRef, element.dataset.date)));
+  app.querySelectorAll("[data-aerobic-filter]").forEach((element) => element.addEventListener("change", () => { state.aerobic[element.dataset.aerobicFilter] = element.value; render(); }));
   app.querySelectorAll(".bottom-sheet").forEach((sheet) => sheet.addEventListener("click", (event) => event.stopPropagation()));
   app.querySelectorAll("[data-exercise]").forEach((element) => element.addEventListener("click", () => openExercise(element.dataset.exercise)));
   const form = app.querySelector("[data-form=settings]"); if (form) form.addEventListener("submit", async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(form)); try { await api("/api/private/settings", { method: "PUT", body: JSON.stringify(values) }); state.message = "设置已保存"; await refresh(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } });
@@ -779,6 +862,10 @@ async function action(name, value, date) {
     if (name === "calendar-next") return loadCalendarWeek(addCalendarDays(state.calendar.from, 7), addCalendarDays(state.calendar.selectedDate || state.calendar.from, 7));
     if (name === "calendar-select") return loadCalendarDay(date);
     if (name === "progress-range") return loadProgress(value);
+    if (name === "records-tab") { state.recordsTab = value; state.exercise = null; state.aerobic.detail = null; if (value === "aerobic" && !state.aerobic.list) return loadAerobicActivities(); return render(); }
+    if (name === "aerobic-retry") return loadAerobicActivities();
+    if (name === "aerobic-detail") return openAerobicDetail(value);
+    if (name === "aerobic-back") { state.aerobic.detail = null; return render(); }
     if (name === "calendar-correct") { state.correction = true; return render(); }
     if (name === "normalize-expired") return normalizeExpiredFromCalendar();
     if (name === "start") {
@@ -804,7 +891,7 @@ async function action(name, value, date) {
     if (name === "start-timed") { startTimedAction(); return; }
     if (name === "complete" || name === "save-adjust") return await completeCurrent(); if (name === "previous") { resetTimedAction(); state.focusIndex = Math.max(0, state.focusIndex - 1); state.adjust = false; return render(); } if (name === "next") { resetTimedAction(); const max = state.sessionDetail?.snapshot?.completion_items?.length - 1 || 0; state.focusIndex = Math.min(max, state.focusIndex + 1); state.adjust = false; return render(); } if (name === "jump-item") { resetTimedAction(); state.focusIndex = Number(value); state.progressOpen = false; state.adjust = false; clearRestCountdown(); return render(); } if (name === "toggle-adjust") { state.adjust = !state.adjust; return render(); } if (name === "toggle-progress") { state.progressOpen = !state.progressOpen; return render(); } if (name === "toggle-timer") return await toggleTimer(); if (name === "toggle-mute") { state.muted = !state.muted; return render(); } if (name === "minimize") { if (!(await ensureSessionPaused("navigation"))) return; stopSessionClock(); resetTimedAction(); state.sessionDetail = null; state.progressOpen = false; state.adjust = false; state.feedbackOpen = null; clearRestCountdown(); state.endSheet = false; state.timerPaused = false; state.timerPauseStartedAt = null; state.timerPausedSec = 0; return refresh(); } if (name === "skip-rest") { resetTimedAction(); state.focusIndex = state.restNextIndex ?? state.focusIndex; clearRestCountdown(); return render(); } if (name === "open-feedback") { state.feedbackOpen = value || null; return render(); } if (name === "close-feedback") { state.feedbackOpen = null; return render(); }
     if (name === "end") { beginEndSheet(); await pauseForInterruption("end-form"); return render(); } if (name === "set-end-rpe") { state.endRpe = Number(value); return render(); } if (name === "save-end") return endCurrent(); if (name === "cancel-end") { state.endSheet = false; return render(); } if (name === "edit-session") { state.correction = true; return render(); } if (name === "cancel-correction") { state.correction = false; return render(); } if (name === "save-correction") return saveCorrection(); if (name === "open-progress-list") { state.focusIndex = 0; state.progressOpen = true; return render(); }
-    if (name === "close-exercise") { state.exercise = null; return render(); }
+    if (name === "close-exercise") { state.exercise = null; state.recordsTab = "strength"; return render(); }
     if (name === "open-plan-sheet") { state.sheet = true; state.preview = null; state.error = null; state.planError = null; return render(); } if (name === "copy-current-plan") return copyCurrentPlan(); if (name === "close-sheet") { state.sheet = false; state.preview = null; state.planError = null; return render(); }
     if (name === "validate-plan") return validatePlan(); if (name === "confirm-plan") return confirmPlan(); if (name === "copy-error") return navigator.clipboard?.writeText(state.planError || "计划需要修正"); if (name === "export") { window.location.href = "/api/private/export"; return; }
     if (name === "create-share") { await api("/api/private/coach-share", { method: "POST", headers: { "Idempotency-Key": key() }, body: "{}" }); await loadShare(); return copyShare("分享链接已创建并复制"); }
@@ -871,7 +958,7 @@ async function openSession(sessionKey, requestedIndex = null, options = {}) {
   showSession(detail, requestedIndex, { ...options, active: false });
 }
 async function copyShare(message) { let copied = false; try { if (state.share?.url && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(state.share.url); copied = true; } } catch {} state.message = copied ? message : "分享链接已准备好，请复制下方链接"; return render(); }
-async function openExercise(exerciseKey) { try { if (!(await ensureSessionPaused("navigation"))) return; state.exercise = await api(`/api/private/exercises/${encodeURIComponent(exerciseKey)}?preset=12w`); state.view = "progress"; render(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } }
+async function openExercise(exerciseKey) { try { if (!(await ensureSessionPaused("navigation"))) return; state.exercise = await api(`/api/private/exercises/${encodeURIComponent(exerciseKey)}?preset=12w`); state.recordsTab = "strength"; state.view = "progress"; render(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } }
 async function copyCurrentPlan() { try { const packageValue = await api("/api/private/plan/update-package"); state.draft = JSON.stringify(packageValue, null, 2); state.sheet = true; state.preview = null; state.error = null; state.planError = null; await navigator.clipboard?.writeText(state.draft); state.message = "当前计划 JSON 已复制，请修改 effective_from 或内容后检查"; render(); } catch (error) { state.error = error.data?.error?.message || error.message; render(); } }
 async function completeCurrent() {
   const detail = state.sessionDetail;

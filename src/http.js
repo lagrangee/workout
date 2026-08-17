@@ -9,6 +9,7 @@ import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
 import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
+import { aerobicDetailModel, aerobicListModel } from "./training-archive.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -167,6 +168,14 @@ async function privateGet(state, path, url, now, env) {
   }
   if (path === "/api/private/sessions") return listPrivateSessions(state, url);
   if (path.startsWith("/api/private/sessions/")) { const session = findSession(state, path.split("/").at(-1)); return session ? jsonResponse(sessionDetail(session)) : jsonError("not_found", "Session not found", [], 404); }
+  if (path === "/api/private/records/aerobic") { const result = aerobicListModel(state, url, now); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }
+  if (path.startsWith("/api/private/records/aerobic/")) {
+    let activityRef;
+    try { activityRef = decodeURIComponent(path.slice("/api/private/records/aerobic/".length)); } catch { return jsonError("invalid_request", "activity_ref must be a valid path segment", [], 400); }
+    if (!activityRef || activityRef.includes("/") || activityRef.includes("\\")) return jsonError("invalid_request", "activity_ref must be a single non-empty path segment", [], 400);
+    const result = aerobicDetailModel(state, activityRef, now);
+    return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result);
+  }
   if (path === "/api/private/progress") { const result = progressModel(state, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }
   if (path.startsWith("/api/private/exercises/")) { const result = exerciseDetail(state, decodeURIComponent(path.split("/api/private/exercises/")[1]), now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }
   if (path === "/api/private/coach-share") { const share = state.coach_share && !state.coach_share.revoked_at ? await authenticatedCoachUrl(state, env) : null; return jsonResponse(share ? { active: true, share_key: share.share_key, url: share.url } : { active: false, share_key: null, url: null }); }
