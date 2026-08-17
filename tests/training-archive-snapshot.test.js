@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSnapshot } from "../scripts/sync-training-archive-snapshot.mjs";
@@ -46,12 +46,14 @@ test("snapshot runner prefers the typed Agent publisher when Agent config is sup
   const archiveDir = await mkdtemp(join(tmpdir(), "workout-training-archive-agent-snapshot-"));
   const requests = [];
   try {
+    const agentConfigFile = join(archiveDir, "agent.env");
+    await writeFile(agentConfigFile, "WORKOUT_AGENT_API_ORIGIN=https://workout.example\nWORKOUT_AGENT_TOKEN=agent-token-not-for-output\n", "utf8");
+    await chmod(agentConfigFile, 0o600);
     const result = await runSnapshot({
       archiveDir,
       timezone: "Asia/Shanghai",
       dates: ["2026-08-16"],
-      agentApiOrigin: "https://workout.example",
-      agentToken: "agent-token-not-for-output",
+      agentConfigFile,
       workoutByDate: { "2026-08-16": { source_status: "none", data_as_of: null, sessions: [] } },
       corosByDate: { "2026-08-16": { source_status: "none", data_as_of: null, activities: [] } },
       fetchImpl: async (url, init) => {
@@ -78,6 +80,30 @@ test("snapshot runner prefers the typed Agent publisher when Agent config is sup
     assert.equal(requests[0].init.headers.authorization, "Bearer agent-token-not-for-output");
     assert.match(requests[0].init.headers["idempotency-key"], /^training-archive:2026-08-16:/);
     assert.doesNotMatch(requests[0].init.body, /agent-token-not-for-output|raw_fit|gps|telemetry/i);
+  } finally {
+    await rm(archiveDir, { recursive: true, force: true });
+  }
+});
+
+test("snapshot runner keeps local success when Agent config is invalid", async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), "workout-training-archive-invalid-agent-config-"));
+  try {
+    const agentConfigFile = join(archiveDir, "agent.env");
+    await writeFile(agentConfigFile, "WORKOUT_AGENT_API_ORIGIN=https://workout.example\nWORKOUT_AGENT_TOKEN=agent-token-not-for-output\n", "utf8");
+    await chmod(agentConfigFile, 0o644);
+    const result = await runSnapshot({
+      archiveDir,
+      timezone: "Asia/Shanghai",
+      dates: ["2026-08-16"],
+      agentConfigFile,
+      workoutByDate: { "2026-08-16": { source_status: "none", data_as_of: null, sessions: [] } },
+      corosByDate: { "2026-08-16": { source_status: "none", data_as_of: null, activities: [] } },
+      capturedAt: "2026-08-17T08:00:00.000Z",
+    });
+
+    assert.equal(result.receipts[0].local_archive.write_status, "complete");
+    assert.equal(result.receipts[0].cloud_publication.status, "error");
+    assert.equal(result.receipts[0].errors[0].code, "agent_config_invalid");
   } finally {
     await rm(archiveDir, { recursive: true, force: true });
   }

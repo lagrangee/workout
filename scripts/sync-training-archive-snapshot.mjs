@@ -38,15 +38,21 @@ export async function runSnapshot(payload) {
   await seedConfirmedRoute(payload);
 
   const state = emptyAthlete({ email: "snapshot-sync@example.invalid", displayName: "Snapshot sync", timezone });
-  const agentConfig = await resolveAgentConfig(payload);
-  const agentPublisher = agentConfig
-    ? createAgentAerobicProjectionPublisher({ origin: agentConfig.WORKOUT_AGENT_API_ORIGIN, token: agentConfig.WORKOUT_AGENT_TOKEN, fetchImpl: payload.fetchImpl })
-    : null;
+  const agentConfigResult = await resolveAgentConfig(payload);
+  let agentConfigError = agentConfigResult.error;
+  let agentPublisher = null;
+  if (agentConfigResult.config) {
+    try {
+      agentPublisher = createAgentAerobicProjectionPublisher({ origin: agentConfigResult.config.WORKOUT_AGENT_API_ORIGIN, token: agentConfigResult.config.WORKOUT_AGENT_TOKEN, fetchImpl: payload.fetchImpl });
+    } catch {
+      agentConfigError = { code: "agent_config_invalid", message: "Workout Agent configuration is unavailable" };
+    }
+  }
   const applicationOrigin = payload.applicationOrigin ?? process.env.WORKOUT_APPLICATION_ORIGIN;
   const sessionCookie = payload.applicationSessionCookie ?? process.env.WORKOUT_SYNC_SESSION_COOKIE;
   const applicationEmail = payload.applicationEmail ?? process.env.WORKOUT_SYNC_EMAIL;
   const applicationPassword = payload.applicationPassword ?? process.env.WORKOUT_SYNC_PASSWORD;
-  const applicationPublisher = typeof payload.publish === "function"
+  const cloudPublisher = typeof payload.publish === "function"
     ? payload.publish
     : (agentPublisher
       ?? (typeof applicationOrigin === "string" && applicationOrigin.trim()
@@ -65,13 +71,13 @@ export async function runSnapshot(payload) {
     corosSource: { read: async (date) => payload.corosByDate?.[date] ?? { source_status: "none", data_as_of: null, activities: [] } },
     publish: async (projection, context) => {
       publishAerobicProjection(state, projection, now);
-      if (!applicationPublisher) return {
+      if (!cloudPublisher) return {
         status: "error",
         published_count: 0,
         retryable: false,
-        error: { code: "cloud_publisher_not_configured", message: "No authenticated Workout cloud publisher was supplied" },
+        error: agentConfigError ?? { code: "cloud_publisher_not_configured", message: "No authenticated Workout cloud publisher was supplied" },
       };
-      return applicationPublisher(projection, context);
+      return cloudPublisher(projection, context);
     },
   });
 
@@ -122,17 +128,17 @@ export async function runSnapshot(payload) {
 }
 
 async function resolveAgentConfig(payload) {
-  const origin = payload.agentApiOrigin ?? process.env.WORKOUT_AGENT_API_ORIGIN;
-  const token = payload.agentToken ?? process.env.WORKOUT_AGENT_TOKEN;
+  const origin = process.env.WORKOUT_AGENT_API_ORIGIN;
+  const token = process.env.WORKOUT_AGENT_TOKEN;
   if (origin !== undefined || token !== undefined) {
-    if (typeof origin !== "string" || !origin.trim() || typeof token !== "string" || !token) throw new Error("Both Workout Agent API origin and token are required");
-    return { WORKOUT_AGENT_API_ORIGIN: origin, WORKOUT_AGENT_TOKEN: token };
+    if (typeof origin !== "string" || !origin.trim() || typeof token !== "string" || !token) return { config: null, error: { code: "agent_config_invalid", message: "Workout Agent configuration is unavailable" } };
+    return { config: { WORKOUT_AGENT_API_ORIGIN: origin, WORKOUT_AGENT_TOKEN: token }, error: null };
   }
   try {
-    return await loadAgentConfig(payload.agentConfigFile);
+    return { config: await loadAgentConfig(payload.agentConfigFile), error: null };
   } catch (error) {
-    if (error?.message?.startsWith("Workout MCP configuration file is missing:")) return null;
-    throw error;
+    if (error?.message?.startsWith("Workout MCP configuration file is missing:")) return { config: null, error: null };
+    return { config: null, error: { code: "agent_config_invalid", message: "Workout Agent configuration is unavailable" } };
   }
 }
 
