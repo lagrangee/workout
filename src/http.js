@@ -11,6 +11,7 @@ import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAcce
 import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
 import { aerobicDetailModel, aerobicListModel } from "./training-archive.js";
 import { compactAerobicSummary, recordsOverviewModel } from "./training-records.js";
+import { routeDetailModel, routeHistoryModel, routeListModel } from "./training-routes.js";
 import { validateSettings } from "./validation.js";
 
 const PRIVATE_PREFIX = "/api/private";
@@ -184,6 +185,20 @@ async function privateGet(state, path, url, now, env) {
     try { activityRef = decodeURIComponent(path.slice("/api/private/records/aerobic/".length)); } catch { return jsonError("invalid_request", "activity_ref must be a valid path segment", [], 400); }
     if (!activityRef || activityRef.includes("/") || activityRef.includes("\\")) return jsonError("invalid_request", "activity_ref must be a single non-empty path segment", [], 400);
     const result = aerobicDetailModel(state, activityRef, now);
+    return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result);
+  }
+  if (path === "/api/private/records/routes") {
+    const result = routeListModel(state, url, now);
+    return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result);
+  }
+  if (path.startsWith("/api/private/records/routes/")) {
+    const suffix = path.slice("/api/private/records/routes/".length);
+    const isHistory = suffix.endsWith("/history");
+    const encodedKey = isHistory ? suffix.slice(0, -"/history".length) : suffix;
+    let routeKey;
+    try { routeKey = decodeURIComponent(encodedKey); } catch { return jsonError("invalid_request", "route_key must be a valid path segment", [], 400); }
+    if (!routeKey || routeKey.includes("/") || routeKey.includes("\\")) return jsonError("invalid_request", "route_key must be a single non-empty path segment", [], 400);
+    const result = isHistory ? routeHistoryModel(state, routeKey, now, url) : routeDetailModel(state, routeKey, now, url);
     return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result);
   }
   if (path === "/api/private/progress") { const result = progressModel(state, now, url.searchParams.get("from") ?? undefined, url.searchParams.get("to") ?? undefined, url.searchParams.get("preset") ?? undefined); return result.error ? jsonError(result.error.code, result.error.message, [], errorStatus(result.error.code)) : jsonResponse(result); }

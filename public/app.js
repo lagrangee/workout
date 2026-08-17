@@ -74,7 +74,7 @@ function createBrowserAudio() {
 
 const actionAudio = workoutTestSeams.audio || createBrowserAudio();
 const blankTimedAction = () => ({ itemKey: null, phase: "idle", targetSec: null, deadlineMs: null, remainingMs: null, remainingSec: null, lastCueSecond: null });
-const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, recordsTab: "overview", recordsOverview: null, recordsOverviewLoading: false, aerobic: { list: null, detail: null, loading: false, detailLoading: false, error: null, month: "all", sportType: "all", from: null, to: null }, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
+const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, recordsTab: "overview", recordsOverview: null, recordsOverviewLoading: false, aerobic: { list: null, detail: null, loading: false, detailLoading: false, error: null, month: "all", sportType: "all", from: null, to: null, routes: null, routesOpen: false, routesLoading: false, routeDetail: null, routeDetailLoading: false, routeOrigin: null }, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
 
 const app = document.querySelector("#app");
 async function api(path, options = {}) {
@@ -335,6 +335,9 @@ async function loadAerobicActivities() {
 async function openAerobicDetail(activityRef) {
   state.aerobic.detailLoading = true;
   state.aerobic.detail = null;
+  state.aerobic.routesOpen = false;
+  state.aerobic.routeDetail = null;
+  state.aerobic.routeOrigin = null;
   state.aerobic.error = null;
   render();
   try {
@@ -344,6 +347,36 @@ async function openAerobicDetail(activityRef) {
   }
   state.aerobic.detailLoading = false;
   render();
+}
+
+async function loadRoutes() {
+  state.aerobic.routesLoading = true;
+  state.aerobic.error = null;
+  render();
+  try {
+    state.aerobic.routes = await api("/api/private/records/routes?limit=200");
+  } catch (error) {
+    state.aerobic.error = error.data?.error?.message || error.message;
+  }
+  state.aerobic.routesLoading = false;
+  if (state.view === "progress" && state.recordsTab === "aerobic") render();
+}
+
+async function openRouteDetail(routeKey, origin = "list") {
+  if (!routeKey) return;
+  state.aerobic.routesOpen = true;
+  state.aerobic.routeOrigin = origin;
+  state.aerobic.routeDetailLoading = true;
+  state.aerobic.routeDetail = null;
+  state.aerobic.error = null;
+  render();
+  try {
+    state.aerobic.routeDetail = await api(`/api/private/records/routes/${encodeURIComponent(routeKey)}?limit=200`);
+  } catch (error) {
+    state.aerobic.error = error.data?.error?.message || error.message;
+  }
+  state.aerobic.routeDetailLoading = false;
+  if (state.view === "progress" && state.recordsTab === "aerobic") render();
 }
 
 function shell(content) {
@@ -803,25 +836,55 @@ function aerobicActivityCard(activity) {
   const summary = activity.summary || {};
   const partial = activity.source_status === "partial";
   const indoor = activity.sport_type === 101;
-  return `<button class="aerobic-activity-card" data-action="aerobic-detail" data-activity-ref="${escapeHtml(activity.activity_ref)}"><span class="aerobic-activity-main"><strong>${escapeHtml(activity.local_date || "未知日期")} · ${escapeHtml(aerobicSportLabel(activity.sport_type, activity.sport_name))}</strong><span>${summary.distance_km == null ? "—" : `${summary.distance_km} km`} · ${aerobicDuration(summary.duration_sec)}</span><small>${escapeHtml(activity.activity_ref)} · ${partial ? "部分数据" : aerobicStatusLabel(activity.source_status)}${indoor ? " · 无路线" : ""}</small></span><span class="aerobic-activity-arrow">›</span></button>`;
+  const route = !indoor && activity.route_key ? ` · 路线 ${escapeHtml(activity.route_key)}` : indoor ? " · 无路线" : "";
+  return `<button class="aerobic-activity-card" data-action="aerobic-detail" data-activity-ref="${escapeHtml(activity.activity_ref)}"><span class="aerobic-activity-main"><strong>${escapeHtml(activity.local_date || "未知日期")} · ${escapeHtml(aerobicSportLabel(activity.sport_type, activity.sport_name))}</strong><span>${summary.distance_km == null ? "—" : `${summary.distance_km} km`} · ${aerobicDuration(summary.duration_sec)}</span><small>${escapeHtml(activity.activity_ref)} · ${partial ? "部分数据" : aerobicStatusLabel(activity.source_status)}${route}</small></span><span class="aerobic-activity-arrow">›</span></button>`;
 }
 
 function aerobicDetailView(detail) {
   const summary = detail.summary || {};
   const indoor = detail.sport_type === 101;
-  return `<section class="page-head"><button class="text-button" data-action="aerobic-back">← 返回有氧记录</button><p class="eyebrow">RECORDS · AEROBIC</p><h1>活动详情</h1><p class="muted">${escapeHtml(detail.local_date || "未知日期")} · ${escapeHtml(aerobicSportLabel(detail.sport_type, detail.sport_name))}</p></section><section class="aerobic-detail-card"><div class="aerobic-detail-status"><span class="status-pill ${escapeHtml(detail.source_status || "none")}">${escapeHtml(aerobicStatusLabel(detail.source_status))}</span><span>${indoor ? "室内运动 · 无路线" : "路线未接入本 ticket"}</span></div><div class="metric-grid aerobic-metrics"><article><span>距离</span><strong>${summary.distance_km == null ? "—" : `${summary.distance_km} km`}</strong></article><article><span>用时</span><strong>${aerobicDuration(summary.duration_sec)}</strong></article><article><span>平均心率</span><strong>${summary.average_heart_rate_bpm == null ? "—" : `${summary.average_heart_rate_bpm} bpm`}</strong></article><article><span>消耗</span><strong>${summary.calories_kcal == null ? "—" : `${summary.calories_kcal} kcal`}</strong></article></div><dl class="aerobic-source"><div><dt>COROS activity_ref</dt><dd>${escapeHtml(detail.activity_ref)}</dd></div><div><dt>数据时间</dt><dd>${escapeHtml(detail.data_as_of || "—")}</dd></div><div><dt>FIT</dt><dd>${escapeHtml(detail.fit_status || "—")}</dd></div><div><dt>路线</dt><dd>${indoor ? "不适用" : "尚未匹配"}</dd></div></dl></section>`;
+  const confirmedRoute = !indoor && typeof detail.route_key === "string" && detail.route_key;
+  const routeStatus = indoor ? "室内运动 · 无路线" : confirmedRoute ? `路线：${escapeHtml(detail.route_key)}` : "未匹配路线";
+  const routeAction = confirmedRoute ? `<button class="secondary" data-action="route-detail" data-route-key="${escapeHtml(detail.route_key)}">查看路线历史</button>` : "";
+  return `<section class="page-head"><button class="text-button" data-action="aerobic-back">← 返回有氧记录</button><p class="eyebrow">RECORDS · AEROBIC</p><h1>活动详情</h1><p class="muted">${escapeHtml(detail.local_date || "未知日期")} · ${escapeHtml(aerobicSportLabel(detail.sport_type, detail.sport_name))}</p></section><section class="aerobic-detail-card"><div class="aerobic-detail-status"><span class="status-pill ${escapeHtml(detail.source_status || "none")}">${escapeHtml(aerobicStatusLabel(detail.source_status))}</span><span>${routeStatus}</span></div><div class="metric-grid aerobic-metrics"><article><span>距离</span><strong>${summary.distance_km == null ? "—" : `${summary.distance_km} km`}</strong></article><article><span>用时</span><strong>${aerobicDuration(summary.duration_sec)}</strong></article><article><span>平均心率</span><strong>${summary.average_heart_rate_bpm == null ? "—" : `${summary.average_heart_rate_bpm} bpm`}</strong></article><article><span>消耗</span><strong>${summary.calories_kcal == null ? "—" : `${summary.calories_kcal} kcal`}</strong></article></div><dl class="aerobic-source"><div><dt>COROS activity_ref</dt><dd>${escapeHtml(detail.activity_ref)}</dd></div><div><dt>数据时间</dt><dd>${escapeHtml(detail.data_as_of || "—")}</dd></div><div><dt>FIT</dt><dd>${escapeHtml(detail.fit_status || "—")}</dd></div><div><dt>路线</dt><dd>${indoor ? "不适用" : confirmedRoute ? escapeHtml(detail.route_key) : "尚未匹配"}</dd></div></dl>${routeAction ? `<div class="hero-actions route-detail-actions">${routeAction}</div>` : ""}</section>`;
+}
+
+function routeHistoryRow(activity) {
+  const summary = activity.summary || {};
+  return `<button class="route-history-row" data-action="aerobic-detail" data-activity-ref="${escapeHtml(activity.activity_ref)}"><span><strong>${escapeHtml(activity.local_date || "未知日期")}</strong><small>${escapeHtml(aerobicSportLabel(activity.sport_type, activity.sport_name))} · ${summary.distance_km == null ? "—" : `${summary.distance_km} km`} · ${aerobicDuration(summary.duration_sec)}</small></span><span>${activity.route_direction === "reverse" ? "反向" : "正向"} ›</span></button>`;
+}
+
+function routePanelContent() {
+  if (state.aerobic.routeDetailLoading) return `<div class="loading compact-loading"><span class="spinner"></span><p>正在读取路线历史…</p></div>`;
+  if (state.aerobic.routeDetail) {
+    const route = state.aerobic.routeDetail;
+    const history = route.history || [];
+    const backLabel = state.aerobic.routeOrigin === "activity" ? "← 返回活动详情" : "← 返回路线列表";
+    return `<div class="route-panel-head"><button class="text-button" data-action="route-detail-back">${backLabel}</button><span class="route-panel-kicker">路线历史</span></div><h2>${escapeHtml(route.route_name || route.route_key)}</h2><p class="muted route-key">${escapeHtml(route.route_key)}</p><div class="route-summary"><span><strong>${route.activity_count || 0}</strong><small>次活动</small></span><span><strong>${route.total_distance_km == null ? "—" : `${route.total_distance_km} km`}</strong><small>累计距离</small></span><span><strong>${route.total_duration_sec == null ? "—" : aerobicDuration(route.total_duration_sec)}</strong><small>累计用时</small></span></div><section class="route-history"><h3>历史活动</h3>${history.length ? history.map(routeHistoryRow).join("") : `<p class="muted">这条路线还没有可展示的活动。</p>`}</section>`;
+  }
+  if (state.aerobic.routesLoading || !state.aerobic.routes) return `<div class="loading compact-loading"><span class="spinner"></span><p>正在读取路线列表…</p></div>`;
+  const routes = state.aerobic.routes.items || [];
+  return `<div class="route-panel-head"><button class="text-button" data-action="routes-close">← 返回有氧记录</button><span class="route-panel-kicker">ROUTES</span></div><h2>路线</h2><p class="muted">已确认的户外路线及其历史活动。</p><div class="route-list">${routes.length ? routes.map((route) => `<button class="route-list-row" data-action="route-detail" data-route-key="${escapeHtml(route.route_key)}"><span><strong>${escapeHtml(route.route_name || route.route_key)}</strong><small>${route.activity_count || 0} 次活动${route.total_distance_km == null ? "" : ` · ${route.total_distance_km} km`}</small></span><span>›</span></button>`).join("") : `<p class="muted">还没有已确认的路线。</p>`}</div>`;
+}
+
+function routeBrowser() {
+  const content = routePanelContent();
+  return `<aside class="route-sidebar" aria-label="路线浏览">${content}</aside><section class="route-mobile-page" aria-label="路线浏览">${content}</section>`;
 }
 
 function aerobicView() {
   const list = state.aerobic.list;
   const items = list?.items || [];
-  if (state.aerobic.detail) return `${recordsTabs("aerobic")}${aerobicDetailView(state.aerobic.detail)}`;
+  if (state.aerobic.detail && !state.aerobic.routesOpen) return `${recordsTabs("aerobic")}${aerobicDetailView(state.aerobic.detail)}`;
   const filters = `<div class="aerobic-filters"><label>月份<select data-aerobic-filter="month">${aerobicMonthOptions(items)}</select></label><label>运动<select data-aerobic-filter="sportType">${aerobicSportOptions(items)}</select></label></div>`;
   if (state.aerobic.loading || !list) return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1></section>${filters}<section class="loading compact-loading"><span class="spinner"></span><p>正在读取有氧记录…</p></section>`;
   if (state.aerobic.error) return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1></section><section class="error-card"><p>${escapeHtml(state.aerobic.error)}</p><button class="primary" data-action="aerobic-retry">重新读取</button></section>`;
   const filtered = filteredAerobicItems();
   const dateScope = state.aerobic.from && state.aerobic.to ? `<span class="records-context">日期：${escapeHtml(state.aerobic.from)}${state.aerobic.from === state.aerobic.to ? "" : ` – ${escapeHtml(state.aerobic.to)}`}</span>` : "";
-  return `${recordsTabs("aerobic")}<section class="page-head"><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1><p class="muted">按活动时间倒序 · ${list.source_status === "partial" ? "当前同步包含部分数据" : "COROS 活动记录"}</p>${dateScope}</section>${filters}<section class="aerobic-activity-list" aria-label="有氧活动列表">${filtered.length ? filtered.map(aerobicActivityCard).join("") : `<div class="quiet-card"><strong>还没有有氧记录</strong><p>暂无 COROS aerobic activity，完成一次 sync data 后会显示在这里。</p></div>`}</section>`;
+  const routeButton = `<button class="secondary routes-button" data-action="routes-open">路线${state.aerobic.routes?.items?.length ? ` · ${state.aerobic.routes.items.length}` : ""}</button>`;
+  const routeFocusClass = state.aerobic.routesOpen ? " route-focus" : "";
+  const activityPane = `<section class="aerobic-activity-pane"><div class="aerobic-activity-list" aria-label="有氧活动列表">${filtered.length ? filtered.map(aerobicActivityCard).join("") : `<div class="quiet-card"><strong>还没有有氧记录</strong><p>暂无 COROS aerobic activity，完成一次 sync data 后会显示在这里。</p></div>`}</div></section>`;
+  return `${recordsTabs("aerobic")}<section class="page-head aerobic-head"><div><p class="eyebrow">RECORDS · AEROBIC</p><h1>有氧</h1><p class="muted">按活动时间倒序 · ${list.source_status === "partial" ? "当前同步包含部分数据" : "COROS 活动记录"}</p>${dateScope}</div>${routeButton}</section>${filters}<div class="aerobic-route-layout${routeFocusClass}">${activityPane}${state.aerobic.routesOpen ? routeBrowser() : ""}</div>`;
 }
 
 function agentAccessView() { const access = state.agentAccess; const active = access?.active; const token = state.agentAccessToken; const actions = active ? `<button class="secondary" data-action="rotate-agent-token">重新生成 Token</button><button class="secondary" data-action="revoke-agent-token">撤销 Token</button>` : `<button class="primary" data-action="create-agent-token">创建 Token</button>`; return `<section class="quiet-card"><h2>Agent access</h2><p>${active ? "Agent API 访问已启用。Token 只在创建或重新生成后显示一次。" : "为训练数据 Agent API 创建一个可撤销的访问 Token。"}</p>${token ? `<label>本次 Token（请立即保存）<input aria-label="本次 Agent Token" readonly value="${escapeHtml(token)}" /></label><p class="muted">出于安全考虑，之后的状态读取不会再次返回完整 Token。</p>` : ""}<div class="hero-actions">${actions}${token ? `<button class="secondary" data-action="copy-agent-token">复制 Token</button>` : ""}</div></section>`; }
@@ -873,7 +936,7 @@ async function loadCalendarDay(date, shouldRender = true) {
 }
 function bind() {
   app.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => { const destination = button.dataset.view; if (destination !== "today" && state.view === "today" && !(await ensureSessionPaused("navigation"))) return; const wasCalendar = state.view === "calendar"; state.view = destination; if (state.view === "settings") { await Promise.all([loadMe(), loadShare(), loadAgentAccess()]); render(); } else if (state.view === "calendar") { if (!calendarFirstDate()) return render(); await loadCalendarWeek(wasCalendar && state.calendar.from ? state.calendar.from : initialCalendarWeek(), wasCalendar ? state.calendar.selectedDate : state.today.date); } else if (state.view === "progress" && state.recordsTab === "overview" && !state.recordsOverview) { await loadRecordsOverview(); } else render(); }));
-  app.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", () => action(element.dataset.action, element.dataset.index ?? element.dataset.exerciseKey ?? element.dataset.rpe ?? element.dataset.range ?? element.dataset.tab ?? element.dataset.activityRef, element.dataset.date)));
+  app.querySelectorAll("[data-action]").forEach((element) => element.addEventListener("click", () => action(element.dataset.action, element.dataset.index ?? element.dataset.exerciseKey ?? element.dataset.rpe ?? element.dataset.range ?? element.dataset.tab ?? element.dataset.activityRef ?? element.dataset.routeKey, element.dataset.date)));
   app.querySelectorAll("[data-aerobic-filter]").forEach((element) => element.addEventListener("change", () => { state.aerobic[element.dataset.aerobicFilter] = element.value; render(); }));
   app.querySelectorAll(".bottom-sheet").forEach((sheet) => sheet.addEventListener("click", (event) => event.stopPropagation()));
   app.querySelectorAll("[data-exercise]").forEach((element) => element.addEventListener("click", () => openExercise(element.dataset.exercise)));
@@ -897,11 +960,15 @@ async function action(name, value, date) {
     if (name === "calendar-next") return loadCalendarWeek(addCalendarDays(state.calendar.from, 7), addCalendarDays(state.calendar.selectedDate || state.calendar.from, 7));
     if (name === "calendar-select") return loadCalendarDay(date);
     if (name === "progress-range") return loadProgress(value);
-    if (name === "records-tab") { state.recordsTab = value; state.exercise = null; state.aerobic.detail = null; if (value === "overview" && !state.recordsOverview) return loadRecordsOverview(); if (value === "aerobic" && !state.aerobic.list) return loadAerobicActivities(); return render(); }
-    if (name === "open-aerobic-date") { state.view = "progress"; state.recordsTab = "aerobic"; state.exercise = null; state.aerobic.detail = null; state.aerobic.from = date; state.aerobic.to = date; state.aerobic.month = "all"; state.aerobic.sportType = "all"; return loadAerobicActivities(); }
+    if (name === "records-tab") { state.recordsTab = value; state.exercise = null; state.aerobic.detail = null; state.aerobic.routesOpen = false; state.aerobic.routeDetail = null; state.aerobic.routeOrigin = null; if (value === "overview" && !state.recordsOverview) return loadRecordsOverview(); if (value === "aerobic" && !state.aerobic.list) return loadAerobicActivities(); return render(); }
+    if (name === "open-aerobic-date") { state.view = "progress"; state.recordsTab = "aerobic"; state.exercise = null; state.aerobic.detail = null; state.aerobic.routesOpen = false; state.aerobic.routeDetail = null; state.aerobic.routeOrigin = null; state.aerobic.from = date; state.aerobic.to = date; state.aerobic.month = "all"; state.aerobic.sportType = "all"; return loadAerobicActivities(); }
     if (name === "aerobic-retry") return loadAerobicActivities();
     if (name === "aerobic-detail") return openAerobicDetail(value);
-    if (name === "aerobic-back") { state.aerobic.detail = null; return render(); }
+    if (name === "aerobic-back") { state.aerobic.detail = null; state.aerobic.routesOpen = false; state.aerobic.routeDetail = null; state.aerobic.routeOrigin = null; return render(); }
+    if (name === "routes-open") { state.aerobic.routesOpen = true; state.aerobic.routeDetail = null; state.aerobic.routeOrigin = null; return loadRoutes(); }
+    if (name === "routes-close") { state.aerobic.routesOpen = false; state.aerobic.routeDetail = null; state.aerobic.routeOrigin = null; return render(); }
+    if (name === "route-detail") return openRouteDetail(value, state.aerobic.detail ? "activity" : "list");
+    if (name === "route-detail-back") { const fromActivity = state.aerobic.routeOrigin === "activity"; state.aerobic.routeDetail = null; state.aerobic.routeOrigin = null; state.aerobic.routesOpen = !fromActivity; return render(); }
     if (name === "calendar-correct") { state.correction = true; return render(); }
     if (name === "normalize-expired") return normalizeExpiredFromCalendar();
     if (name === "start") {

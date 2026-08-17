@@ -57,6 +57,14 @@ field: it is `forward`, `reverse`, or `null` and is meaningful only when the
 activity has a `route_key`. The FIT path is a byte-preserved private sidecar
 for the same activity; it is not imported into Workout.
 
+`route_match_status` records the safe assignment result: `matched` for a
+unique configured match, `registered` for a route created after explicit
+Athlete confirmation, `unmatched` when no route was assigned, `ambiguous` when
+more than one configured direction matched, and `ignored` for indoor activity.
+`error` is reserved for a per-activity assignment failure. An activity with
+`unmatched`, `ambiguous`, `ignored`, or `error` never receives a guessed
+`route_key`.
+
 ### Obsidian structured record graph
 
 The daily note is a date-scoped `daily-hub` record. Its native Properties keep
@@ -215,6 +223,7 @@ RouteRegistryV1 = {
   schema_version: 1,
   routes: [{
     route_key: string,
+    route_name: string,
     sport_types: integer[],
     distance_range_km: [number, number],
     direction_signatures: {
@@ -249,6 +258,15 @@ point and the point around 200 m before the finish seed `reverse`. The initial
 distance range is the observed distance plus or minus 10%. The Athlete may edit
 these values later. The activity that creates the route is recorded as
 `forward` because its observed start defines that reference entry.
+
+The private route read model projects only `route_key`, `route_name`, sport and
+distance metadata, aggregate counts, and safe activity history. It never
+returns direction signatures, GPS points, FIT paths or FIT bytes. The private
+route index is available at `/api/private/records/routes`; a route detail and
+its bounded history are available at
+`/api/private/records/routes/:route_key` and
+`/api/private/records/routes/:route_key/history`. These endpoints are
+Athlete-scoped and are not part of Coach Share or Athlete Export.
 
 ### FIT-backed route matching
 

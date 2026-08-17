@@ -270,9 +270,180 @@
   overflow-wrap: anywhere;
 }
 
+.aerobic-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.routes-button {
+  flex: 0 0 auto;
+}
+
+.aerobic-route-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.aerobic-activity-pane {
+  min-width: 0;
+}
+
+.route-sidebar,
+.route-mobile-page {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+}
+
+.route-sidebar {
+  display: none;
+}
+
+.route-mobile-page {
+  display: block;
+}
+
+.route-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.route-panel-kicker {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.route-sidebar h2,
+.route-mobile-page h2 {
+  margin: 0;
+}
+
+.route-key {
+  margin: 5px 0 16px;
+  overflow-wrap: anywhere;
+}
+
+.route-list,
+.route-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.route-list-row,
+.route-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.route-list-row:first-child,
+.route-history-row:first-child {
+  border-top: 0;
+}
+
+.route-list-row:hover,
+.route-list-row:focus-visible,
+.route-history-row:hover,
+.route-history-row:focus-visible {
+  color: var(--accent);
+}
+
+.route-list-row span:first-child,
+.route-history-row span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.route-list-row small,
+.route-history-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.route-list-row > span:last-child,
+.route-history-row > span:last-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.route-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 18px 0 4px;
+}
+
+.route-summary span {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.route-summary strong {
+  font-size: 15px;
+}
+
+.route-summary small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.route-history h3 {
+  margin: 0 0 2px;
+  font-size: 14px;
+}
+
+.route-detail-actions {
+  margin-top: -4px;
+}
+
 @media (min-width: 760px) {
   .aerobic-activity-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 980px) {
+  .aerobic-route-layout {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    align-items: start;
+  }
+
+  .route-sidebar {
+    display: block;
+    position: sticky;
+    top: 18px;
+  }
+
+  .route-mobile-page {
+    display: none;
+  }
+}
+
+@media (max-width: 979px) {
+  .aerobic-route-layout.route-focus .aerobic-activity-pane {
+    display: none;
   }
 }
 

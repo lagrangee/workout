@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { addDays, isValidLocalDate, localDate } from "./util.js";
 import { COROS_SPORT_TYPES, SOURCE_STATUSES, containsSensitiveText, normalizeCorosActivity, normalizeTimezone, safeAerobicActivity } from "./training-archive.js";
 import { dailyHubModel, dailyHubNote, normalizeWorkoutSessionRecord, workoutIndexNote, workoutSessionNote } from "./training-records.js";
+import { assignRoute, readRouteRegistry, routeFilePath, routeLink, safeRouteProjection, writeRouteRegistry } from "./route-registry.js";
 
 const MAX_PUBLICATION_ATTEMPTS = 3;
 const SYNC_RECEIPT_DIR = [".sync", "training-archive"];
@@ -32,9 +33,11 @@ export async function syncTrainingArchive(options = {}) {
     return retryPendingPublication({ options, priorReceipt, targetDate, timezone, now, publish });
   }
 
+  const routeRead = await readRouteRegistry(options.archiveDir);
+  const routeRegistry = routeRead.registry;
   const workoutResult = await readSource(options.workoutSource, "workout", targetDate, timezone, now);
   const corosResult = await readSource(options.corosSource, "coros", targetDate, timezone, now);
-  const prepared = prepareCorosActivities(corosResult, targetDate, timezone, now);
+  const prepared = prepareCorosActivities(corosResult, targetDate, timezone, now, routeRegistry, options);
   const errors = [...workoutResult.errors, ...corosResult.errors, ...prepared.errors];
   const previousActivities = previousActivitiesForFailedSource(priorReceipt, corosResult.source_status);
   const activities = mergeActivities(prepared.activities, previousActivities);
@@ -54,6 +57,8 @@ export async function syncTrainingArchive(options = {}) {
       activitiesToWrite,
       activitiesForNote: activities,
       fitBytesByRef: prepared.fitBytesByRef,
+      routeRegistry,
+      routeAssignments: prepared.routeAssignments,
       errors,
     });
   } catch (error) {
@@ -68,6 +73,7 @@ export async function syncTrainingArchive(options = {}) {
     workout: workoutResult,
     coros: corosResult,
     activities,
+    routeRegistry,
   });
 
   let cloudPublication;
@@ -101,6 +107,8 @@ export async function syncTrainingArchive(options = {}) {
     ignoredSportTypes: prepared.ignoredSportTypes,
     errors,
     pendingArtifacts: prepared.pendingArtifacts,
+    routeAssignments: prepared.routeAssignments,
+    routeRegistryPath: "config/routes.json",
     projection,
   });
   await persistReceipt(options.archiveDir, receipt, projection);
@@ -170,12 +178,13 @@ function safeSessions(value, targetDate, timezone, dataAsOf, sourceStatus) {
   }).filter(Boolean);
 }
 
-function prepareCorosActivities(coros, targetDate, timezone, now) {
+function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry, options = {}) {
   const byRef = new Map();
   const fitBytesByRef = new Map();
   const pendingArtifacts = [];
   const ignoredSportTypes = [];
   const errors = [];
+  const routeAssignments = { matched: 0, registered: 0, unmatched: 0, ambiguous: 0, ignored: 0, error: 0 };
   for (const raw of coros.activities) {
     const rawSportType = raw?.sport_type ?? raw?.sportType;
     if (!isInScopeSportType(rawSportType)) {
@@ -184,6 +193,8 @@ function prepareCorosActivities(coros, targetDate, timezone, now) {
     }
     const activityRef = safeReference(raw?.activity_ref ?? raw?.activityRef ?? raw?.labelId);
     try {
+      const routeMatch = assignRoute({ raw, activityRef, registry: routeRegistry, options });
+      routeAssignments[routeMatch.status] = (routeAssignments[routeMatch.status] ?? 0) + 1;
       const fitBytes = extractFitBytes(raw);
       const fitStatus = deriveFitStatus(raw, fitBytes);
       const activityStatus = deriveActivityStatus(raw, coros.source_status, fitStatus);
@@ -192,7 +203,14 @@ function prepareCorosActivities(coros, targetDate, timezone, now) {
         status: fitStatus,
         bytes: fitBytes ? fitBytes.byteLength : raw?.fit_file?.bytes ?? raw?.fitFile?.bytes ?? null,
       };
-      const activity = normalizeCorosActivity({ ...raw, source_status: activityStatus, fit_file: fitFile }, {
+      const activity = normalizeCorosActivity({
+        ...raw,
+        route_key: routeMatch.route_key,
+        route_direction: routeMatch.route_direction,
+        route_match_status: routeMatch.status,
+        source_status: activityStatus,
+        fit_file: fitFile,
+      }, {
         timezone,
         targetDate,
         dataAsOf: coros.data_as_of,
@@ -208,10 +226,11 @@ function prepareCorosActivities(coros, targetDate, timezone, now) {
       }
       errors.push(...activityDiagnostics(raw, activity.activity_ref, fitStatus));
     } catch (error) {
+      routeAssignments.error += 1;
       errors.push(safeError(error, "coros", "invalid_activity", activityRef));
     }
   }
-  return { activities: [...byRef.values()], fitBytesByRef, pendingArtifacts, ignoredSportTypes: [...new Set(ignoredSportTypes)], errors };
+  return { activities: [...byRef.values()], fitBytesByRef, pendingArtifacts, ignoredSportTypes: [...new Set(ignoredSportTypes)], errors, routeAssignments };
 }
 
 function activityDiagnostics(raw, activityRef, fitStatus) {
@@ -288,10 +307,11 @@ function toBytes(value) {
   return null;
 }
 
-async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workout, coros, activitiesToWrite, activitiesForNote, fitBytesByRef, errors }) {
+async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workout, coros, activitiesToWrite, activitiesForNote, fitBytesByRef, routeRegistry, routeAssignments, errors }) {
   const dailyPath = join(archiveDir, "daily", `${targetDate}.md`);
   const activityPaths = [];
   const workoutPaths = [];
+  const routePaths = [];
   let fitBytes = 0;
   await mkdir(join(archiveDir, "daily"), { recursive: true });
   await mkdir(join(archiveDir, "data", "coros"), { recursive: true });
@@ -328,11 +348,22 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
     await writeFile(notePath, activityNote(activity), "utf8");
     activityPaths.push(relativePath(archiveDir, jsonPath), relativePath(archiveDir, notePath));
   }
+  const routeRegistryPath = await writeRouteRegistry(archiveDir, routeRegistry);
+  routePaths.push(relativePath(archiveDir, routeRegistryPath));
+  await mkdir(join(archiveDir, "routes"), { recursive: true });
+  for (const route of routeRegistry.routes) {
+    const routePath = routeFilePath(archiveDir, route.route_key);
+    await writeFile(routePath, routeNote(route, activitiesForNote), "utf8");
+    routePaths.push(relativePath(archiveDir, routePath));
+  }
+  const routeIndexPath = join(archiveDir, "routes", "index.md");
+  await writeFile(routeIndexPath, routeIndexNote(routeRegistry, activitiesForNote), "utf8");
+  routePaths.push(relativePath(archiveDir, routeIndexPath));
   await writeFile(dailyPath, dailyNote({ targetDate, timezone, now, workout, coros, activities: activitiesForNote, errors }), "utf8");
-  return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...workoutPaths, ...activityPaths], fit_bytes: fitBytes, workout_sessions: workoutRecords.length };
+  return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...workoutPaths, ...activityPaths, ...routePaths], fit_bytes: fitBytes, workout_sessions: workoutRecords.length, route_assignments: routeAssignments };
 }
 
-function buildProjection({ targetDate, timezone, workout, coros, activities }) {
+function buildProjection({ targetDate, timezone, workout, coros, activities, routeRegistry }) {
   const sourceStatus = aggregateSourceStatus([workout.source_status, coros.source_status]);
   return {
     schema_version: 1,
@@ -346,6 +377,7 @@ function buildProjection({ targetDate, timezone, workout, coros, activities }) {
     source_data_as_of: { workout: workout.data_as_of, coros: coros.data_as_of },
     data_as_of: coros.data_as_of ?? workout.data_as_of ?? null,
     activities: activities.map(safeAerobicActivity),
+    routes: routeRegistry.routes.map(safeRouteProjection),
   };
 }
 
@@ -375,7 +407,7 @@ function publicationAttempts(options) {
   return Math.min(MAX_PUBLICATION_ATTEMPTS, Math.max(1, Math.floor(number)));
 }
 
-function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], projection }) {
+function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], routeAssignments = {}, routeRegistryPath, projection }) {
   return {
     schema_version: 1,
     sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
@@ -398,6 +430,8 @@ function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, 
     records_written: { daily_hubs: localWrite.write_status === "complete" ? 1 : 0, workout_sessions: localWrite.write_status === "complete" ? (localWrite.workout_sessions ?? 0) : 0, activities: activitiesWritten },
     records_published: { activities: activitiesPublished },
     pending_artifacts: pendingArtifacts,
+    route_assignments: routeAssignments,
+    route_registry_path: routeRegistryPath ?? "config/routes.json",
     ignored_sport_types: ignoredSportTypes,
     errors,
     receipt_path: receiptRelativePath(targetDate),
@@ -585,10 +619,11 @@ function safePendingProjection(value) {
       workout: persistedStatus(value.source_statuses?.workout, "source_statuses.workout"),
       coros: persistedStatus(value.source_statuses?.coros, "source_statuses.coros"),
     },
-    workout_source_status: persistedStatus(value.workout_source_status, "workout_source_status"),
-    data_as_of: safeInstant(value.data_as_of),
-    activities: value.activities.map(safeAerobicActivity),
-  };
+      workout_source_status: persistedStatus(value.workout_source_status, "workout_source_status"),
+      data_as_of: safeInstant(value.data_as_of),
+      activities: value.activities.map(safeAerobicActivity),
+      routes: Array.isArray(value.routes) ? value.routes.map((route) => safeRouteProjection(route)) : [],
+    };
 }
 
 function persistedStatus(value, field) {
@@ -693,7 +728,9 @@ function listYaml(values) {
 }
 
 function activityNote(activity) {
-  const routeLines = activity.route_key ? [`route_key: ${yamlValue(activity.route_key)}`, `route_direction: ${yamlValue(activity.route_direction)}`, `route: ${yamlValue(`[[routes/${activity.route_key}]]`)}`] : ["route_key: null", "route_direction: null"];
+  const routeLines = activity.route_key
+    ? [`route_key: ${yamlValue(activity.route_key)}`, `route_direction: ${yamlValue(activity.route_direction)}`, `route_match_status: ${yamlValue(activity.route_match_status ?? "matched")}`, `route: ${yamlValue(routeLink(activity.route_key))}`]
+    : [`route_key: null`, `route_direction: null`, `route_match_status: ${yamlValue(activity.route_match_status ?? "unmatched")}`];
   const summary = activity.summary;
   return [
     "---",
@@ -725,7 +762,48 @@ function activityNote(activity) {
     "## 来源",
     `- COROS activity_ref：${activity.activity_ref}`,
     `- FIT：${activity.fit_file?.status ?? "—"}`,
-    activity.route_key ? `- 路线：[[routes/${activity.route_key}]]` : "- 路线：未匹配（不适用或尚未确认）",
+    activity.route_key ? `- 路线：${routeLink(activity.route_key)}` : "- 路线：未匹配（不适用或尚未确认）",
+    "",
+  ].join("\n");
+}
+
+function routeNote(route, activities) {
+  const history = activities.filter((activity) => activity.route_key === route.route_key).sort((left, right) => right.local_date.localeCompare(left.local_date) || right.activity_ref.localeCompare(left.activity_ref));
+  const activityRefs = history.map((activity) => activity.activity_ref);
+  const links = history.map((activity) => `[[data/coros/${activity.local_date}-${fileComponent(activity.activity_ref)}]]`);
+  return [
+    "---",
+    "kind: route",
+    "schema_version: 1",
+    "source: derived",
+    `route_key: ${yamlValue(route.route_key)}`,
+    `route_name: ${yamlValue(route.route_name ?? route.route_key)}`,
+    `sport_types: ${JSON.stringify(route.sport_types ?? [])}`,
+    `distance_range_km: ${JSON.stringify(route.distance_range_km ?? null)}`,
+    "activity_refs:",
+    listYaml(activityRefs),
+    "activities:",
+    listYaml(links),
+    "---",
+    "",
+    "## 路线历史",
+    links.length ? history.map((activity, index) => `- ${links[index]} · ${activity.local_date} · ${activity.route_direction ?? "—"} · ${activity.summary?.distance_km ?? "—"} km`).join("\n") : "- 暂无活动历史。",
+    "",
+  ].join("\n");
+}
+
+function routeIndexNote(registry, activities) {
+  const routes = registry.routes ?? [];
+  return [
+    "---",
+    "kind: route-index",
+    "schema_version: 1",
+    "source: derived",
+    "---",
+    "",
+    "# Routes",
+    "",
+    routes.length ? routes.map((route) => `- [[routes/${route.route_key}]] · ${route.route_name ?? route.route_key} · ${activities.filter((activity) => activity.route_key === route.route_key).length} 次`).join("\n") : "- 暂无已确认路线。",
     "",
   ].join("\n");
 }
