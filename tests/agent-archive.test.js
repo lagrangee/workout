@@ -32,6 +32,7 @@ function activity(overrides = {}) {
 async function seedArchive(store) {
   const state = await store.getByEmail("athlete-a@example.invalid");
   publishAerobicProjection(state, {
+    target_date: "2026-08-15",
     source_status: "complete",
     source_statuses: { workout: "none", coros: "complete" },
     data_as_of: "2026-08-16T23:59:00.000Z",
@@ -62,6 +63,11 @@ test("private Agent manifest and schema catalog advertise the archive read surfa
   const schema = await agentRequest(handler, token, "/api/agent/v1/schemas/route_history");
   assert.equal(schema.response.status, 200);
   assert.deepEqual(schema.body.required, ["schema_version", "generated_at", "data_as_of", "source_status", "source_ref"]);
+  const dailySchema = await agentRequest(handler, token, "/api/agent/v1/schemas/daily_context");
+  assert.equal(dailySchema.response.status, 200);
+  assert.ok(dailySchema.body.required.includes("sync_evidence"));
+  assert.deepEqual(dailySchema.body.properties.source_status.required, ["workout", "coros"]);
+  assert.deepEqual(dailySchema.body.properties.data_as_of.anyOf.map((item) => item.type), ["string", "null"]);
 });
 
 test("Agent aerobic activities are bounded, cursor-bound, and projection-safe", async () => {
@@ -111,6 +117,67 @@ test("Agent detail, daily context, route history, and Athlete isolation preserve
   assert.equal(daily.body.context.machine_refs.activity_refs.includes("coros-agent-indoor"), true);
   assert.equal(daily.body.source_statuses.coros, "complete");
   assert.doesNotMatch(JSON.stringify(daily.body), /raw_fit|gps|telemetry|\/Users\/|\.fit/);
+
+  const emptyDay = await agentRequest(handler, token, "/api/agent/v1/daily/2026-08-08");
+  assert.equal(emptyDay.response.status, 200);
+  assert.deepEqual(emptyDay.body.context.machine_refs.activity_refs, []);
+  assert.deepEqual(emptyDay.body.context.machine_refs.workout_session_keys, []);
+  assert.deepEqual(emptyDay.body.source_statuses, { workout: "none", coros: "none" });
+  assert.equal(emptyDay.body.sync_evidence, "not_synced");
+  assert.equal(emptyDay.body.data_as_of, null);
+
+  const state = await store.getByEmail("athlete-a@example.invalid");
+  publishAerobicProjection(state, {
+    target_date: "2026-08-09",
+    source_status: "complete",
+    source_statuses: { workout: "complete", coros: "none" },
+    source_data_as_of: { workout: "2026-08-17T08:00:00.000Z", coros: "2026-08-17T08:00:00.000Z" },
+    data_as_of: "2026-08-17T08:00:00.000Z",
+    activities: [],
+    routes: [],
+  }, now);
+  await store.save(state);
+  const syncedEmptyDay = await agentRequest(handler, token, "/api/agent/v1/daily/2026-08-09");
+  assert.equal(syncedEmptyDay.response.status, 200);
+  assert.deepEqual(syncedEmptyDay.body.source_statuses, { workout: "complete", coros: "none" });
+  assert.equal(syncedEmptyDay.body.sync_evidence, "synced");
+  assert.equal(syncedEmptyDay.body.data_as_of, "2026-08-17T08:00:00.000Z");
+
+  const failedDateActivity = activity({
+    activity_ref: "coros-agent-failed-date",
+    source_ref: "coros:activity:coros-agent-failed-date",
+    local_date: "2026-08-10",
+    started_at: "2026-08-10T01:00:00.000Z",
+    ended_at: "2026-08-10T02:00:00.000Z",
+    route_key: null,
+    route_direction: null,
+    route_match_status: "unmatched",
+  });
+  publishAerobicProjection(state, {
+    target_date: "2026-08-10",
+    source_status: "complete",
+    source_statuses: { workout: "none", coros: "complete" },
+    source_data_as_of: { workout: null, coros: "2026-08-17T07:00:00.000Z" },
+    data_as_of: "2026-08-17T07:00:00.000Z",
+    activities: [failedDateActivity],
+    routes: [],
+  }, now);
+  publishAerobicProjection(state, {
+    target_date: "2026-08-10",
+    source_status: "error",
+    source_statuses: { workout: "none", coros: "error" },
+    source_data_as_of: { workout: null, coros: null },
+    data_as_of: null,
+    activities: [failedDateActivity],
+    routes: [],
+  }, new Date("2026-08-17T09:00:00.000Z"));
+  await store.save(state);
+  const failedDate = await agentRequest(handler, token, "/api/agent/v1/daily/2026-08-10");
+  assert.equal(failedDate.response.status, 200);
+  assert.deepEqual(failedDate.body.source_statuses, { workout: "none", coros: "error" });
+  assert.equal(failedDate.body.sync_evidence, "synced");
+  assert.equal(failedDate.body.data_as_of, null);
+  assert.deepEqual(failedDate.body.context.machine_refs.activity_refs, ["coros-agent-failed-date"]);
 
   const routes = await agentRequest(handler, token, "/api/agent/v1/routes?limit=1");
   assert.equal(routes.response.status, 200);

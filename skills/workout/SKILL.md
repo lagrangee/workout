@@ -61,7 +61,9 @@ A2. **Refresh selectively.** Query live Workout when the request concerns the
    the request concerns latest activity, current recovery/load, today, a
    missing or partial aerobic record, or an explicit refresh. A live value wins
    when it conflicts with the local archive. Ordinary analysis reads do not
-   write local files.
+   write local files. The explicit `sync data` operation also publishes the
+   safe D1 projection through the authenticated Workout application boundary;
+   ordinary analysis reads never do either write.
 
 ## Manual `sync data`
 
@@ -118,6 +120,24 @@ exists, treat it as an explicit request to extend that route rather than
 silently creating a duplicate. A short or GPS-incomplete activity remains
 unmatched without a name prompt. Include route outcomes and any pending name in
 the sync receipt.
+
+S4b. **Publish the safe cloud projection inside the same operation.** After a
+successful local write, send the projection through the authenticated Workout
+application request boundary used by `createAerobicProjectionPublisher`. Do
+not ask the Athlete to run a second publish command. Keep local success when
+the cloud stage fails, record both statuses in the one receipt, and let the
+next `sync data` run retry the pending safe projection. The logical
+`publication_key` identifies the date; the request idempotency key also
+includes the exact projection body so a same-date refresh can update D1
+without an idempotency collision. The cloud payload contains no FIT bytes,
+GPS points, high-frequency telemetry, or local paths.
+
+The publisher must receive the normal authenticated application fetch
+boundary. `credentials: "include"` preserves a browser session; it does not
+create a session for a bare Node fetch. A local runner without that boundary
+must record a cloud error and retain the local archive, never return a fake
+cloud success. When the application boundary is available, it is still one
+`sync data` operation and uses the same receipt.
 
 S5. **Keep daily output factual.** Daily notes contain source facts and
 transparent derived summaries. Do not generate daily coaching analysis as
@@ -215,8 +235,9 @@ Route structured API errors by their meaning: ask for missing information on
  `unsupported_operation` as outside this integration. Surface rate-limit or
  server failures with their stable code. Workout and COROS reads remain
  side-effect-free; local archive writes occur only inside an explicit `sync
- data` operation, and Workout plan application remains the only source-data
- write branch.
+ data` operation. Its local archive and safe D1 publication are one user
+ visible receipt; there is no separate cloud publish command. Workout plan
+ application remains the only source-data write branch.
 
 Route Session lifecycle or correction requests, account-settings changes, and
 share-management requests to the unsupported-operation path. The integration

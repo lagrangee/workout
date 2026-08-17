@@ -301,6 +301,22 @@ export function publishAerobicProjection(state, projection, now = new Date()) {
     publication_key: redactedStringOrNull(projection.publication_key),
     route_count: state.routes.length,
   };
+  if (typeof projection.target_date === "string" && isValidLocalDate(projection.target_date)) {
+    state.aerobic_date_projections ??= {};
+    state.aerobic_date_projections[projection.target_date] = {
+      schema_version: 1,
+      target_date: projection.target_date,
+      source_status: aggregateStatus,
+      source_statuses: sourceStatuses,
+      source_data_as_of: {
+        workout: instantOrNull(projection.source_data_as_of?.workout) ?? null,
+        coros: instantOrNull(projection.source_data_as_of?.coros) ?? null,
+      },
+      data_as_of: instantOrNull(projection.data_as_of) ?? null,
+      updated_at: state.aerobic_projection.updated_at,
+      activity_count: safeActivities.filter((activity) => activity.local_date === projection.target_date).length,
+    };
+  }
   return {
     status: aggregateStatus,
     published_count: safeActivities.length,

@@ -86,6 +86,13 @@ fields. Matching `local_date` provides context only and never creates an
 implicit Workout Session-to-COROS activity relationship. The explicit
 `relation_policy` value is `same_local_date_context_only`.
 
+COROS activity notes expose the private FIT sidecar as a local-only link
+projection. `fit_status` and `fit_path` remain explicit Properties;
+`fit_file` is a wikilink only when the byte-preserved sidecar was written.
+Partial or failed FIT retrieval keeps the status and relative path but writes
+`fit_file: null`, so a missing artifact is never presented as a successful
+link. These local Properties and links are not part of the D1 projection.
+
 ## Source routing
 
 ### Local-first analysis
@@ -139,8 +146,10 @@ The operation returns a receipt containing the target date, source statuses,
 structured errors. It never turns missing data into zero.
 
 The persisted receipt is the v1 two-stage sync boundary. It keeps local archive
-and cloud publication outcomes separate and is idempotent by the stable
-`publication_key` (`training-archive:<local_date>`):
+and cloud publication outcomes separate. The stable `publication_key`
+(`training-archive:<local_date>`) is the logical publication identity; the
+cloud request uses a second body-bound idempotency key so a same-date refresh
+can update the projection without conflicting with an earlier body.
 
 ```text
 SyncReceiptV1 = {
@@ -165,7 +174,8 @@ SyncReceiptV1 = {
     status: SourceStatus,
     published_count: number,
     attempts: number,
-    retryable: boolean
+    retryable: boolean,
+    idempotency_key: string|null
   },
   records_written: { daily_hubs: number, workout_sessions: number, activities: number },
   records_published: { activities: number },
@@ -176,7 +186,9 @@ SyncReceiptV1 = {
 
 When the local stage succeeds and cloud publication fails, the receipt retains
 the safe pending projection and the next `sync data` run retries that
-publication with the same `publication_key`. A failed FIT artifact keeps its
+publication with the same body-bound request key. A changed projection for
+the same date gets a new request key while retaining the same logical
+`publication_key`. A failed FIT artifact keeps its
 JSON/activity record and is retried independently through the source artifact
 reader; successful FIT bytes are written only to the local sidecar. A source
 adapter that is absent is `error`, while `none` means the source read succeeded
