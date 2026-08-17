@@ -94,14 +94,67 @@ function safeMetricValue(value) {
   return null;
 }
 
+const BLOCKED_DETAIL_KEY = /(gps|coordinate|track|telemetry|sensor|fit|token|credential|url|export|raw)/i;
+
+/** @param {unknown} value @param {number} depth @returns {any} */
+function safeDetailValue(value, depth = 0) {
+  const primitive = safeMetricValue(value);
+  if (primitive !== null) return primitive;
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth >= 3) return null;
+  const entries = Object.entries(value)
+    .filter(([key]) => !BLOCKED_DETAIL_KEY.test(key))
+    .map(([key, child]) => [key, safeDetailValue(child, depth + 1)])
+    .filter(([, child]) => child !== null && (typeof child !== "object" || Object.keys(child).length > 0));
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
 /** @param {unknown} value @returns {Record<string, any>} */
 function safeSportMetrics(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const blocked = /(gps|coordinate|track|telemetry|sensor|fit|token|credential|url|export|raw)/i;
-  return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !blocked.test(key))
-    .map(([key, metric]) => [key, safeMetricValue(metric)])
-    .filter(([, metric]) => metric !== null));
+  const safe = safeDetailValue(value);
+  return safe && typeof safe === "object" && !Array.isArray(safe) ? safe : {};
+}
+
+/** @param {Record<string, any>|null|undefined} raw @returns {any} */
+function normalizeProviderShape(raw) {
+  const source = raw?.provider_shape ?? raw?.providerShape ?? raw ?? {};
+  const columns = Array.isArray(source.columns)
+    ? source.columns.flatMap((column) => {
+      const name = stringOrNull(column?.name);
+      if (!name || BLOCKED_DETAIL_KEY.test(name)) return [];
+      return [{ name, label: redactedStringOrNull(column?.label) }];
+    }).slice(0, 200)
+    : [];
+  return {
+    mode: numberOrNull(source.mode),
+    sub_mode: numberOrNull(source.sub_mode ?? source.subMode),
+    columns,
+    sport_data_details_present: Boolean(source.sport_data_details_present ?? source.sportDataDetailsPresent ?? source.sportDataDetails),
+  };
+}
+
+/** @param {Record<string, any>|null|undefined} raw @returns {any[]} */
+function normalizeLapGroups(raw) {
+  const groups = raw?.lap_groups ?? raw?.lapGroups ?? raw?.lap_data?.lapGroups ?? raw?.lapData?.lapGroups ?? [];
+  if (!Array.isArray(groups)) return [];
+  return groups.flatMap((group) => {
+    if (!group || typeof group !== "object" || Array.isArray(group)) return [];
+    const laps = Array.isArray(group.laps) ? group.laps.flatMap((lap) => {
+      if (!lap || typeof lap !== "object" || Array.isArray(lap)) return [];
+      const lapIndex = Number(lap.lap_index ?? lap.lapIndex);
+      if (!Number.isInteger(lapIndex) || lapIndex < 0) return [];
+      const providerMetrics = safeDetailValue(lap.provider_metrics ?? lap.providerMetrics ?? {}) ?? {};
+      const normalizedMetrics = safeDetailValue(lap.normalized_metrics ?? lap.normalizedMetrics ?? {}) ?? {};
+      return [{ lap_index: lapIndex, provider_metrics: providerMetrics, normalized_metrics: normalizedMetrics }];
+    }).slice(0, 1000) : [];
+    const groupType = typeof group.group_type === "number" && Number.isFinite(group.group_type)
+      ? group.group_type
+      : redactedStringOrNull(group.group_type ?? group.groupType);
+    return [{
+      group_type: groupType,
+      lap_distance_raw: numberOrNull(group.lap_distance_raw ?? group.lapDistanceRaw ?? group.lapDistance),
+      laps,
+    }];
+  }).slice(0, 100);
 }
 
 /** @param {Record<string, any>|null|undefined} raw @returns {any} */
@@ -181,8 +234,8 @@ export function normalizeCorosActivity(raw, context) {
     data_as_of: dataAsOf,
     updated_at: instantOrNull(context.updatedAt) ?? dataAsOf,
     summary: normalizeActivitySummary(raw.summary ?? raw),
-    provider_shape: { mode: numberOrNull(raw.provider_shape?.mode), sub_mode: numberOrNull(raw.provider_shape?.sub_mode), columns: [], sport_data_details_present: Boolean(raw.provider_shape?.sport_data_details_present) },
-    lap_groups: [],
+    provider_shape: normalizeProviderShape(raw),
+    lap_groups: normalizeLapGroups(raw),
   };
 }
 
