@@ -11,11 +11,12 @@ async function agentGet(handler, token, path, extraHeaders = {}) {
 test("Agent plan reads preserve bounded projections and Athlete-local schedule rules", async () => {
   const { handler, store } = appFixture();
   const stateA = await store.getByEmail("athlete-a@example.invalid");
+  const futureEffectiveFrom = addDays(today, 8);
   stateA.plan_revisions.push({
     revision_key: opaqueKey("rev"),
     revision_sequence: 2,
     created_at: new Date().toISOString(),
-    effective_from: addDays(today, 7),
+    effective_from: futureEffectiveFrom,
     week: week(workout("未来计划")),
   });
   await store.save(stateA);
@@ -57,7 +58,7 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   const plan = await agentGet(handler, tokenA, "/api/agent/v1/plan");
   assert.equal(plan.response.status, 200);
   assert.equal(plan.body.current.effective_from, before.plan_revisions[0].effective_from);
-  assert.equal(plan.body.future[0].effective_from, addDays(today, 7));
+  assert.equal(plan.body.future[0].effective_from, futureEffectiveFrom);
   assert.deepEqual(Object.keys(plan.body.current.week).sort(), ["friday", "monday", "saturday", "sunday", "thursday", "tuesday", "wednesday"]);
   assert.equal(typeof plan.body.current.source_ref, "string");
   assert.equal(typeof plan.body.future[0].source_ref, "string");
