@@ -61,6 +61,13 @@ SyncReceiptV1 = {
   },
   records_written: { daily_hubs: number, workout_sessions: number, activities: number },
   records_published: { activities: number },
+  privacy_evidence: {
+    status: "passed"|"failed",
+    checked_at: Instant,
+    scope: "safe_cloud_projection",
+    omitted_fields: string[],
+    violations: string[]
+  },
   pending_artifacts: [{ kind: fit, activity_ref: string, relative_path: string, status: partial|error }],
   errors: StructuredError[]
 }
