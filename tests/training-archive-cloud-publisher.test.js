@@ -135,6 +135,30 @@ test("cloud publisher rejects a response for a different projection", async () =
   );
 });
 
+test("cloud publishers reject a complete response that publishes zero activities", async () => {
+  const nonEmpty = { ...projection(), activities: [{}] };
+  const publisher = createAgentAerobicProjectionPublisher({
+    origin: "https://workout.example",
+    token: "agent-token-not-for-output",
+    fetchImpl: async () => new Response(JSON.stringify({
+      schema_version: 1,
+      publication_key: nonEmpty.publication_key,
+      target_date: nonEmpty.target_date,
+      status: "complete",
+      published_count: 0,
+      activity_count: 1,
+      route_count: 0,
+      source_statuses: nonEmpty.source_statuses,
+      data_as_of: nonEmpty.data_as_of,
+    }), { status: 200 }),
+  });
+
+  await assert.rejects(
+    () => publisher(nonEmpty, { idempotency_key: "training-archive:2026-08-15:agent-zero" }),
+    (error) => error.code === "invalid_sync_response" && error.retryable === false,
+  );
+});
+
 test("authenticated publisher logs in once and forwards only the session cookie to D1 sync", async () => {
   const requests = [];
   const publisher = createAuthenticatedAerobicProjectionPublisher({

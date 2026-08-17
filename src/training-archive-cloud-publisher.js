@@ -5,6 +5,7 @@ import { WorkoutApiClient } from "../mcp/bridge.mjs";
 const AEROBIC_SYNC_PATH = "/api/private/records/aerobic/sync";
 const AGENT_AEROBIC_SYNC_PATH = "/aerobic/sync";
 const PUBLICATION_STATUSES = new Set(["complete", "none", "partial", "error"]);
+const SOURCE_STATUSES = new Set(["complete", "none", "partial", "error"]);
 
 /** @typedef {{ origin?: string, fetchImpl?: typeof fetch, credentials?: RequestCredentials }} PublisherOptions */
 
@@ -24,8 +25,7 @@ export function createAerobicProjectionPublisher(options = {}) {
 
   /** @param {any} projection @param {{ idempotency_key?: string }} [context] */
   return async function publish(projection, context = {}) {
-    const idempotencyKey = typeof context.idempotency_key === "string" ? context.idempotency_key : "";
-    if (!idempotencyKey.trim() || idempotencyKey.length > 200) throw new Error("A bounded projection idempotency key is required");
+    const idempotencyKey = projectionIdempotencyKey(context);
     const response = await fetchImpl(endpoint, {
       method: "POST",
       credentials: options.credentials ?? "include",
@@ -52,12 +52,7 @@ export function createAerobicProjectionPublisher(options = {}) {
       });
       throw error;
     }
-    return {
-      status: payload.status,
-      published_count: Number.isInteger(payload.published_count) ? payload.published_count : 0,
-      source_statuses: payload.source_statuses,
-      data_as_of: payload.data_as_of ?? null,
-    };
+    return publicationResult(payload);
   };
 }
 
@@ -76,19 +71,13 @@ export function createAgentAerobicProjectionPublisher(options = {}) {
 
   /** @param {any} projection @param {{ idempotency_key?: string }} [context] */
   return async function publish(projection, context = {}) {
-    const idempotencyKey = typeof context.idempotency_key === "string" ? context.idempotency_key : "";
-    if (!idempotencyKey.trim() || idempotencyKey.length > 200) throw new Error("A bounded projection idempotency key is required");
+    const idempotencyKey = projectionIdempotencyKey(context);
     try {
       const payload = await client.post(AGENT_AEROBIC_SYNC_PATH, { projection }, { "Idempotency-Key": idempotencyKey });
       if (!isValidPublicationResponse(payload, projection)) {
         throw Object.assign(new Error("Workout Agent sync returned an invalid response"), { code: "invalid_sync_response", retryable: false });
       }
-      return {
-        status: payload.status,
-        published_count: Number.isInteger(payload.published_count) ? payload.published_count : 0,
-        source_statuses: payload.source_statuses,
-        data_as_of: payload.data_as_of ?? null,
-      };
+      return publicationResult(payload);
     } catch (caught) {
       /** @type {any} */
       const error = caught;
@@ -181,7 +170,46 @@ function isValidPublicationResponse(payload, projection) {
     && PUBLICATION_STATUSES.has(payload.status)
     && Number.isInteger(payload.published_count)
     && payload.published_count >= 0
-    && payload.published_count <= (Array.isArray(projection?.activities) ? projection.activities.length : 0);
+    && payload.published_count <= (Array.isArray(projection?.activities) ? projection.activities.length : 0)
+    && (payload.status !== "complete" || payload.published_count === (Array.isArray(projection?.activities) ? projection.activities.length : 0))
+    && sameSourceStatuses(payload.source_statuses, projection?.source_statuses)
+    && Number.isInteger(payload.activity_count)
+    && payload.activity_count >= 0
+    && Number.isInteger(payload.route_count)
+    && payload.route_count >= 0;
+}
+
+/** @param {{ idempotency_key?: string }} context */
+function projectionIdempotencyKey(context) {
+  const idempotencyKey = typeof context.idempotency_key === "string" ? context.idempotency_key : "";
+  if (!idempotencyKey.trim() || idempotencyKey.length > 200) throw new Error("A bounded projection idempotency key is required");
+  return idempotencyKey;
+}
+
+/** @param {any} payload */
+function publicationResult(payload) {
+  return {
+    status: payload.status,
+    published_count: payload.published_count,
+    source_statuses: payload.source_statuses,
+    data_as_of: payload.data_as_of ?? null,
+  };
+}
+
+/** @param {any} actual @param {any} expected */
+function sameSourceStatuses(actual, expected) {
+  if (!isSourceStatuses(actual) || !isSourceStatuses(expected)) return false;
+  return actual.workout === expected.workout && actual.coros === expected.coros;
+}
+
+/** @param {any} value */
+function isSourceStatuses(value) {
+  return Boolean(value)
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).length === 2
+    && SOURCE_STATUSES.has(value.workout)
+    && SOURCE_STATUSES.has(value.coros);
 }
 
 /** @param {Response} response */
