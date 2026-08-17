@@ -10,6 +10,7 @@ import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, creat
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
 import { agentApplyPlanUpdate, agentManifest, agentQueryError, agentResource, agentValidatePlanUpdate } from "./agent-api.js";
 import { aerobicDetailModel, aerobicListModel } from "./training-archive.js";
+import { MAX_AEROBIC_SYNC_BODY_BYTES, syncAerobicProjection } from "./training-archive-projection.js";
 import { compactAerobicSummary, recordsOverviewModel } from "./training-records.js";
 import { routeDetailModel, routeHistoryModel, routeListModel } from "./training-routes.js";
 import { validateSettings } from "./validation.js";
@@ -217,12 +218,17 @@ function recordPeriod(url) {
 
 async function privateMutation(request, env, store, originalState, path, url, now) {
   const rawBody = await request.text();
+  if (path === "/api/private/records/aerobic/sync" && new TextEncoder().encode(rawBody).byteLength > MAX_AEROBIC_SYNC_BODY_BYTES) return jsonError("payload_too_large", "The aerobic projection body is too large", [], 413);
   const execute = async (transactionStore) => {
     const state = transactionStore === store ? originalState : await transactionStore.getByEmail(originalState.email);
     if (!state) return jsonError("forbidden", "Identity is not configured", [], 403);
     state.idempotency_records ??= [];
     const mutation = async () => {
     if (request.method === "PUT" && path === "/api/private/settings") return updateSettings(state, rawBody, now);
+    if (request.method === "POST" && path === "/api/private/records/aerobic/sync") {
+      const result = syncAerobicProjection(state, rawBody, now);
+      return result.error ? { body: errorBody(result.error.code, result.error.message, []), status: result.status ?? errorStatus(result.error.code), persist: false } : result;
+    }
     if (request.method === "POST" && path === "/api/private/plan-updates/validate") return validatePlanUpdate(state, rawBody, now);
     if (request.method === "POST" && path === "/api/private/plan-updates/apply") return applyPlanUpdate(state, rawBody, now);
     if (request.method === "POST" && path.match(/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/(start|skip)$/)) return startOrSkip(state, path, rawBody, now);
