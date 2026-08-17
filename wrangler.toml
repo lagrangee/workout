@@ -1,6 +1,7 @@
 name = "workout-tracker"
 main = "src/worker.js"
 compatibility_date = "2026-07-31"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 preview_urls = false
 routes = [{ pattern = "workout.lagrangee.xyz", custom_domain = true, previews_enabled = false }]
