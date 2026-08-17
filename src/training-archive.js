@@ -37,6 +37,36 @@ function stringOrNull(value) {
 }
 
 /** @param {unknown} value @returns {string|null} */
+export function containsSensitiveText(value) {
+  return typeof value === "string" && /(?:bearer|agent\s+token|coach\s+share|credential|password|secret|raw[_ -]?fit|gps|telemetry|sensor|export|\/Users\/|\/private\/|\/var\/|[A-Za-z]:\\|\.fit\b)/i.test(value);
+}
+
+/** @param {unknown} value @returns {string|null} */
+function redactedStringOrNull(value) {
+  const text = stringOrNull(value);
+  if (!text) return null;
+  if (containsSensitiveText(text)) return null;
+  return text;
+}
+
+/** @param {unknown} value @returns {string|null} */
+function safeTimezoneOrNull(value) {
+  try { return normalizeTimezone(value); } catch { return null; }
+}
+
+/** @param {unknown} value @returns {string} */
+export function normalizeTimezone(value) {
+  const text = stringOrNull(value) ?? "UTC";
+  if (containsSensitiveText(text) || text.startsWith("/") || text.includes("\\")) throw new Error("timezone must be a valid non-sensitive IANA timezone");
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: text }).format();
+  } catch {
+    throw new Error("timezone must be a valid non-sensitive IANA timezone");
+  }
+  return text;
+}
+
+/** @param {unknown} value @returns {string|null} */
 function instantOrNull(value) {
   if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return null;
   return new Date(value).toISOString();
@@ -59,7 +89,7 @@ export function normalizeSportType(value) {
 /** @param {unknown} value @returns {any} */
 function safeMetricValue(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "string") return redactedStringOrNull(value);
   if (typeof value === "boolean") return value;
   return null;
 }
@@ -79,7 +109,7 @@ export function normalizeActivitySummary(raw) {
   const value = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const result = Object.fromEntries(SUMMARY_FIELDS.map((field) => {
     const candidate = value[field] ?? value[field.replaceAll("_", "")];
-    if (["training_focus", "perceived_effort"].includes(field)) return [field, stringOrNull(candidate)];
+    if (["training_focus", "perceived_effort"].includes(field)) return [field, redactedStringOrNull(candidate)];
     return [field, numberOrNull(candidate)];
   }));
   result.sport_metrics = safeSportMetrics(value.sport_metrics);
@@ -91,7 +121,12 @@ function normalizeFitArtifact(raw, activityRef) {
   const value = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const status = value.status ?? value.fit_status ?? "partial";
   if (!["complete", "partial", "error"].includes(status)) throw new Error(`Unsupported FIT status for ${activityRef}: ${String(status)}`);
-  const relativePath = stringOrNull(value.relative_path) ?? `data/coros/${activityRef}.fit`;
+  const hasCandidatePath = Object.hasOwn(value, "relative_path");
+  const candidatePath = stringOrNull(value.relative_path);
+  if (hasCandidatePath && (!candidatePath || candidatePath.startsWith("/") || candidatePath.includes("\\") || /(?:\.\.|\/Users\/|\/private\/|\/var\/)/i.test(candidatePath))) {
+    throw new Error(`FIT relative_path must be a safe archive-relative path for ${activityRef}`);
+  }
+  const relativePath = candidatePath ?? `data/coros/${encodeURIComponent(activityRef)}.fit`;
   return {
     relative_path: relativePath,
     status,
@@ -108,15 +143,16 @@ function normalizeFitArtifact(raw, activityRef) {
  */
 export function normalizeCorosActivity(raw, context) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("COROS activity must be an object");
-  const activityRef = stringOrNull(raw.activity_ref ?? raw.activityRef ?? raw.labelId);
+  const timezone = normalizeTimezone(context.timezone);
+  const activityRef = redactedStringOrNull(raw.activity_ref ?? raw.activityRef ?? raw.labelId);
   if (!activityRef) throw new Error("COROS activity needs labelId/activity_ref");
   const sportType = normalizeSportType(raw.sport_type ?? raw.sportType);
   const sportName = COROS_SPORT_TYPES[sportType];
   const startedAt = instantOrNull(raw.started_at ?? raw.startedAt ?? raw.startTime);
   const endedAt = instantOrNull(raw.ended_at ?? raw.endedAt ?? raw.endTime);
-  const localDate = stringOrNull(raw.local_date) ?? (startedAt ? localDateFromInstant(startedAt, context.timezone) : context.targetDate);
+  const localDate = stringOrNull(raw.local_date) ?? (startedAt ? localDateFromInstant(startedAt, timezone) : context.targetDate);
   if (!localDate || !isValidLocalDate(localDate)) throw new Error(`COROS activity ${activityRef} needs an Athlete-local date`);
-  const routeKey = sportType === 101 ? null : stringOrNull(raw.route_key ?? raw.routeKey);
+  const routeKey = sportType === 101 ? null : redactedStringOrNull(raw.route_key ?? raw.routeKey);
   const routeDirection = routeKey && ["forward", "reverse"].includes(raw.route_direction ?? raw.routeDirection) ? (raw.route_direction ?? raw.routeDirection) : null;
   const fitFile = normalizeFitArtifact(raw.fit_file ?? raw.fitFile ?? { fit_status: raw.fit_status }, activityRef);
   const status = sourceStatus(raw.source_status ?? raw.sourceStatus ?? context.sourceStatus);
@@ -131,7 +167,7 @@ export function normalizeCorosActivity(raw, context) {
     sport_type: sportType,
     sport_name: sportName,
     local_date: localDate,
-    timezone: context.timezone,
+    timezone,
     started_at: startedAt,
     ended_at: endedAt,
     route_key: routeKey,
@@ -176,20 +212,53 @@ export function safeAerobicActivity(activity) {
 /** @param {any} state @param {any} projection @param {Date} now */
 export function publishAerobicProjection(state, projection, now = new Date()) {
   if (!projection || typeof projection !== "object" || !Array.isArray(projection.activities)) throw new Error("Aerobic projection needs an activities array");
-  const existing = new Map((state.aerobic_activities ?? []).map((activity) => [activity.activity_ref, safeAerobicActivity(activity)]));
-  for (const activity of projection.activities) {
+  const existing = new Map();
+  for (const activity of state.aerobic_activities ?? []) {
     const safe = safeAerobicActivity(activity);
-    existing.set(safe.activity_ref, safe);
+    existing.set(safe.source_ref, safe);
   }
+  const safeActivities = projection.activities.map(safeAerobicActivity);
+  for (const safe of safeActivities) existing.set(safe.source_ref, safe);
+  const sourceStatuses = projectionSourceStatuses(projection, safeActivities);
+  const aggregateStatus = aggregateSourceStatus([sourceStatuses.workout, sourceStatuses.coros]);
   state.aerobic_activities = [...existing.values()].sort(compareActivities);
   state.aerobic_projection = {
     schema_version: 1,
-    source_status: sourceStatus(projection.source_status ?? (projection.activities.length ? "complete" : "none")),
+    source_status: aggregateStatus,
+    source_statuses: sourceStatuses,
     data_as_of: instantOrNull(projection.data_as_of) ?? null,
     updated_at: now.toISOString(),
     activity_count: state.aerobic_activities.length,
+    publication_key: redactedStringOrNull(projection.publication_key),
   };
-  return { status: "complete", published_count: projection.activities.length, updated_at: state.aerobic_projection.updated_at };
+  return {
+    status: aggregateStatus,
+    published_count: safeActivities.length,
+    updated_at: state.aerobic_projection.updated_at,
+    source_statuses: sourceStatuses,
+  };
+}
+
+/** @param {string[]} statuses @returns {string} */
+function aggregateSourceStatus(statuses) {
+  const filtered = statuses.filter((status) => SOURCE_STATUSES.includes(status));
+  if (!filtered.length || filtered.every((status) => status === "none")) return "none";
+  if (filtered.every((status) => status === "complete" || status === "none")) return "complete";
+  if (filtered.some((status) => status === "partial") || filtered.some((status) => status === "error" && filtered.some((other) => other === "complete" || other === "partial"))) return "partial";
+  return "error";
+}
+
+/** @param {any} projection @returns {{ workout: string, coros: string }} */
+function projectionSourceStatuses(projection, safeActivities = []) {
+  const supplied = projection.source_statuses && typeof projection.source_statuses === "object" ? projection.source_statuses : {};
+  const sourceStatusValue = typeof projection.source_status === "string" ? projection.source_status : projection.source_status?.coros;
+  const inferredCorosStatus = safeActivities.some((activity) => activity.source_status === "error")
+    ? "error"
+    : (safeActivities.some((activity) => activity.source_status === "partial") ? "partial" : (safeActivities.length ? "complete" : "none"));
+  return {
+    workout: sourceStatus(supplied.workout ?? projection.workout_source_status ?? "none"),
+    coros: sourceStatus(supplied.coros ?? sourceStatusValue ?? inferredCorosStatus),
+  };
 }
 
 /** @param {any} state @param {URL} url @param {Date} now */
@@ -205,8 +274,9 @@ export function aerobicListModel(state, url, now = new Date()) {
     schema_version: 1,
     generated_at: now.toISOString(),
     data_as_of: source.data_as_of,
-    timezone: state.timezone,
+    timezone: safeTimezoneOrNull(state.timezone) ?? "UTC",
     source_status: source.source_status,
+    source_statuses: source.source_statuses ?? { workout: "none", coros: source.source_status },
     source_ref: "aerobic-records",
     filters: { from: filters.from, to: filters.to, sport_type: filters.sportType, limit: filters.limit },
     page: { limit: filters.limit, next_cursor: null },
@@ -219,7 +289,13 @@ export function aerobicDetailModel(state, activityRef, now = new Date()) {
   const activity = (state.aerobic_activities ?? []).find((candidate) => candidate.activity_ref === activityRef);
   if (!activity) return { error: { code: "not_found", message: "Aerobic activity not found" } };
   const safe = safeAerobicActivity(activity);
-  return { schema_version: 1, generated_at: now.toISOString(), data_as_of: safe.data_as_of, ...safe };
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    data_as_of: safe.data_as_of,
+    source_statuses: state.aerobic_projection?.source_statuses ?? { workout: "none", coros: safe.source_status },
+    ...safe,
+  };
 }
 
 /** @param {URL} url */

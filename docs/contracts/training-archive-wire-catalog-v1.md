@@ -18,6 +18,74 @@ LocalDate = "YYYY-MM-DD"
 Instant = RFC3339 instant
 SourceStatus = complete | none | partial | error
 SportType = 100 | 101 | 102 | 104 | 200
+StructuredError = {
+  source: string,
+  code: string,
+  message: string,
+  activity_ref: string|null
+}
+```
+
+## Two-stage sync receipt
+
+The local receipt is stored at `.sync/training-archive/YYYY-MM-DD.json`. It is
+the observable boundary for one user-facing `sync data` operation; local
+archive and cloud publication are separate stages and use the same stable
+`publication_key` on retries.
+
+```text
+SyncReceiptV1 = {
+  schema_version: 1,
+  sync_ref: string,
+  publication_key: string,
+  target_date: LocalDate,
+  timezone: string,
+  captured_at: Instant,
+  data_as_of: Instant|null,
+  source_data_as_of: { workout: Instant|null, coros: Instant|null },
+  source_status: { workout: SourceStatus, coros: SourceStatus },
+  status: SourceStatus,
+  local_archive: {
+    status: SourceStatus,
+    write_status: complete|error,
+    written_paths: string[],
+    fit_bytes: number,
+    reused: boolean
+  },
+  cloud_publication: {
+    status: SourceStatus,
+    published_count: number,
+    attempts: number,
+    retryable: boolean
+  },
+  records_written: { daily_hubs: number, activities: number },
+  records_published: { activities: number },
+  pending_artifacts: [{ kind: fit, activity_ref: string, relative_path: string, status: partial|error }],
+  errors: StructuredError[]
+}
+```
+
+`none` means a configured source read succeeded and returned no in-scope
+records. A missing source adapter is `error`. A failed cloud stage retains a
+safe pending projection for the next sync; a failed FIT keeps its activity JSON
+and retries only the missing local artifact when the source exposes its FIT
+reader. Neither retry duplicates activity identities or publishes raw FIT/GPS.
+
+## Safe aerobic projection
+
+```text
+AerobicProjectionV1 = {
+  schema_version: 1,
+  publication_key: string,
+  source_ref: string,
+  target_date: LocalDate,
+  timezone: string,
+  source_status: SourceStatus,
+  source_statuses: { workout: SourceStatus, coros: SourceStatus },
+  source_data_as_of: { workout: Instant|null, coros: Instant|null },
+  data_as_of: Instant|null,
+  activities: SafeAerobicActivity[]
+}
 ```
 
 ## Daily Markdown frontmatter

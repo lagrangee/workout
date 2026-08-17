@@ -12,7 +12,7 @@ export function emptyAthlete({ email, displayName, timezone }) {
     plan_revisions: [],
     sessions: [],
     aerobic_activities: [],
-    aerobic_projection: { schema_version: 1, source_status: "none", data_as_of: null, updated_at: null, activity_count: 0 },
+    aerobic_projection: { schema_version: 1, source_status: "none", source_statuses: { workout: "none", coros: "none" }, data_as_of: null, updated_at: null, activity_count: 0, publication_key: null },
     training_version: 0,
     updated_at: new Date().toISOString(),
     coach_share: null,

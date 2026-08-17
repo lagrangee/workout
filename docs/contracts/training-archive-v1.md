@@ -45,6 +45,7 @@ $WORKOUT_ARCHIVE_DIR/
   weekly/YYYY-Www.md
   data/coros/YYYY-MM-DD-<activity_ref>.json
   data/coros/YYYY-MM-DD-<activity_ref>.fit
+  .sync/training-archive/YYYY-MM-DD.json
   config/routes.json
 ```
 
@@ -104,6 +105,59 @@ local value. A normal analysis read never writes the archive.
 The operation returns a receipt containing the target date, source statuses,
 `data_as_of` values, ignored sport types, written paths, record counts, and
 structured errors. It never turns missing data into zero.
+
+The persisted receipt is the v1 two-stage sync boundary. It keeps local archive
+and cloud publication outcomes separate and is idempotent by the stable
+`publication_key` (`training-archive:<local_date>`):
+
+```text
+SyncReceiptV1 = {
+  schema_version: 1,
+  sync_ref: string,
+  publication_key: string,
+  target_date: LocalDate,
+  timezone: string,
+  captured_at: Instant,
+  data_as_of: Instant|null,
+  source_data_as_of: { workout: Instant|null, coros: Instant|null },
+  source_status: { workout: SourceStatus, coros: SourceStatus },
+  status: SourceStatus,
+  local_archive: {
+    status: SourceStatus,
+    write_status: complete|error,
+    written_paths: string[],
+    fit_bytes: number,
+    reused: boolean
+  },
+  cloud_publication: {
+    status: SourceStatus,
+    published_count: number,
+    attempts: number,
+    retryable: boolean
+  },
+  records_written: { daily_hubs: number, activities: number },
+  records_published: { activities: number },
+  pending_artifacts: [{ kind: fit, activity_ref: string, relative_path: string, status: partial|error }],
+  errors: StructuredError[]
+}
+```
+
+When the local stage succeeds and cloud publication fails, the receipt retains
+the safe pending projection and the next `sync data` run retries that
+publication with the same `publication_key`. A failed FIT artifact keeps its
+JSON/activity record and is retried independently through the source artifact
+reader; successful FIT bytes are written only to the local sidecar. A source
+adapter that is absent is `error`, while `none` means the source read succeeded
+but returned no in-scope records.
+
+```text
+StructuredError = {
+  source: string,
+  code: string,
+  message: string,
+  activity_ref: string|null
+}
+```
 
 Source status is one of:
 
