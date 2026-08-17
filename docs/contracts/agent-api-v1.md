@@ -57,6 +57,13 @@ GET /api/agent/v1/sessions[?from=&to=&limit=&cursor=&status=&exercise_key=]
 GET /api/agent/v1/sessions/:session_key
 GET /api/agent/v1/progress[?from=&to=&preset=&range=&bucket=]
 GET /api/agent/v1/exercises/:exercise_key[?from=&to=&preset=&range=]
+GET /api/agent/v1/aerobic/activities[?from=&to=&sport_type=&route_key=&limit=&cursor=]
+GET /api/agent/v1/aerobic/activities/:activity_ref
+GET /api/agent/v1/daily/:local_date
+GET /api/agent/v1/routes[?sport_type=&route_key=&limit=&cursor=]
+GET /api/agent/v1/routes/:route_key[?from=&to=&limit=&cursor=]
+GET /api/agent/v1/routes/:route_key/history[?from=&to=&limit=&cursor=]
+GET /api/agent/v1/schemas[/:schema_name]
 POST /api/agent/v1/plan-updates/validate
 POST /api/agent/v1/plan-updates/apply
 ```
@@ -107,6 +114,20 @@ history, performed-session count, per-set actuals and resistance semantics,
 side-separated series, and safe Session references. Empty valid windows remain
 successful responses with explicit empty arrays or null denominators.
 
+The aerobic activity index is newest-first and bounded to an inclusive
+Athlete-local date range of at most 3660 days. It accepts the controlled COROS
+sport type enum, a confirmed `route_key`, `limit` from 1 to 200, and an opaque
+cursor. Activity detail retains `activity_ref`, route identity/direction,
+source status and freshness, and exposes an explicit single-activity lookup
+handle for the existing Workout skill boundary. It does not perform an
+implicit live source refresh or widen the requested period.
+
+The daily context resource is an exact-date, source-separated projection of
+the daily Hub. Route index/detail/history resources expose confirmed route
+metadata and safe activity history with the same bounded date and pagination
+rules. Direction signatures, GPS, FIT paths/bytes, and high-frequency
+telemetry remain outside the Agent API.
+
 `plan-updates/validate` is non-mutating. Its request body is exactly
 `{ "package_text": string }`; the string is the canonical Plan Update Package
 v1 JSON consumed by the existing strict validator. The Agent/MCP layer does
@@ -153,10 +174,16 @@ use private no-store caching and the existing security headers.
 
 The API excludes login identity, Cloudflare identity, internal database IDs,
 Token fields, secret-backed lookup digests, ciphertext, Coach Share management,
-Session mutation, Athlete Settings mutation, goals, routes, symptoms,
-telemetry, and analysis. The non-secret `package_digest` and
+Session mutation, Athlete Settings mutation, goals, symptoms, raw FIT/GPS,
+high-frequency telemetry, and generated coaching analysis. The non-secret `package_digest` and
 `base_plan_digest` are explicit validation response fields used to identify a
 proposal and its plan base; they are not credential digests.
+
+Agent-generated weekly or coaching analysis is not written into source facts
+or returned as if it were a source projection. When explicitly requested, the
+Workout skill stores it as a separate local generated/analysis record with
+`analysis_as_of`, the bounded `source_ref` list, and the original source facts
+left unchanged. The Agent API remains read-only for that analysis boundary.
 
 ## Configuration
 

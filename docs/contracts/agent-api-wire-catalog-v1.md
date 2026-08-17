@@ -1,5 +1,13 @@
 # Agent API Wire Catalog v1
 
+```text
+SourceStatus = complete | none | partial | error
+SportType = 100 | 101 | 102 | 104 | 200
+LocalDate = "YYYY-MM-DD"
+Instant = RFC3339 instant
+IanaTimezone = string
+```
+
 ## Agent access metadata
 
 The authenticated App status response is:
@@ -36,12 +44,16 @@ AgentManifest = {
   athlete: { display_name: string, timezone: IanaTimezone },
   timezone: IanaTimezone,
   unit_conventions: { resistance: "kg_per_implement", incline: "percent" },
+  schema_catalog_url: string,
   updated_at: { plan: Instant|null, training: Instant|null },
   training_version: integer,
   query_rules: object,
   links: { overview: string, plan: string, schedule: string, sessions: string,
            progress: string, exercise: string, plan_update_validate: string,
-           plan_update_apply: string },
+           plan_update_apply: string, schemas: string,
+           aerobic_activities: string, aerobic_activity: string,
+           daily_context: string, routes: string, route: string,
+           route_history: string },
   endpoints: object,
   capabilities: ["read", "plan:write"]
 }
@@ -289,6 +301,86 @@ Period = {
   includes_to: true,
   includes_current_date: boolean,
   current_date_may_be_incomplete: boolean
+}
+
+AgentAerobicActivityIndex = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant|null,
+  source_status: SourceStatus,
+  source_statuses: { workout: SourceStatus, coros: SourceStatus },
+  source_ref: "agent:aerobic-activities",
+  timezone: IanaTimezone,
+  period: SessionPeriod,
+  filters: { from: LocalDate|null, to: LocalDate|null, sport_type: SportType|null, route_key: string|null, limit: integer },
+  page: { limit: integer, next_cursor: string|null },
+  items: SafeAerobicActivity[]
+}
+
+SafeAerobicActivity = {
+  schema_version: 1,
+  activity_ref: string,
+  source_ref: string,
+  local_date: LocalDate,
+  timezone: IanaTimezone,
+  started_at: Instant|null,
+  ended_at: Instant|null,
+  sport_type: SportType,
+  sport_name: string,
+  source_status: SourceStatus,
+  data_as_of: Instant|null,
+  route_key: string|null,
+  route_direction: forward|reverse|null,
+  route_match_status: matched|registered|unmatched|ambiguous|ignored|error,
+  fit_status: complete|partial|error|null,
+  summary: object,
+  lookup: { activity_ref: string, source_ref: string, scope: "single_activity", explicit: true }
+}
+
+AgentAerobicActivityDetail = AgentAerobicActivityIndex without `period`,
+`filters`, and `page`, with one SafeAerobicActivity and an explicit lookup
+handle. It does not include `fit_file`, GPS, or provider export URLs.
+
+AgentDailyContext = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant|null,
+  source_status: { workout: SourceStatus, coros: SourceStatus },
+  source_statuses: { workout: SourceStatus, coros: SourceStatus },
+  source_ref: string,
+  local_date: LocalDate,
+  timezone: IanaTimezone,
+  context: object
+}
+
+AgentRouteIndex = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant|null,
+  source_status: SourceStatus,
+  source_ref: "agent:routes",
+  filters: object,
+  page: { limit: integer, next_cursor: string|null },
+  items: object[]
+}
+
+AgentRouteDetail = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant|null,
+  source_status: SourceStatus,
+  source_statuses: { workout: SourceStatus, coros: SourceStatus },
+  source_ref: string,
+  route_key: string,
+  route_name: string,
+  sport_types: integer[],
+  distance_range_km: [number, number]|null,
+  activity_count: integer,
+  total_distance_km: number|null,
+  total_duration_sec: number|null,
+  history_period: { from: LocalDate|null, to: LocalDate|null },
+  page: { limit: integer, next_cursor: string|null },
+  history: object[]
 }
 ```
 
