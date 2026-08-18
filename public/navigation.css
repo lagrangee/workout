@@ -75,9 +75,45 @@
 .records-tabs {
   display: flex;
   gap: 8px;
-  margin: 0 0 18px;
+  margin: 0;
   overflow-x: auto;
   padding-bottom: 2px;
+}
+
+.records-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.records-page-heading {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.records-page-heading h1 {
+  margin-bottom: 0;
+}
+
+.records-page-heading .muted {
+  margin: 8px 0 0;
+}
+
+.records-page-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.records-page-actions .records-tabs {
+  min-width: 0;
+}
+
+.records-back-button {
+  margin-bottom: 12px;
 }
 
 .records-tab {
@@ -133,6 +169,31 @@
 
 .records-overview-day small {
   color: var(--muted);
+}
+
+.metric-grid .records-overview-metric {
+  min-width: 0;
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  color: var(--ink);
+  text-align: left;
+}
+
+button.records-overview-metric {
+  cursor: pointer;
+}
+
+button.records-overview-metric:hover,
+button.records-overview-metric:focus-visible {
+  border-color: var(--accent);
+}
+
+button.records-overview-metric:focus-visible {
+  outline: 3px solid rgba(214, 93, 63, .28);
+  outline-offset: 2px;
 }
 
 .aerobic-filters {
@@ -213,6 +274,34 @@
 .aerobic-activity-main small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.aerobic-activity-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  overflow: visible !important;
+  white-space: normal !important;
+}
+
+.aerobic-activity-title > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aerobic-activity-route {
+  flex: 0 1 42%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
 }
 
 .aerobic-activity-arrow {
@@ -339,6 +428,10 @@
   margin-top: 18px;
 }
 
+.route-panel-head + .route-list {
+  margin-top: 0;
+}
+
 .route-list-row,
 .route-history-row {
   display: flex;
@@ -418,14 +511,12 @@
   margin-top: -4px;
 }
 
-@media (min-width: 760px) {
-  .aerobic-activity-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.aerobic-date-scope {
+  margin: -8px 0 12px;
 }
 
 @media (min-width: 980px) {
-  .aerobic-route-layout {
+  .aerobic-route-layout.route-focus {
     grid-template-columns: minmax(0, 1fr) 340px;
     align-items: start;
   }

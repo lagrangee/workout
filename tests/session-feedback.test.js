@@ -8,7 +8,11 @@ import { appFixture, call, json, post, today } from "./helpers.js";
 import { addDays, weekdayKey } from "../src/util.js";
 import { createSession } from "../src/session.js";
 
-const appSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+const [formatterSource, appModuleSource] = await Promise.all([
+  readFile(new URL("../public/ui-formatters.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+]);
+const appSource = `${formatterSource.replace(/export\s+/g, "")}\n${appModuleSource.replace('import { formatActivityDateTime, formatDistanceKm } from "./ui-formatters.js";\n', "")}`;
 
 function decodeHtml(value) {
   return String(value ?? "")

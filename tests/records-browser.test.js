@@ -6,7 +6,11 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { appFixture } from "./helpers.js";
 
-const appSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+const [formatterSource, appModuleSource] = await Promise.all([
+  readFile(new URL("../public/ui-formatters.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+]);
+const appSource = `${formatterSource.replace(/export\s+/g, "")}\n${appModuleSource.replace('import { formatActivityDateTime, formatDistanceKm } from "./ui-formatters.js";\n', "")}`;
 
 function decodeHtml(value) {
   return String(value ?? "").replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -170,10 +174,9 @@ test("ticket 01 browser seam: Records aerobic tab lists partial indoor activity 
   aerobicTab.click();
   await settle();
   assert.match(browser.root.innerHTML, /有氧/);
-  assert.match(browser.root.innerHTML, /coros-indoor-1/);
-  assert.match(browser.root.innerHTML, /部分数据/);
+  assert.doesNotMatch(browser.root.querySelector('[data-action="aerobic-detail"]')?.textContent || "", /coros-indoor-1/);
+  assert.doesNotMatch(browser.root.innerHTML, /部分数据/);
   assert.match(browser.root.innerHTML, /室内运动/);
-  assert.match(browser.root.innerHTML, /无路线/);
   assert.doesNotMatch(browser.root.innerHTML, /路线历史/);
 
   const activity = browser.root.querySelector('[data-action="aerobic-detail"]');
@@ -181,8 +184,10 @@ test("ticket 01 browser seam: Records aerobic tab lists partial indoor activity 
   activity.click();
   await settle();
   assert.match(browser.root.innerHTML, /活动详情/);
-  assert.match(browser.root.innerHTML, /coros-indoor-1/);
+  assert.doesNotMatch(browser.root.innerHTML, /coros-indoor-1/);
   assert.match(browser.root.innerHTML, /FIT.*partial|FIT.*部分/);
+  assert.match(browser.root.innerHTML, /活动时间/);
+  assert.match(browser.root.innerHTML, /室内运动 · 无路线/);
   assert.doesNotMatch(browser.root.innerHTML, /raw_fit|gps|路线历史/);
 });
 
@@ -193,7 +198,7 @@ test("ticket 01 browser seam: empty aerobic projection has an explicit empty sta
   browser.root.querySelector('[data-action="records-tab"][data-tab="aerobic"]').click();
   await settle();
   assert.match(browser.root.innerHTML, /还没有有氧记录/);
-  assert.match(browser.root.innerHTML, /暂无 COROS aerobic activity/);
+  assert.match(browser.root.innerHTML, /暂无有氧记录/);
 });
 
 test("ticket 04 browser seam: route browser keeps activity context and shows history", async () => {
@@ -206,7 +211,7 @@ test("ticket 04 browser seam: route browser keeps activity context and shows his
   browser.root.querySelector('[data-action="records-tab"][data-tab="aerobic"]').click();
   await settle();
   assert.match(browser.root.innerHTML, /路线/);
-  assert.match(browser.root.innerHTML, /路线 city-loop/);
+  assert.match(browser.root.innerHTML, /city-loop/);
 
   browser.root.querySelector('[data-action="routes-open"]').click();
   await settle();
@@ -218,7 +223,7 @@ test("ticket 04 browser seam: route browser keeps activity context and shows his
   browser.root.querySelector('[data-action="route-detail"][data-route-key="city-loop"]').click();
   await settle();
   assert.ok(browser.requests.some((path) => path === "/api/private/records/routes/city-loop?limit=200"));
-  assert.match(browser.root.innerHTML, /路线历史/);
+  assert.match(browser.root.innerHTML, /历史活动/);
   assert.match(browser.root.innerHTML, /累计距离/);
   assert.match(browser.root.innerHTML, /2026-08-15/);
 
@@ -245,10 +250,9 @@ test("ticket 03 browser seam: Records opens the source-separated overview", asyn
   browser.root.querySelector('[data-view="progress"]').click();
   await settle();
   assert.match(browser.root.innerHTML, /总览/);
-  assert.match(browser.root.innerHTML, /力量与有氧各自保留来源/);
-  assert.match(browser.root.innerHTML, /Workout source/);
-  assert.match(browser.root.innerHTML, /COROS source/);
-  assert.match(browser.root.innerHTML, /不会因为 local date 相同而被判定为同一训练事件/);
+  assert.ok(browser.root.querySelector('.records-overview-metric[data-action="records-tab"][data-tab="strength"]'));
+  assert.ok(browser.root.querySelector('.records-overview-metric[data-action="records-tab"][data-tab="aerobic"]'));
+  assert.doesNotMatch(browser.root.innerHTML, /Workout source|COROS source|不会因为 local date 相同而被判定为同一训练事件/);
 });
 
 test("ticket 03 browser seam: Calendar shows a compact aerobic summary and links into the date-filtered Records list", async () => {
