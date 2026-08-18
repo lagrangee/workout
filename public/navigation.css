@@ -81,18 +81,22 @@
 }
 
 .records-page-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 14px;
+  margin-bottom: 16px;
 }
 
 .records-page-heading {
   min-width: 0;
-  flex: 1 1 auto;
 }
 
-.records-page-heading h1 {
+.records-page-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.records-page-title-row h1 {
+  min-width: 0;
   margin-bottom: 0;
 }
 
@@ -102,7 +106,7 @@
 
 .records-page-actions {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   min-width: 0;
   flex: 0 1 auto;
@@ -198,17 +202,10 @@ button.records-overview-metric:focus-visible {
 
 .aerobic-filters {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
   gap: 10px;
   margin: 0 0 16px;
-}
-
-.aerobic-filters label {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .aerobic-filters select {
@@ -367,7 +364,43 @@ button.records-overview-metric:focus-visible {
 }
 
 .routes-button {
-  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.routes-button:hover,
+.routes-button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.route-status-button {
+  min-width: 0;
+  max-width: 60%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-status-button:hover,
+.route-status-button:focus-visible {
+  border-color: var(--accent);
+}
+
+.aerobic-detail-status .status-pill {
+  margin-bottom: 0;
 }
 
 .aerobic-route-layout {
