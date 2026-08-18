@@ -1,4 +1,5 @@
 import { formatActivityDateTime, formatDistanceKm } from "./ui-formatters.js";
+import { createWorkoutTimeline } from "./workout-timeline.js";
 
 const weekdayLabels = { monday: "周一", tuesday: "周二", wednesday: "周三", thursday: "周四", friday: "周五", saturday: "周六", sunday: "周日" };
 const rpeMeanings = [
@@ -17,66 +18,18 @@ const rpeMeanings = [
 const sessionMutationActions = new Set(["start", "continue", "restart", "complete", "pause", "resume"]);
 const mutationPendingLabels = { start: "正在开始训练…", continue: "正在继续训练…", restart: "正在重新开始训练…", complete: "正在保存…", pause: "正在暂停…", resume: "正在继续…" };
 const preparationDurationSec = 5;
-const restFinalCueSeconds = 5;
 const workoutTestSeams = typeof window !== "undefined" ? window.__workoutTestSeams || {} : {};
 const clockNow = () => typeof workoutTestSeams.now === "function" ? Number(workoutTestSeams.now()) : Date.now();
-const scheduleInterval = (callback, delay) => typeof workoutTestSeams.setInterval === "function" ? workoutTestSeams.setInterval(callback, delay) : setInterval(callback, delay);
-const clearScheduledInterval = (handle) => typeof workoutTestSeams.clearInterval === "function" ? workoutTestSeams.clearInterval(handle) : clearInterval(handle);
-
-const audioSources = {
-  warmup: "/audio/workout-warmup.wav",
-  prepare: "/audio/workout-prepare.wav",
-  tempo: "/audio/workout-tempo.wav",
-  "tempo-final": "/audio/workout-tempo-final.wav",
-  complete: "/audio/workout-complete.wav",
-  "rest-complete": "/audio/workout-complete.wav",
-};
-
-function createBrowserAudio() {
-  const players = new Map();
-  const sourceFor = (kind) => audioSources[kind] || audioSources.tempo;
-  const playerFor = (kind) => {
-    if (typeof Audio !== "function") return null;
-    const source = sourceFor(kind);
-    if (!players.has(source)) {
-      const player = new Audio(source);
-      player.preload = "auto";
-      player.playsInline = true;
-      players.set(source, player);
-    }
-    return players.get(source);
-  };
-  const setPlaybackSession = () => {
-    try {
-      if (navigator.audioSession && "type" in navigator.audioSession) navigator.audioSession.type = "playback";
-    } catch {}
-  };
-  const play = (kind) => {
-    const player = playerFor(kind);
-    if (!player) return Promise.resolve({ ok: false, error: "当前浏览器不支持 HTML 音频播放" });
-    try {
-      player.pause();
-      player.currentTime = 0;
-      return Promise.resolve(player.play()).then(() => ({ ok: true })).catch((error) => ({ ok: false, error: error?.message || "音频播放被浏览器拒绝" }));
-    } catch (error) {
-      return Promise.resolve({ ok: false, error: error?.message || "音频播放失败" });
-    }
-  };
-  return {
-    activate(kind = null) {
-      setPlaybackSession();
-      return play(kind || "warmup").then((result) => ({ ...result, initialCue: Boolean(kind && result.ok) }));
-    },
-    cue(kind) {
-      setPlaybackSession();
-      return play(kind === "rest-final" ? "tempo-final" : kind);
-    },
-  };
-}
-
-const actionAudio = workoutTestSeams.audio || createBrowserAudio();
-const blankTimedAction = () => ({ itemKey: null, phase: "idle", targetSec: null, deadlineMs: null, remainingMs: null, remainingSec: null, lastCueSecond: null });
-const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, recordsTab: "overview", recordsOverview: null, recordsOverviewLoading: false, aerobic: { list: null, detail: null, loading: false, detailLoading: false, error: null, month: "all", sportType: "all", from: null, to: null, routes: null, routesOpen: false, routesLoading: false, routeDetail: null, routeDetailLoading: false, routeOrigin: null }, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, restLastCueSecond: null, restEndCuePlayed: false, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
+const countdownNow = () => typeof workoutTestSeams.now === "function" ? Number(workoutTestSeams.now()) : typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+const scheduleFrame = (callback) => typeof workoutTestSeams.requestAnimationFrame === "function" ? workoutTestSeams.requestAnimationFrame(callback) : requestAnimationFrame(callback);
+const cancelFrame = (handle) => typeof workoutTestSeams.cancelAnimationFrame === "function" ? workoutTestSeams.cancelAnimationFrame(handle) : cancelAnimationFrame(handle);
+const workoutTimeline = createWorkoutTimeline({ audioOutput: workoutTestSeams.audio || null, now: countdownNow, leadTimeMs: workoutTestSeams.audio ? 0 : 50 });
+let audioActivationGeneration = 0;
+let resumeGeneration = 0;
+let resumeRequestPromise = null;
+void workoutTimeline.prepareAudio();
+const blankTimedAction = () => ({ itemKey: null, phase: "idle", targetSec: null, deadlineMs: null, remainingMs: null, remainingSec: null });
+const state = { view: "today", today: null, todayDetail: null, plan: null, progress: null, progressRange: "current", progressLoading: false, recordsTab: "overview", recordsOverview: null, recordsOverviewLoading: false, aerobic: { list: null, detail: null, loading: false, detailLoading: false, error: null, month: "all", sportType: "all", from: null, to: null, routes: null, routesOpen: false, routesLoading: false, routeDetail: null, routeDetailLoading: false, routeOrigin: null }, calendar: { from: null, to: null, selectedDate: null, entries: [], sessions: [], expiredCount: 0 }, calendarDay: null, calendarLoading: false, calendarDayLoading: false, calendarError: null, calendarMaintenance: { pending: false, error: null }, session: null, sessionDetail: null, exercise: null, me: null, share: null, agentAccess: null, agentAccessToken: null, focusIndex: 0, progressOpen: false, feedbackOpen: null, feedbackDraft: {}, actualDrafts: {}, rirDrafts: {}, sessionMutation: { action: null, pending: false, error: null }, timedAction: blankTimedAction(), audio: { status: "idle", error: null }, muted: false, adjust: false, correction: false, sheet: false, preview: null, endSheet: false, endRpe: 8, endNote: "", endFeedback: {}, restUntil: null, restRemainingMs: null, restNextIndex: null, timerHandle: null, timerPaused: false, timerPauseReason: null, timerPauseStartedAt: null, timerPausedSec: 0, wakeLock: { sentinel: null, requestPending: false, requestId: 0, status: "idle" }, draft: "", error: null, planError: null, loading: true, authRequired: false, authMessage: "", message: "" };
 
 const app = document.querySelector("#app");
 async function api(path, options = {}) {
@@ -125,8 +78,14 @@ function audioFailureFor(result) {
   return null;
 }
 function setAudioFailure(error) {
-  if (state.audio.status === "error") return;
-  state.audio = { status: "error", error: typeof error === "string" ? error : "音频播放失败" };
+  const message = typeof error === "string" ? error : "音频播放失败";
+  if (state.audio.status === "error" && state.audio.error === message) return;
+  state.audio = { status: "error", error: message };
+  render();
+}
+function setAudioReady() {
+  if (state.audio.status === "ready" && state.audio.error === null) return;
+  state.audio = { status: "ready", error: null };
   render();
 }
 function observeAudioResult(result) {
@@ -134,11 +93,13 @@ function observeAudioResult(result) {
     return result.then((outcome) => {
       const error = audioFailureFor(outcome);
       if (error) setAudioFailure(error);
+      else setAudioReady();
       return outcome;
     }).catch((error) => { setAudioFailure(error?.message || "音频播放失败"); return { ok: false, error }; });
   }
   const error = audioFailureFor(result);
   if (error) setAudioFailure(error);
+  else setAudioReady();
   return result;
 }
 function documentIsVisible() { return typeof document === "undefined" || document.hidden !== true; }
@@ -160,10 +121,22 @@ function releaseWakeLock() {
 }
 function pauseForInterruption(reason) {
   if (!canPauseSession(reason)) return Promise.resolve(null);
-  if (state.timerPaused && state.timerPauseReason === "manual") return persistSessionPause(pauseBoundary(state.sessionDetail, clockNow()));
+  const interruptionGeneration = ++resumeGeneration;
+  invalidateAudioActivation();
+  if (state.timerPaused && state.timerPauseReason === "manual") {
+    const pendingResume = resumeRequestPromise;
+    state.timerPauseReason = reason;
+    workoutTimeline.cancel();
+    releaseWakeLock();
+    render();
+    return Promise.resolve(pendingResume).catch(() => null).then(() => {
+      if (interruptionGeneration !== resumeGeneration) return null;
+      return persistSessionPause(pauseBoundary(state.sessionDetail, clockNow()));
+    });
+  }
   const now = clockNow();
   if (!state.timerPaused) {
-    pauseExecutionTimers(now);
+    pauseExecutionTimers();
     state.timerPaused = true;
     state.timerPauseStartedAt = now;
   }
@@ -504,46 +477,35 @@ function itemLabel(detail, item) { const context = itemContext(detail, item); co
 function focusTarget(target) { if (!target) return "未指定目标"; const fixedDuration = canonicalDurationSeconds(target); if (fixedDuration != null) return `${fixedDuration} 秒`; const unit = target.metric === "reps" ? "次" : target.metric === "duration_sec" ? "秒" : target.metric; return `${target.min === target.max ? target.min : `${target.min}–${target.max}`} ${unit}`; }
 function focusResistance(resistance) { if (!resistance) return ""; if (resistance.mode === "bodyweight") return "自重"; if (resistance.mode === "external_weight") return `${resistance.load_kg ?? "—"} kg${resistance.quantity && resistance.quantity !== 1 ? ` × ${resistance.quantity}` : ""}`; return resistance.mode || "阻力未指定"; }
 function formatElapsed(detail, now = clockNow()) { const seconds = (detail?.training_intervals || []).reduce((total, interval) => { const end = interval.ended_at ? Date.parse(interval.ended_at) : state.timerPaused && state.timerPauseStartedAt ? state.timerPauseStartedAt : now; return total + Math.max(0, (end - Date.parse(interval.started_at)) / 1000); }, 0); const value = Math.max(0, Math.round(seconds)); const minutes = Math.floor(value / 60); const secs = value % 60; return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`; }
-function formatRestRemaining() { const milliseconds = state.restUntil == null ? state.restRemainingMs ?? 0 : Math.max(0, state.restUntil - clockNow()); const seconds = Math.max(0, Math.ceil(milliseconds / 1000)); const minutes = Math.floor(seconds / 60); return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`; }
-function resetTimedAction() { state.timedAction = blankTimedAction(); }
-function clearRestCountdown() { state.restUntil = null; state.restRemainingMs = null; state.restNextIndex = null; state.restLastCueSecond = null; state.restEndCuePlayed = false; }
-function pauseRestCountdown(now = clockNow()) {
+function formatRestRemaining() { const milliseconds = state.restUntil == null ? state.restRemainingMs ?? 0 : Math.max(0, state.restUntil - countdownNow()); const seconds = Math.max(0, Math.ceil(milliseconds / 1000)); const minutes = Math.floor(seconds / 60); return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`; }
+function invalidateAudioActivation() { audioActivationGeneration += 1; }
+function resetTimedAction() { invalidateAudioActivation(); state.timedAction = blankTimedAction(); workoutTimeline.cancel(); }
+function clearRestCountdown({ cancelAudio = true } = {}) { invalidateAudioActivation(); state.restUntil = null; state.restRemainingMs = null; state.restNextIndex = null; if (cancelAudio) workoutTimeline.cancel(); }
+function pauseRestCountdown(now = countdownNow()) {
   if (state.restUntil == null) return;
   state.restRemainingMs = Math.max(0, state.restUntil - now);
   state.restUntil = null;
 }
-function resumeRestCountdown(now = clockNow()) {
+function resumeRestCountdown(now = countdownNow()) {
   if (state.restRemainingMs == null) return;
-  state.restUntil = now + state.restRemainingMs;
+  const audible = !state.muted && state.audio.status === "ready";
+  const scheduled = workoutTimeline.scheduleRest({ remainingMs: state.restRemainingMs, audible });
+  state.restUntil = scheduled.endsAtMs;
   state.restRemainingMs = null;
+  if (audible) observeAudioResult(scheduled.result);
 }
-function pauseExecutionTimers(now = clockNow()) { pauseTimedAction(now); pauseRestCountdown(now); }
-function resumeExecutionTimers(now = clockNow()) { resumeTimedAction(now); resumeRestCountdown(now); }
+function pauseExecutionTimers() { invalidateAudioActivation(); pauseTimedAction(countdownNow()); pauseRestCountdown(countdownNow()); workoutTimeline.cancel(); }
+function resumeExecutionTimers() { resumeTimedAction(countdownNow()); resumeRestCountdown(countdownNow()); }
 function audioNotice() {
   if (state.muted || state.audio.status !== "error") return "";
   return `<div class="notice timed-audio-notice" role="alert"><strong>声音未开启</strong><span>提示音播放失败，计时仍可继续。请检查 iPhone 的音量和静音开关后，再点击开始动作重试。</span></div>`;
 }
-function playActionCue(kind, value) {
-  if (state.muted) return;
-  try { observeAudioResult(actionAudio.cue?.(kind, value)); } catch (error) { setAudioFailure(error?.message || "音频播放失败"); }
-}
-function emitTempoCues(timer, remainingSec) {
-  while (timer.lastCueSecond > remainingSec) {
-    timer.lastCueSecond -= 1;
-    if (timer.lastCueSecond >= 1) playActionCue(timer.lastCueSecond <= 3 ? "tempo-final" : "tempo", timer.lastCueSecond);
-  }
-}
-function emitRestCues(remainingSec) {
-  while (state.restLastCueSecond != null && state.restLastCueSecond > remainingSec) {
-    state.restLastCueSecond -= 1;
-    if (state.restLastCueSecond >= 1 && state.restLastCueSecond <= restFinalCueSeconds) playActionCue("rest-final", state.restLastCueSecond);
-  }
-}
-function updateTimedAction(now = clockNow()) {
+function updateTimedAction(now = countdownNow()) {
   const timer = state.timedAction;
   if (timer.phase !== "preparing" && timer.phase !== "active") return false;
   let shouldRender = false;
   if (timer.phase === "preparing") {
+    if (timer.deadlineMs == null) return false;
     const remainingMs = Math.max(0, (timer.deadlineMs ?? now) - now);
     timer.remainingMs = remainingMs;
     timer.remainingSec = remainingMs === 0 ? 0 : Math.ceil(remainingMs / 1000);
@@ -552,7 +514,6 @@ function updateTimedAction(now = clockNow()) {
     timer.deadlineMs += timer.targetSec * 1000;
     timer.remainingMs = timer.targetSec * 1000;
     timer.remainingSec = timer.targetSec;
-    timer.lastCueSecond = timer.targetSec + 1;
     shouldRender = true;
   }
   if (timer.phase === "active") {
@@ -560,13 +521,10 @@ function updateTimedAction(now = clockNow()) {
     const remainingSec = remainingMs === 0 ? 0 : Math.ceil(remainingMs / 1000);
     timer.remainingMs = remainingMs;
     timer.remainingSec = remainingSec;
-    emitTempoCues(timer, remainingSec);
     if (remainingSec === 0) {
       timer.phase = "complete";
       timer.deadlineMs = null;
-      timer.lastCueSecond = null;
       state.actualDrafts[timer.itemKey] = String(timer.targetSec);
-      playActionCue("complete", 0);
       shouldRender = true;
     }
   }
@@ -578,19 +536,21 @@ function startTimedAction() {
   const item = detail?.snapshot?.completion_items?.[state.focusIndex];
   const targetSec = canonicalDurationSeconds(item?.target);
   if (!detail || !item || targetSec == null || state.timerPaused || state.timedAction.phase !== "idle") return;
-  const now = clockNow();
-  state.timedAction = { itemKey: item.completion_item_key, phase: "preparing", targetSec, deadlineMs: now + preparationDurationSec * 1000, remainingMs: preparationDurationSec * 1000, remainingSec: preparationDurationSec, lastCueSecond: null };
+  const activationGeneration = ++audioActivationGeneration;
+  const itemKey = item.completion_item_key;
+  state.timedAction = { itemKey: item.completion_item_key, phase: "preparing", targetSec, deadlineMs: countdownNow() + preparationDurationSec * 1000, remainingMs: preparationDurationSec * 1000, remainingSec: preparationDurationSec };
   state.audio = state.muted ? state.audio : { status: "starting", error: null };
-  let activation;
-  try { activation = state.muted ? { ok: true, initialCue: true } : actionAudio.activate?.("prepare"); }
-  catch (error) { activation = { ok: false, error: error?.message || "音频播放失败" }; }
+  const activation = state.muted ? { ok: true } : workoutTimeline.activateAudio();
   const finish = (result) => {
+    if (activationGeneration !== audioActivationGeneration || state.timedAction.itemKey !== itemKey || state.timerPaused || !isExecutionSurface() || !documentIsVisible()) return;
     const error = audioFailureFor(result);
-    if (error) state.audio = { status: "error", error };
-    else {
-      state.audio = { status: "ready", error: null };
-      if (!result?.initialCue) playActionCue("prepare", preparationDurationSec);
-    }
+    if (!state.muted) state.audio = error ? { status: "error", error } : { status: "ready", error: null };
+    const now = countdownNow();
+    updateTimedAction(now);
+    const timer = state.timedAction;
+    if (timer.phase !== "preparing" && timer.phase !== "active") { render(); return; }
+    const scheduled = workoutTimeline.scheduleAction({ phase: timer.phase, remainingMs: Math.max(0, timer.deadlineMs - now), targetSec, audible: !state.muted && !error, alignPhaseEndAtMs: timer.deadlineMs });
+    if (!state.muted && !error) observeAudioResult(scheduled.result);
     render();
   };
   if (activation && typeof activation.then === "function") {
@@ -600,7 +560,7 @@ function startTimedAction() {
     finish(activation);
   }
 }
-function pauseTimedAction(now = clockNow()) {
+function pauseTimedAction(now = countdownNow()) {
   updateTimedAction(now);
   const timer = state.timedAction;
   if ((timer.phase === "preparing" || timer.phase === "active") && timer.deadlineMs != null) {
@@ -609,37 +569,93 @@ function pauseTimedAction(now = clockNow()) {
     timer.deadlineMs = null;
   }
 }
-function resumeTimedAction(now = clockNow()) {
+function resumeTimedAction(now = countdownNow()) {
   const timer = state.timedAction;
-  if ((timer.phase === "preparing" || timer.phase === "active") && timer.remainingMs > 0) timer.deadlineMs = now + timer.remainingMs;
+  if ((timer.phase === "preparing" || timer.phase === "active") && timer.remainingMs > 0) {
+    const audible = !state.muted && state.audio.status === "ready";
+    const scheduled = workoutTimeline.scheduleAction({ phase: timer.phase, remainingMs: timer.remainingMs, targetSec: timer.targetSec, audible });
+    timer.deadlineMs = scheduled.phaseEndsAtMs;
+    if (audible) observeAudioResult(scheduled.result);
+  }
 }
-function stopSessionClock() { if (state.timerHandle) clearScheduledInterval(state.timerHandle); state.timerHandle = null; }
+
+function rescheduleCurrentAudio() {
+  const now = countdownNow();
+  const timer = state.timedAction;
+  if ((timer.phase === "preparing" || timer.phase === "active") && timer.deadlineMs != null) {
+    const scheduled = workoutTimeline.scheduleAction({
+      phase: timer.phase,
+      remainingMs: Math.max(0, timer.deadlineMs - now),
+      targetSec: timer.targetSec,
+      alignPhaseEndAtMs: timer.deadlineMs,
+    });
+    return observeAudioResult(scheduled.result);
+  }
+  if (state.restUntil != null) {
+    const scheduled = workoutTimeline.scheduleRest({
+      remainingMs: Math.max(0, state.restUntil - now),
+      alignEndAtMs: state.restUntil,
+    });
+    return observeAudioResult(scheduled.result);
+  }
+  workoutTimeline.cancel();
+  return { ok: true };
+}
+
+async function toggleAudioMuted() {
+  if (!state.muted) {
+    invalidateAudioActivation();
+    state.muted = true;
+    workoutTimeline.cancel();
+    render();
+    return;
+  }
+  const activationGeneration = ++audioActivationGeneration;
+  state.muted = false;
+  state.audio = { status: "starting", error: null };
+  render();
+  const result = await workoutTimeline.activateAudio();
+  if (activationGeneration !== audioActivationGeneration || state.muted) return;
+  const error = audioFailureFor(result);
+  if (error) {
+    state.audio = { status: "error", error };
+    render();
+    return;
+  }
+  state.audio = { status: "ready", error: null };
+  await Promise.resolve(rescheduleCurrentAudio());
+  render();
+}
+function stopSessionClock() { if (state.timerHandle) cancelFrame(state.timerHandle); state.timerHandle = null; }
 function updateSessionClock() {
   if (!isVisibleSession()) return stopSessionClock();
-  const now = clockNow();
+  const now = countdownNow();
   if (state.restUntil) {
     const remaining = Math.max(0, Math.ceil((state.restUntil - now) / 1000));
     const element = document.querySelector("[data-rest-remaining]");
     if (element) element.textContent = formatRestRemaining();
-    emitRestCues(remaining);
     if (remaining === 0) {
-      if (!state.restEndCuePlayed) { state.restEndCuePlayed = true; playActionCue("rest-complete", 0); }
       state.focusIndex = state.restNextIndex ?? state.focusIndex;
-      clearRestCountdown();
+      clearRestCountdown({ cancelAudio: false });
       render();
     }
     return;
   }
   const shouldRender = updateTimedAction(now);
   updateActionRemaining();
-  const elapsed = formatElapsed(state.sessionDetail, now);
+  const elapsed = formatElapsed(state.sessionDetail, clockNow());
   document.querySelectorAll("[data-session-elapsed]").forEach((element) => { element.textContent = elapsed; });
   if (shouldRender) render();
+}
+function runSessionClockFrame() {
+  state.timerHandle = null;
+  updateSessionClock();
+  if (isVisibleSession() && !state.timerHandle) state.timerHandle = scheduleFrame(runSessionClockFrame);
 }
 function syncSessionClock() {
   const shouldRun = isVisibleSession();
   if (!shouldRun) return stopSessionClock();
-  if (!state.timerHandle) state.timerHandle = scheduleInterval(updateSessionClock, 250);
+  if (!state.timerHandle) state.timerHandle = scheduleFrame(runSessionClockFrame);
   updateSessionClock();
 }
 
@@ -680,9 +696,12 @@ async function toggleTimer() {
   const command = retryPause ? "pause" : state.timerPaused ? "resume" : "pause";
   if (!beginSessionMutation(command)) return;
   const now = clockNow();
+  const currentResumeGeneration = command === "resume" ? ++resumeGeneration : resumeGeneration;
+  const currentAudioGeneration = command === "resume" ? ++audioActivationGeneration : audioActivationGeneration;
+  const resumeAudio = command === "resume" && !state.muted ? workoutTimeline.activateAudio() : Promise.resolve(null);
   if (command === "pause") {
     if (!state.timerPaused) {
-      pauseExecutionTimers(now);
+      pauseExecutionTimers();
       state.timerPaused = true;
       state.timerPauseStartedAt = now;
     }
@@ -690,18 +709,36 @@ async function toggleTimer() {
     releaseWakeLock();
     render();
   }
+  let requestPromise = null;
   try {
     const closeAt = command === "pause" ? pauseBoundary(state.sessionDetail, now) : null;
     const body = closeAt ? { close_at: closeAt } : {};
-    const result = await postSessionCommand(state.sessionDetail, command, body, { keepalive: true });
+    requestPromise = postSessionCommand(state.sessionDetail, command, body, { keepalive: true });
+    if (command === "resume") resumeRequestPromise = requestPromise;
+    const result = await requestPromise;
+    if (command === "resume" && (currentResumeGeneration !== resumeGeneration || !documentIsVisible() || !isExecutionSurface())) {
+      if (state.sessionMutation.action === "resume") clearSessionMutation();
+      render();
+      return;
+    }
     syncSessionDetail(result);
     if (command === "resume") {
+      const audioResult = await resumeAudio;
+      if (currentResumeGeneration !== resumeGeneration || !documentIsVisible() || !isExecutionSurface()) {
+        if (state.sessionMutation.action === "resume") clearSessionMutation();
+        render();
+        return;
+      }
+      if (audioResult && currentAudioGeneration === audioActivationGeneration && !state.muted) {
+        const audioError = audioFailureFor(audioResult);
+        state.audio = audioError ? { status: "error", error: audioError } : { status: "ready", error: null };
+      }
       state.timerPaused = false;
       state.timerPauseReason = null;
       state.timerPauseStartedAt = null;
       state.timerPausedSec = 0;
       state.wakeLock.status = "idle";
-      resumeExecutionTimers(clockNow());
+      resumeExecutionTimers();
     } else {
       state.timerPaused = true;
       state.timerPauseReason = "manual";
@@ -710,12 +747,14 @@ async function toggleTimer() {
     render();
   } catch (error) {
     failSessionMutation(command, error);
+  } finally {
+    if (command === "resume" && resumeRequestPromise === requestPromise) resumeRequestPromise = null;
   }
   /* The server owns the active interval; the visual timers only run after a successful resume. */
   if (command === "pause") {
     stopSessionClock();
   } else if (state.timerPaused) {
-    pauseExecutionTimers(now);
+    pauseExecutionTimers();
   }
 }
 
@@ -1018,7 +1057,7 @@ async function action(name, value, date) {
       return;
     }
     if (name === "start-timed") { startTimedAction(); return; }
-    if (name === "complete" || name === "save-adjust") return await completeCurrent(); if (name === "previous") { resetTimedAction(); state.focusIndex = Math.max(0, state.focusIndex - 1); state.adjust = false; return render(); } if (name === "next") { resetTimedAction(); const max = state.sessionDetail?.snapshot?.completion_items?.length - 1 || 0; state.focusIndex = Math.min(max, state.focusIndex + 1); state.adjust = false; return render(); } if (name === "jump-item") { resetTimedAction(); state.focusIndex = Number(value); state.progressOpen = false; state.adjust = false; clearRestCountdown(); return render(); } if (name === "toggle-adjust") { state.adjust = !state.adjust; return render(); } if (name === "toggle-progress") { state.progressOpen = !state.progressOpen; return render(); } if (name === "toggle-timer") return await toggleTimer(); if (name === "toggle-mute") { state.muted = !state.muted; return render(); } if (name === "minimize") { if (!(await ensureSessionPaused("navigation"))) return; stopSessionClock(); resetTimedAction(); state.sessionDetail = null; state.progressOpen = false; state.adjust = false; state.feedbackOpen = null; clearRestCountdown(); state.endSheet = false; state.timerPaused = false; state.timerPauseStartedAt = null; state.timerPausedSec = 0; return refresh(); } if (name === "skip-rest") { resetTimedAction(); state.focusIndex = state.restNextIndex ?? state.focusIndex; clearRestCountdown(); return render(); } if (name === "open-feedback") { state.feedbackOpen = value || null; return render(); } if (name === "close-feedback") { state.feedbackOpen = null; return render(); }
+    if (name === "complete" || name === "save-adjust") return await completeCurrent(); if (name === "previous") { resetTimedAction(); state.focusIndex = Math.max(0, state.focusIndex - 1); state.adjust = false; return render(); } if (name === "next") { resetTimedAction(); const max = state.sessionDetail?.snapshot?.completion_items?.length - 1 || 0; state.focusIndex = Math.min(max, state.focusIndex + 1); state.adjust = false; return render(); } if (name === "jump-item") { resetTimedAction(); state.focusIndex = Number(value); state.progressOpen = false; state.adjust = false; clearRestCountdown(); return render(); } if (name === "toggle-adjust") { state.adjust = !state.adjust; return render(); } if (name === "toggle-progress") { state.progressOpen = !state.progressOpen; return render(); } if (name === "toggle-timer") return await toggleTimer(); if (name === "toggle-mute") return toggleAudioMuted(); if (name === "minimize") { if (!(await ensureSessionPaused("navigation"))) return; stopSessionClock(); resetTimedAction(); state.sessionDetail = null; state.progressOpen = false; state.adjust = false; state.feedbackOpen = null; clearRestCountdown(); state.endSheet = false; state.timerPaused = false; state.timerPauseStartedAt = null; state.timerPausedSec = 0; return refresh(); } if (name === "skip-rest") { resetTimedAction(); state.focusIndex = state.restNextIndex ?? state.focusIndex; clearRestCountdown(); return render(); } if (name === "open-feedback") { state.feedbackOpen = value || null; return render(); } if (name === "close-feedback") { state.feedbackOpen = null; return render(); }
     if (name === "end") { beginEndSheet(); await pauseForInterruption("end-form"); return render(); } if (name === "set-end-rpe") { state.endRpe = Number(value); return render(); } if (name === "save-end") return endCurrent(); if (name === "cancel-end") { state.endSheet = false; return render(); } if (name === "edit-session") { state.correction = true; return render(); } if (name === "cancel-correction") { state.correction = false; return render(); } if (name === "save-correction") return saveCorrection(); if (name === "open-progress-list") { state.focusIndex = 0; state.progressOpen = true; return render(); }
     if (name === "close-exercise") { state.exercise = null; state.recordsTab = "strength"; return render(); }
     if (name === "open-plan-sheet") { state.sheet = true; state.preview = null; state.error = null; state.planError = null; return render(); } if (name === "copy-current-plan") return copyCurrentPlan(); if (name === "close-sheet") { state.sheet = false; state.preview = null; state.planError = null; return render(); }
@@ -1064,11 +1103,11 @@ function showSession(detail, requestedIndex = null, options = {}) {
   state.feedbackOpen = null;
   state.feedbackDraft = Object.fromEntries((detail.exercise_feedback || []).map((item) => [item.exercise_occurrence_key, item.text]));
   const restSeconds = Number(options.restSeconds) || 0;
-  state.restUntil = restSeconds > 0 ? clockNow() + restSeconds * 1000 : null;
+  const scheduledRest = restSeconds > 0 ? workoutTimeline.scheduleRest({ remainingMs: restSeconds * 1000, audible: !state.muted && state.audio.status === "ready" }) : null;
+  state.restUntil = scheduledRest?.endsAtMs ?? null;
   state.restRemainingMs = restSeconds > 0 ? restSeconds * 1000 : null;
   state.restNextIndex = restSeconds > 0 ? options.nextIndex : null;
-  state.restLastCueSecond = restSeconds > 0 ? restSeconds + 1 : null;
-  state.restEndCuePlayed = false;
+  if (scheduledRest && !state.muted && state.audio.status === "ready") observeAudioResult(scheduledRest.result);
   state.endSheet = Boolean(options.openEnd);
   if (state.endSheet) beginEndSheet();
   state.view = "today";
@@ -1108,10 +1147,15 @@ async function completeCurrent() {
   const exerciseFeedback = Object.entries(state.feedbackDraft).map(([exercise_occurrence_key, text]) => ({ exercise_occurrence_key, text: text.trim() })).filter((item) => item.text);
   const result = { completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: Number(rawValue) }, resistance: item.resistance, rir: rirInput === "" || rirInput == null ? null : Number(rirInput), completed_at: new Date().toISOString() };
   if (!beginSessionMutation("complete")) return;
-  if (restSeconds > 0 && !state.muted) {
-    try { observeAudioResult(actionAudio.activate?.()); } catch (error) { setAudioFailure(error?.message || "音频播放失败"); }
+  const audioActivation = restSeconds > 0 && !state.muted ? workoutTimeline.activateAudio() : Promise.resolve(null);
+  const [updated, audioResult] = await Promise.all([
+    api(`/api/private/sessions/${detail.session_key}/record`, { method: "PUT", body: JSON.stringify({ record_schema_version: 1, completion_results: [...existing, result], training_intervals: detail.training_intervals, session_rpe: null, note: detail.note, exercise_feedback: exerciseFeedback, skip_reason: null }) }),
+    audioActivation,
+  ]);
+  if (audioResult) {
+    const audioError = audioFailureFor(audioResult);
+    state.audio = audioError ? { status: "error", error: audioError } : { status: "ready", error: null };
   }
-  const updated = await api(`/api/private/sessions/${detail.session_key}/record`, { method: "PUT", body: JSON.stringify({ record_schema_version: 1, completion_results: [...existing, result], training_intervals: detail.training_intervals, session_rpe: null, note: detail.note, exercise_feedback: exerciseFeedback, skip_reason: null }) });
   const savedKeys = new Set(updated.completion_results.map((saved) => saved.completion_item_key));
   const nextIndex = updated.snapshot.completion_items.findIndex((candidate, index) => index > currentIndex && !savedKeys.has(candidate.completion_item_key));
   const fallbackIndex = nextIndex >= 0 ? nextIndex : updated.snapshot.completion_items.findIndex((candidate) => !savedKeys.has(candidate.completion_item_key));

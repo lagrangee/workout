@@ -6,11 +6,14 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { appFixture } from "./helpers.js";
 
-const [formatterSource, appModuleSource] = await Promise.all([
+const [formatterSource, timelineSource, appModuleSource] = await Promise.all([
   readFile(new URL("../public/ui-formatters.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/workout-timeline.js", import.meta.url), "utf8"),
   readFile(new URL("../public/app.js", import.meta.url), "utf8"),
 ]);
-const appSource = `${formatterSource.replace(/export\s+/g, "")}\n${appModuleSource.replace('import { formatActivityDateTime, formatDistanceKm } from "./ui-formatters.js";\n', "")}`;
+const appSource = `${formatterSource.replace(/export\s+/g, "")}\n${timelineSource.replace(/export\s+/g, "")}\n${appModuleSource
+  .replace('import { formatActivityDateTime, formatDistanceKm } from "./ui-formatters.js";\n', "")
+  .replace('import { createWorkoutTimeline } from "./workout-timeline.js";\n', "")}`;
 
 function decodeHtml(value) {
   return String(value ?? "").replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -88,6 +91,8 @@ async function openBrowser(handler, requests = []) {
     fetch: server,
     setInterval: () => 1,
     clearInterval() {},
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame() {},
     setTimeout,
     clearTimeout,
     console,

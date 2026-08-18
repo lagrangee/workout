@@ -8,11 +8,14 @@ import { appFixture, call, json, post, today } from "./helpers.js";
 import { addDays, weekdayKey } from "../src/util.js";
 import { createSession } from "../src/session.js";
 
-const [formatterSource, appModuleSource] = await Promise.all([
+const [formatterSource, timelineSource, appModuleSource] = await Promise.all([
   readFile(new URL("../public/ui-formatters.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/workout-timeline.js", import.meta.url), "utf8"),
   readFile(new URL("../public/app.js", import.meta.url), "utf8"),
 ]);
-const appSource = `${formatterSource.replace(/export\s+/g, "")}\n${appModuleSource.replace('import { formatActivityDateTime, formatDistanceKm } from "./ui-formatters.js";\n', "")}`;
+const appSource = `${formatterSource.replace(/export\s+/g, "")}\n${timelineSource.replace(/export\s+/g, "")}\n${appModuleSource
+  .replace('import { formatActivityDateTime, formatDistanceKm } from "./ui-formatters.js";\n', "")
+  .replace('import { createWorkoutTimeline } from "./workout-timeline.js";\n', "")}`;
 
 function decodeHtml(value) {
   return String(value ?? "")
@@ -134,7 +137,10 @@ function responseError(message, status = 503) {
 function deterministicClock() {
   let current = Date.now();
   let nextIntervalId = 0;
+  let nextFrameId = 0;
   const intervals = new Map();
+  const frames = new Map();
+  const advanceHandlers = new Set();
   return {
     now: () => current,
     setInterval(callback) {
@@ -143,8 +149,19 @@ function deterministicClock() {
       return id;
     },
     clearInterval(id) { intervals.delete(id); },
+    requestAnimationFrame(callback) {
+      const id = ++nextFrameId;
+      frames.set(id, callback);
+      return id;
+    },
+    cancelAnimationFrame(id) { frames.delete(id); },
+    onAdvance(handler) { advanceHandlers.add(handler); },
     advance(milliseconds) {
       current += milliseconds;
+      for (const handler of advanceHandlers) handler(current);
+      const pendingFrames = [...frames.values()];
+      frames.clear();
+      for (const callback of pendingFrames) callback(current);
       for (const callback of intervals.values()) callback();
     },
   };
@@ -212,16 +229,33 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
   const navigator = { clipboard: { writeText: async () => {} }, ...(options.wakeLock ? { wakeLock: options.wakeLock } : {}) };
   const clock = options.clock ?? null;
   const audioEvents = options.audioEvents ?? [];
+  let scheduledAudioEvents = [];
+  const flushScheduledAudio = () => {
+    const due = scheduledAudioEvents.filter((event) => event.atMs <= clock.now());
+    scheduledAudioEvents = scheduledAudioEvents.filter((event) => event.atMs > clock.now());
+    for (const event of due) audioEvents.push({ type: "cue", kind: event.kind, value: event.value, at: event.atMs });
+  };
+  const defaultAudio = clock ? {
+    prepare: () => ({ ok: true }),
+    activate: () => { audioEvents.push({ type: "activate" }); return { ok: true }; },
+    replace: (events) => {
+      scheduledAudioEvents = [...events];
+      flushScheduledAudio();
+      return { ok: true };
+    },
+    cancel: () => { scheduledAudioEvents = []; },
+  } : null;
+  if (clock && !options.audio) clock.onAdvance(flushScheduledAudio);
   const testSeams = clock ? {
     now: clock.now,
     setInterval: clock.setInterval,
     clearInterval: clock.clearInterval,
-    audio: options.audio ?? {
-      activate: () => audioEvents.push({ type: "activate" }),
-      cue: (kind, value) => audioEvents.push({ type: "cue", kind, value }),
-    },
+    requestAnimationFrame: clock.requestAnimationFrame,
+    cancelAnimationFrame: clock.cancelAnimationFrame,
+    audio: options.audio ?? defaultAudio,
   } : null;
   let intervalId = 0;
+  let frameId = 0;
   const context = {
     document,
     window: { location: { hostname: "localhost" }, ...(testSeams ? { __workoutTestSeams: testSeams } : {}) },
@@ -231,6 +265,8 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
     fetch: fetchImpl,
     setInterval: () => ++intervalId,
     clearInterval: () => {},
+    requestAnimationFrame: testSeams?.requestAnimationFrame ?? (() => ++frameId),
+    cancelAnimationFrame: testSeams?.cancelAnimationFrame ?? (() => {}),
     setTimeout,
     clearTimeout,
     console,
@@ -246,7 +282,7 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
 }
 
 async function settle() {
-  for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  for (let index = 0; index < 16; index += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
 async function seedPartialSession(handler) {
@@ -561,6 +597,7 @@ test("browser seam: visibility loss pauses timed execution and foreground recove
   assert.deepEqual(wakeLock.requests, ["screen"]);
 
   browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
   clock.advance(5000);
   const remainingBeforeHidden = browser.root.querySelector('[data-action-remaining]').textContent;
   const sessionElapsedBeforeHidden = browser.root.querySelector("[data-session-elapsed]").textContent;
@@ -584,6 +621,86 @@ test("browser seam: visibility loss pauses timed execution and foreground recove
   assert.equal(browser.root.querySelector('[data-action="toggle-timer"]').textContent, "暂停", browser.root.innerHTML);
   clock.advance(1000);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "04");
+});
+
+test("browser seam: visibility loss during resume keeps client and server paused", async () => {
+  const fixture = timedAppFixture();
+  const clock = deterministicClock();
+  const schedules = [];
+  let releaseResume;
+  const browser = await openBrowser(fixture.handler, async ({ path, server }) => {
+    if (path.endsWith("/resume")) return new Promise((resolve) => { releaseResume = () => server().then(resolve); });
+    return null;
+  }, {
+    clock,
+    audio: {
+      activate: () => ({ ok: true }),
+      replace: (events) => { schedules.push(events); return { ok: true }; },
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="toggle-timer"]').click();
+  await settle();
+  schedules.length = 0;
+
+  browser.root.querySelector('[data-action="toggle-timer"]').click();
+  await settle();
+  browser.context.document.hidden = true;
+  browser.context.document.dispatchEvent({ type: "visibilitychange" });
+  await settle();
+  releaseResume();
+  await settle();
+
+  assert.equal(browser.root.querySelector('[data-action="toggle-timer"]').textContent, "继续");
+  assert.equal(schedules.length, 0);
+  const stored = await fixture.store.getByEmail("athlete-a@example.invalid");
+  assert.ok(stored.sessions[0].training_intervals.at(-1).ended_at);
+});
+
+test("browser seam: delayed resume audio cannot restart a hidden session", async () => {
+  const fixture = timedAppFixture();
+  const clock = deterministicClock();
+  const schedules = [];
+  let activationCount = 0;
+  let resolveResumeAudio;
+  const browser = await openBrowser(fixture.handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => {
+        activationCount += 1;
+        if (activationCount === 1) return { ok: true };
+        return new Promise((resolve) => { resolveResumeAudio = resolve; });
+      },
+      replace: (events) => { schedules.push(events); return { ok: true }; },
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="toggle-timer"]').click();
+  await settle();
+  schedules.length = 0;
+
+  browser.root.querySelector('[data-action="toggle-timer"]').click();
+  await settle();
+  browser.context.document.hidden = true;
+  browser.context.document.dispatchEvent({ type: "visibilitychange" });
+  await settle();
+  resolveResumeAudio({ ok: true });
+  await settle();
+
+  assert.equal(browser.root.querySelector('[data-action="toggle-timer"]').textContent, "继续");
+  assert.equal(schedules.length, 0);
+  const stored = await fixture.store.getByEmail("athlete-a@example.invalid");
+  assert.ok(stored.sessions[0].training_intervals.at(-1).ended_at);
 });
 
 test("browser seam: Wake Lock release pauses active execution and manual continue can recover", async () => {
@@ -654,8 +771,9 @@ test("browser seam: fixed duration runs preparation and tempo cues, pauses with 
   const startAction = browser.root.querySelector('[data-action="start-timed"]');
   assert.ok(startAction);
   startAction.click();
+  await settle();
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
-  assert.deepEqual(audioEvents, [{ type: "activate" }, { type: "cue", kind: "prepare", value: 5 }]);
+  assert.deepEqual(audioEvents.map(({ type, kind, value }) => ({ type, ...(kind ? { kind, value } : {}) })), [{ type: "activate" }, { type: "cue", kind: "prepare", value: 5 }]);
 
   clock.advance(5000);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
@@ -740,7 +858,6 @@ test("browser seam: audio initialization failure is visible while visual timing 
     clock,
     audio: {
       activate: () => Promise.resolve({ ok: false, error: "音频播放被浏览器拒绝" }),
-      cue: () => Promise.resolve({ ok: false, error: "音频播放被浏览器拒绝" }),
     },
   });
 
@@ -752,4 +869,211 @@ test("browser seam: audio initialization failure is visible while visual timing 
   assert.match(browser.root.innerHTML, /声音未开启/);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
   assert.equal(browser.root.querySelector('[data-action="start-timed"]').disabled, true);
+});
+
+test("browser seam: unmuting retries audio activation and clears a stale playback error", async () => {
+  const { handler } = timedAppFixture();
+  const clock = deterministicClock();
+  let activationAttempts = 0;
+  const browser = await openBrowser(handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => Promise.resolve(++activationAttempts === 1
+        ? { ok: false, error: "音频播放被浏览器拒绝" }
+        : { ok: true }),
+      replace: () => ({ ok: true }),
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
+  assert.match(browser.root.innerHTML, /声音未开启/);
+
+  browser.root.querySelector('[data-action="toggle-mute"]').click();
+  browser.root.querySelector('[data-action="toggle-mute"]').click();
+  await settle();
+
+  assert.equal(activationAttempts, 2);
+  assert.doesNotMatch(browser.root.innerHTML, /声音未开启/);
+});
+
+test("browser seam: action cues are pre-scheduled on the countdown timeline", async () => {
+  const { handler } = timedAppFixture();
+  const clock = deterministicClock();
+  const schedules = [];
+  const browser = await openBrowser(handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => ({ ok: true }),
+      replace: (events) => { schedules.push(events); return { ok: true }; },
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
+
+  assert.equal(schedules.length, 1);
+  const events = schedules[0];
+  assert.deepEqual(Array.from(events, (event) => [event.kind, event.value]), [
+    ["prepare", 5],
+    ["tempo", 5],
+    ["tempo", 4],
+    ["tempo-final", 3],
+    ["tempo-final", 2],
+    ["tempo-final", 1],
+    ["complete", 0],
+  ]);
+  assert.deepEqual(Array.from(events).slice(1).map((event, index) => event.atMs - events[index].atMs), [5000, 1000, 1000, 1000, 1000, 1000]);
+
+  const completeAt = events.at(-1).atMs;
+  clock.advance(completeAt - clock.now());
+  assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "00");
+});
+
+test("browser seam: delayed UI callbacks never catch-up play missed cues", async () => {
+  const { handler } = timedAppFixture();
+  const clock = deterministicClock();
+  const schedules = [];
+  const browser = await openBrowser(handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => ({ ok: true }),
+      replace: (events) => { schedules.push(events); return { ok: true }; },
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
+  assert.equal(schedules.length, 1);
+  clock.advance(5000);
+
+  clock.advance(2200);
+  assert.equal(schedules.length, 1);
+});
+
+test("browser seam: pausing while audio activation is pending cannot re-arm cancelled cues", async () => {
+  const { handler } = timedAppFixture();
+  const clock = deterministicClock();
+  const schedules = [];
+  let resolveActivation;
+  const browser = await openBrowser(handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => new Promise((resolve) => { resolveActivation = resolve; }),
+      replace: (events) => { schedules.push(events); return { ok: true }; },
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  browser.context.document.hidden = true;
+  browser.context.document.dispatchEvent({ type: "visibilitychange" });
+  await settle();
+  resolveActivation({ ok: true });
+  await settle();
+
+  assert.equal(schedules.length, 0);
+  assert.match(browser.root.innerHTML, /页面已离开前台，计时已暂停/);
+  assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
+});
+
+test("browser seam: preparation countdown starts immediately while audio activation is pending", async () => {
+  const { handler } = timedAppFixture();
+  const clock = deterministicClock();
+  const schedules = [];
+  let resolveActivation;
+  const browser = await openBrowser(handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => new Promise((resolve) => { resolveActivation = resolve; }),
+      replace: (events) => { schedules.push(events); return { ok: true }; },
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  const startedAt = clock.now();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  clock.advance(2000);
+
+  assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "03");
+  resolveActivation({ ok: true });
+  await settle();
+
+  assert.equal(schedules.length, 1);
+  assert.equal(schedules[0][0].kind, "prepare");
+  assert.equal(schedules[0].at(-1).atMs, startedAt + 10000);
+});
+
+test("browser seam: muting again invalidates an in-flight unmute activation", async () => {
+  const { handler } = timedAppFixture();
+  const clock = deterministicClock();
+  const schedules = [];
+  let activationCount = 0;
+  let resolveUnmute;
+  const browser = await openBrowser(handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => {
+        activationCount += 1;
+        if (activationCount === 1) return { ok: true };
+        return new Promise((resolve) => { resolveUnmute = resolve; });
+      },
+      replace: (events) => { schedules.push(events); return { ok: true }; },
+      cancel: () => {},
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="start-timed"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="toggle-mute"]').click();
+  schedules.length = 0;
+
+  browser.root.querySelector('[data-action="toggle-mute"]').click();
+  browser.root.querySelector('[data-action="toggle-mute"]').click();
+  resolveUnmute({ ok: true });
+  await settle();
+
+  assert.equal(browser.root.querySelector('[data-action="toggle-mute"]').attributes["aria-pressed"], "true");
+  assert.equal(schedules.length, 0);
+});
+
+test("browser seam: natural rest completion does not cancel the completion sound tail", async () => {
+  const fixture = appFixture();
+  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 1;
+  const clock = deterministicClock();
+  let cancelCount = 0;
+  const browser = await openBrowser(fixture.handler, async () => null, {
+    clock,
+    audio: {
+      activate: () => ({ ok: true }),
+      replace: () => ({ ok: true }),
+      cancel: () => { cancelCount += 1; },
+    },
+  });
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="complete"]').click();
+  await settle();
+  const cancelCountAtRestStart = cancelCount;
+
+  clock.advance(1000);
+
+  assert.doesNotMatch(browser.root.innerHTML, /组间休息/);
+  assert.equal(cancelCount, cancelCountAtRestStart);
 });
