@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 import { runStdio } from "./cli.mjs";
 
 const DEFAULT_CONFIG_FILE = join(homedir(), ".config", "workout-agent", "agent.env");
-const CONFIG_KEYS = ["WORKOUT_AGENT_API_ORIGIN", "WORKOUT_AGENT_TOKEN"];
+const REQUIRED_CONFIG_KEYS = ["WORKOUT_AGENT_API_ORIGIN", "WORKOUT_AGENT_TOKEN"];
+const OPTIONAL_CONFIG_KEYS = ["WORKOUT_ARCHIVE_DIR"];
+const CONFIG_KEYS = [...REQUIRED_CONFIG_KEYS, ...OPTIONAL_CONFIG_KEYS];
 
 /**
  * Read the user-owned MCP configuration without echoing its values.
@@ -44,7 +46,7 @@ export async function loadAgentConfig(configPath = process.env.WORKOUT_AGENT_CON
     if (Object.hasOwn(values, key)) throw new Error(`Workout MCP configuration key is duplicated: ${key}`);
     values[key] = value;
   }
-  for (const key of CONFIG_KEYS) if (!Object.hasOwn(values, key)) throw new Error(`Workout MCP configuration key is missing: ${key}`);
+  for (const key of REQUIRED_CONFIG_KEYS) if (!Object.hasOwn(values, key)) throw new Error(`Workout MCP configuration key is missing: ${key}`);
   return values;
 }
 

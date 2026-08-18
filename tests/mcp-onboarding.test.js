@@ -35,6 +35,20 @@ test("local MCP onboarding reads origin and credential from an owner-only file",
   );
 });
 
+test("local MCP onboarding accepts an optional training archive path", async () => {
+  await withConfig(
+    "WORKOUT_AGENT_API_ORIGIN=https://workout.example\nWORKOUT_AGENT_TOKEN=local-test-token\nWORKOUT_ARCHIVE_DIR=/private/tmp/training\n",
+    0o600,
+    async (path) => {
+      assert.deepEqual(await loadAgentConfig(path), {
+        WORKOUT_AGENT_API_ORIGIN: "https://workout.example",
+        WORKOUT_AGENT_TOKEN: "local-test-token",
+        WORKOUT_ARCHIVE_DIR: "/private/tmp/training",
+      });
+    },
+  );
+});
+
 test("local MCP onboarding reports missing configuration without exposing a credential", async () => {
   await assert.rejects(
     loadAgentConfig("/private/tmp/workout-agent-config-does-not-exist"),
