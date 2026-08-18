@@ -248,6 +248,7 @@ button.records-overview-metric:focus-visible {
   display: grid;
   gap: 5px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .aerobic-activity-main strong,
@@ -283,6 +284,7 @@ button.records-overview-metric:focus-visible {
 }
 
 .aerobic-activity-title > strong {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -290,7 +292,8 @@ button.records-overview-metric:focus-visible {
 }
 
 .aerobic-activity-route {
-  flex: 0 1 42%;
+  flex: 0 0 auto;
+  max-width: 42%;
   min-width: 0;
   overflow: hidden;
   color: var(--muted) !important;
@@ -1126,6 +1129,7 @@ button[aria-busy="true"] {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-top: 18px;
+  margin-bottom: 16px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 14px;
