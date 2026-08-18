@@ -57,8 +57,16 @@ GET /api/agent/v1/sessions[?from=&to=&limit=&cursor=&status=&exercise_key=]
 GET /api/agent/v1/sessions/:session_key
 GET /api/agent/v1/progress[?from=&to=&preset=&range=&bucket=]
 GET /api/agent/v1/exercises/:exercise_key[?from=&to=&preset=&range=]
+GET /api/agent/v1/aerobic/activities[?from=&to=&sport_type=&route_key=&limit=&cursor=]
+GET /api/agent/v1/aerobic/activities/:activity_ref
+GET /api/agent/v1/daily/:local_date
+GET /api/agent/v1/routes[?sport_type=&route_key=&limit=&cursor=]
+GET /api/agent/v1/routes/:route_key[?from=&to=&limit=&cursor=]
+GET /api/agent/v1/routes/:route_key/history[?from=&to=&limit=&cursor=]
+GET /api/agent/v1/schemas[/:schema_name]
 POST /api/agent/v1/plan-updates/validate
 POST /api/agent/v1/plan-updates/apply
+POST /api/agent/v1/aerobic/sync
 ```
 
 The versioned wire shapes are defined in
@@ -107,6 +115,24 @@ history, performed-session count, per-set actuals and resistance semantics,
 side-separated series, and safe Session references. Empty valid windows remain
 successful responses with explicit empty arrays or null denominators.
 
+The aerobic activity index is newest-first and bounded to an inclusive
+Athlete-local date range of at most 3660 days. It accepts the controlled COROS
+sport type enum, a confirmed `route_key`, `limit` from 1 to 200, and an opaque
+cursor. Activity detail retains `activity_ref`, route identity/direction,
+source status and freshness, and exposes an explicit single-activity lookup
+handle for the existing Workout skill boundary. It does not perform an
+implicit live source refresh or widen the requested period.
+
+The daily context resource is an exact-date, source-separated projection of
+the daily Hub. Its `sync_evidence` is `synced` only when that exact local date
+has a persisted archive publication record; otherwise it is `not_synced`.
+When a date has a newer publication status, that status and freshness take
+precedence over older activity rows retained for historical context. Route
+index/detail/history resources expose confirmed route metadata and safe activity
+history with the same bounded date and pagination
+rules. Direction signatures, GPS, FIT paths/bytes, and high-frequency
+telemetry remain outside the Agent API.
+
 `plan-updates/validate` is non-mutating. Its request body is exactly
 `{ "package_text": string }`; the string is the canonical Plan Update Package
 v1 JSON consumed by the existing strict validator. The Agent/MCP layer does
@@ -122,7 +148,7 @@ past/current effective dates, duplicate members, and semantic no-ops return
 field-addressed `invalid_plan_package` errors without changing Plan Revision
 history or Current Plan state.
 
-`plan-updates/apply` is the only mutating Agent operation. Its request body is
+`plan-updates/apply` is the mutating Agent operation for Plan state. Its request body is
 exactly `{ "package_text": string, "package_digest": string,
 "base_plan_digest": string, "confirmed": true }` and it additionally
 requires a non-empty `Idempotency-Key` header. Idempotency records are retained
@@ -144,6 +170,19 @@ seven-day Schedule starting at `effective_from`; if that readback is
 temporarily unavailable, it reports the applied result with a structured
 readback failure rather than retrying or applying again.
 
+`aerobic/sync` is the mutating Agent operation for the safe Training Archive
+projection. Its request body is exactly `{ "projection": AerobicProjectionV1 }`
+and it requires a non-empty `Idempotency-Key` header. It applies the same strict
+projection validator and D1 mutation used by the private application-session
+boundary; the Agent path is the preferred transport for the local sync runner,
+while the private path remains the browser/compatibility adapter. Idempotency
+records are retained for 24 hours. The projection may contain source summaries,
+route references, and provenance, but never raw provider payloads, FIT bytes,
+GPS/coordinates, high-frequency telemetry, or local paths. A successful `200`
+response is the safe publication receipt; invalid projection, conflicting key,
+or concurrent state errors return `invalid_projection`, `idempotency_conflict`,
+or `session_state_conflict` without a partial write.
+
 ## Response and privacy rules
 
 Successful responses use structured JSON and include `schema_version`,
@@ -153,10 +192,16 @@ use private no-store caching and the existing security headers.
 
 The API excludes login identity, Cloudflare identity, internal database IDs,
 Token fields, secret-backed lookup digests, ciphertext, Coach Share management,
-Session mutation, Athlete Settings mutation, goals, routes, symptoms,
-telemetry, and analysis. The non-secret `package_digest` and
+Session mutation, Athlete Settings mutation, goals, symptoms, raw FIT/GPS,
+high-frequency telemetry, and generated coaching analysis. The non-secret `package_digest` and
 `base_plan_digest` are explicit validation response fields used to identify a
 proposal and its plan base; they are not credential digests.
+
+Agent-generated weekly or coaching analysis is not written into source facts
+or returned as if it were a source projection. When explicitly requested, the
+Workout skill stores it as a separate local generated/analysis record with
+`analysis_as_of`, the bounded `source_ref` list, and the original source facts
+left unchanged. The Agent API remains read-only for that analysis boundary.
 
 ## Configuration
 

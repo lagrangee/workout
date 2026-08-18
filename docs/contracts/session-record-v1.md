@@ -69,18 +69,24 @@ are invalid.
 ## Intervals and Session Fields
 
 Interval keys are stable and unique. Instants are RFC 3339 UTC,
-`ended_at > started_at`, and intervals cannot overlap. An `in_progress`
-Session has exactly one open interval and it is last. Terminal Sessions have
-no open interval. The server derives
+`ended_at > started_at`, and intervals cannot overlap. An actively executing
+`in_progress` Session has exactly one open interval and it is last; a paused
+`in_progress` Session has no open interval. Terminal Sessions also have no
+open interval. The server derives
 `training_duration_sec`; clients never submit it.
 
 Start, continue, and restart commands create the interval and return its
-server-issued `interval_key`. Record replacement may adjust or remove an
-existing interval. A terminal correction may add a closed interval with a
-client-generated UUID v4 key; an in-progress replacement cannot invent a new
-open interval and must preserve the server-issued open key with
-`ended_at: null`. Completed and partial Sessions retain at least one closed
-interval.
+server-issued `interval_key`. `POST .../pause` closes the active interval and
+leaves the Session `in_progress`; it is idempotent when the Session is already
+paused. `POST .../resume` opens a new server-issued interval for today's
+paused Session; a repeated resume while an interval is already open returns the
+current Session without opening a second interval. Record replacement may adjust or remove an existing interval
+only while an active open interval exists; a paused in-progress Session must
+resume before recording a Completion Item. A terminal correction may add a
+closed interval with a client-generated UUID v4 key; an in-progress replacement
+cannot invent a new open interval and must preserve the server-issued open key
+with `ended_at: null`. Completed and partial Sessions retain at least one
+closed interval.
 
 For `PUT .../record`, Session RPE is `null` while in progress or skipped and
 integer `0–10` only when completed or partial. For `POST .../end`, validation
@@ -119,7 +125,23 @@ complete shape above:
 
 `ended_at` is a required RFC 3339 UTC instant and closes its one open interval; it cannot precede the
 interval start or be more than five minutes in the future. The write is atomic
-and derives `completed` at 100 percent or `partial` below 100 percent.
+and derives `completed` at 100 percent or `partial` below 100 percent. A
+paused in-progress Session has no open interval to close and may end directly
+with its already-closed intervals.
+
+`POST .../pause` accepts `{ "close_at": "..." }` or `{}` and closes the
+server-owned open interval without changing Session status. `POST .../resume`
+accepts `{}` and creates a fresh open interval only for today's paused
+in-progress Session. Both commands require an `Idempotency-Key` and return the
+complete Session detail.
+
+The private Calendar maintenance command `POST /api/private/sessions/normalize-expired`
+is the one explicit exception to the normal end derivation: for an `in_progress`
+Session whose Scheduled Workout date is earlier than the Athlete's current local
+date, it closes the open interval at the last persisted Session activity time and
+sets status to `partial` without deriving `completed`. It requires an
+`Idempotency-Key`, is Athlete-scoped, and is safe to replay. No background job
+performs this normalization.
 
 Terminal correction uses `PUT .../record`, requires all intervals closed, and
 rederives completion and status. A skipped Session permits only note and skip

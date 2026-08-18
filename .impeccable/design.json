@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-11T00:00:00+08:00",
+  "title": "Design System: Workout Tracker",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "柔和陶土橙",
+        "canonical": "#d65d3f",
+        "tonalRamp": ["#3d1710", "#6c281d", "#953a2a", "#b64d36", "#d65d3f", "#e78068", "#f3ad9a", "#fbd8cc"]
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "深陶土橙",
+        "canonical": "#a8432c",
+        "tonalRamp": ["#32120d", "#5a2118", "#7f3025", "#a8432c", "#c55a42", "#dd806d", "#efaea0", "#f9d7d0"]
+      },
+      "green": {
+        "role": "tertiary",
+        "displayName": "恢复绿",
+        "canonical": "#477a5d",
+        "tonalRamp": ["#10251a", "#1e432d", "#2f6041", "#477a5d", "#679477", "#8cb29a", "#b5d0bc", "#dcebe0"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "墨色",
+        "canonical": "#26231f",
+        "tonalRamp": ["#0f0d0c", "#26231f", "#48413a", "#6b6259", "#8b837c", "#aaa39d", "#cbc6c1", "#ebe9e7"]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "静音灰",
+        "canonical": "#787168",
+        "tonalRamp": ["#1a1816", "#33302c", "#4e4944", "#67615b", "#787168", "#9f9992", "#c2bdb7", "#e5e2df"]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "纸张底色",
+        "canonical": "#f6f1e8",
+        "tonalRamp": ["#2e241c", "#4d3e32", "#6d5a49", "#8d7762", "#ac9580", "#c9b7a3", "#e2d4c5", "#f6f1e8"]
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "内容卡片",
+        "canonical": "#fffdf8",
+        "tonalRamp": ["#302d27", "#514d46", "#726e65", "#949087", "#b6b2a9", "#d4d0c7", "#ebe7df", "#fffdf8"]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "细线",
+        "canonical": "#e6ddd0",
+        "tonalRamp": ["#33291e", "#55483a", "#766656", "#998877", "#b7a99a", "#cbbfb2", "#d9cfc3", "#e6ddd0"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "页面主标题",
+        "purpose": "Today、登录和页面主标题的单一 sans-serif 层级。"
+      },
+      "headline": {
+        "displayName": "执行标题",
+        "purpose": "当前 Completion Item、休息计时和重要执行上下文。"
+      },
+      "title": {
+        "displayName": "分区标题",
+        "purpose": "卡片、训练模块和页面分区标题。"
+      },
+      "body": {
+        "displayName": "正文",
+        "purpose": "说明、处方和历史趋势内容。"
+      },
+      "label": {
+        "displayName": "操作标签",
+        "purpose": "按钮、状态、导航和元数据。"
+      }
+    },
+    "shadows": [
+      {
+        "name": "content-ambient",
+        "value": "0 18px 45px rgba(74, 52, 30, .08)",
+        "purpose": "Established content cards such as Today plan, focus card, calendar detail and summary card."
+      },
+      {
+        "name": "selected-state",
+        "value": "0 8px 20px rgba(214, 93, 63, .12)",
+        "purpose": "Short-lived emphasis for selected or hovered calendar states."
+      },
+      {
+        "name": "subtle-control",
+        "value": "0 3px 9px rgba(38, 35, 31, .08)",
+        "purpose": "Selected tabs and small active controls."
+      }
+    ],
+    "motion": [
+      {
+        "name": "loading-spin",
+        "value": "1s linear",
+        "purpose": "Existing loading spinner only; future state motion should remain brief and respect reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact-mobile",
+        "value": "520px"
+      },
+      {
+        "name": "wide-content",
+        "value": "650px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The main action for starting, completing or confirming a training workflow.",
+      "html": "<button class=\"ds-btn-primary\">完成训练</button>",
+      "css": ".ds-btn-primary { background: var(--accent); color: #fff; padding: 13px 18px; border: 0; border-radius: 14px; font: 720 12px/1.3 Inter, system-ui, sans-serif; transition: background-color 150ms ease-out, opacity 150ms ease-out; } .ds-btn-primary:hover { background: var(--accent-dark); } .ds-btn-primary:focus-visible { outline: 3px solid rgba(214, 93, 63, .35); outline-offset: 3px; } .ds-btn-primary:active { opacity: .88; } .ds-btn-primary:disabled { opacity: .55; cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A lower-emphasis action that keeps the primary training path visually dominant.",
+      "html": "<button class=\"ds-btn-secondary\">跳过休息</button>",
+      "css": ".ds-btn-secondary { background: transparent; color: var(--ink); padding: 13px 18px; border: 1px solid var(--line); border-radius: 14px; font: 720 12px/1.3 Inter, system-ui, sans-serif; transition: border-color 150ms ease-out, background-color 150ms ease-out; } .ds-btn-secondary:hover { border-color: var(--accent); background: rgba(214, 93, 63, .04); } .ds-btn-secondary:focus-visible { outline: 3px solid rgba(214, 93, 63, .3); outline-offset: 3px; } .ds-btn-secondary:active { background: rgba(214, 93, 63, .08); } .ds-btn-secondary:disabled { opacity: .55; cursor: not-allowed; }"
+    },
+    {
+      "name": "Input Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "A calm, legible field for actual values, feedback and plan input.",
+      "html": "<label class=\"ds-field\"><span>实际秒数</span><input class=\"ds-input\" type=\"number\" value=\"40\" /></label>",
+      "css": ".ds-field { display: grid; gap: 7px; color: var(--ink); font: 720 12px/1.3 Inter, system-ui, sans-serif; } .ds-input { width: 100%; background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 12px; font: 400 16px/1.6 Inter, system-ui, sans-serif; transition: border-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-input:hover { border-color: var(--accent); } .ds-input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(214, 93, 63, .2); outline-offset: 1px; }"
+    },
+    {
+      "name": "Content Card",
+      "kind": "card",
+      "refersTo": "content-card",
+      "description": "A quiet surface for plan context, summaries and supporting training information.",
+      "html": "<section class=\"ds-card\"><strong>今日训练</strong><p>3 个模块 · 约 32 分钟</p></section>",
+      "css": ".ds-card { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 24px; padding: 20px; box-shadow: 0 18px 45px rgba(74, 52, 30, .08); } .ds-card p { margin: 8px 0 0; color: var(--muted); font: 400 16px/1.6 Inter, system-ui, sans-serif; }"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "status-pill",
+      "description": "A compact semantic state label for completed, rest or attention states.",
+      "html": "<span class=\"ds-status-pill\">已完成</span>",
+      "css": ".ds-status-pill { display: inline-flex; align-items: center; padding: 7px 10px; border-radius: 999px; background: #eee4d7; color: var(--green); font: 720 12px/1.3 Inter, system-ui, sans-serif; } .ds-status-pill:focus-visible { outline: 3px solid rgba(71, 122, 93, .28); outline-offset: 3px; }"
+    },
+    {
+      "name": "Bottom Navigation",
+      "kind": "nav",
+      "refersTo": "bottom-navigation",
+      "description": "The mobile-first global navigation for Today, Calendar, Progress and Settings.",
+      "html": "<nav class=\"ds-bottom-nav\"><button class=\"ds-nav-link is-active\">今日</button><button class=\"ds-nav-link\">日历</button><button class=\"ds-nav-link\">进展</button><button class=\"ds-nav-link\">设置</button></nav>",
+      "css": ".ds-bottom-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 14px 14px 18px; background: rgba(255, 253, 248, .94); border-top: 1px solid var(--line); backdrop-filter: blur(15px); } .ds-nav-link { min-height: 44px; padding: 10px 3px; border: 0; background: transparent; color: var(--muted); font: 400 14px/1.3 Inter, system-ui, sans-serif; } .ds-nav-link:hover { color: var(--accent-dark); } .ds-nav-link:focus-visible { outline: 3px solid rgba(214, 93, 63, .25); outline-offset: -2px; } .ds-nav-link.is-active { color: var(--accent-dark); font-weight: 800; }"
+    },
+    {
+      "name": "Focus Execution Stage",
+      "kind": "custom",
+      "refersTo": "focus-stage",
+      "description": "The signature one-item-at-a-time surface for executing a Workout Session.",
+      "html": "<section class=\"ds-focus-stage\"><span class=\"ds-focus-count\">1 / 6 · 训练</span><h2>侧平板</h2><p class=\"ds-focus-prescription\">计划：40 秒 · 休息 30 秒</p><button class=\"ds-btn-primary ds-btn-wide\">完成</button></section>",
+      "css": ".ds-focus-stage { display: flex; min-height: 420px; flex-direction: column; padding: 24px 18px 94px; background: var(--card); color: var(--ink); } .ds-focus-count { align-self: flex-start; padding: 5px 9px; border-radius: 999px; background: #f2e5d9; color: var(--accent-dark); font: 720 12px/1.3 Inter, system-ui, sans-serif; } .ds-focus-stage h2 { margin: 16px 0 8px; font: 700 30px/1.1 Inter, system-ui, sans-serif; letter-spacing: -.04em; } .ds-focus-prescription { margin: 0; color: var(--muted); font: 400 13px/1.5 Inter, system-ui, sans-serif; } .ds-btn-wide { width: 100%; min-height: 48px; margin-top: auto; }"
+    },
+    {
+      "name": "Rest Screen",
+      "kind": "custom",
+      "refersTo": "rest-screen",
+      "description": "A focused recovery state that keeps the next item visible and the skip action clear.",
+      "html": "<section class=\"ds-rest-screen\"><span class=\"ds-rest-label\">组间休息</span><h2>放松，准备下一项</h2><div class=\"ds-rest-time\">00:30</div><button class=\"ds-btn-secondary\">跳过休息</button></section>",
+      "css": ".ds-rest-screen { display: flex; min-height: 420px; flex-direction: column; align-items: stretch; padding: 28px 20px 94px; background: var(--card); color: var(--ink); text-align: center; } .ds-rest-label { align-self: center; padding: 5px 10px; border-radius: 999px; background: #e8f0e8; color: var(--green); font: 720 11px/1.3 Inter, system-ui, sans-serif; } .ds-rest-screen h2 { margin: 16px 0 0; font: 700 22px/1.2 Inter, system-ui, sans-serif; } .ds-rest-time { margin-top: 24px; color: var(--ink); font: 520 60px/1 Inter, system-ui, sans-serif; letter-spacing: -.04em; font-variant-numeric: tabular-nums; } .ds-rest-screen .ds-btn-secondary { align-self: center; min-width: 160px; margin-top: 34px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "安静的训练工作台",
+    "overview": "Workout Tracker 的界面应该像一个在训练间隙仍然安静可靠的工作台：信息被整理到手边，主要动作一眼可见，状态不会藏在装饰里。它服务于 Athlete 当下的执行，也为训练结束后的历史和趋势保留清楚、可修正的记录边界。\n\n整体采用克制的产品型视觉语言：纸张般的浅色内容面、柔和陶土橙的行动色、恢复绿的完成状态，以及单一 sans-serif 字体系统。层次来自留白、细边界和轻柔的环境抬升，而不是游戏化徽章、排行榜、强刺激动效或过多装饰。",
+    "keyCharacteristics": [
+      "安静、专注的训练执行面",
+      "清晰的大号数字和明确的状态反馈",
+      "柔和陶土橙只承担行动和选择",
+      "恢复绿承担完成、恢复和积极状态",
+      "移动端优先、触控区域宽松、内容不被固定底栏遮挡"
+    ],
+    "rules": [
+      {
+        "name": "The Restrained Accent Rule",
+        "body": "陶土橙只用于行动、选择、进度和需要注意的状态；不把主色铺满背景，也不把颜色当作装饰。",
+        "section": "colors"
+      },
+      {
+        "name": "The One Sans Rule",
+        "body": "不为单个新页面引入第二套相似 sans-serif；通过字重、尺寸和间距表达层级，保留产品的熟悉感。",
+        "section": "typography"
+      },
+      {
+        "name": "The Quiet Lift Rule",
+        "body": "表面默认依靠色调和细线分层；只有已有的内容卡片、选中状态和固定底栏使用阴影或 blur，新增组件不叠加更重的装饰性层次。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use the existing accent, neutral and semantic status tokens before adding a new color.",
+      "Do keep the main action obvious, wide and reachable on a phone; preserve 44px navigation targets and 48px focus actions.",
+      "Do make timer values, actual values and completion states legible without requiring audio.",
+      "Do use pending, disabled, error, paused and resumed states that retain the existing button, card, notice and spacing vocabulary.",
+      "Do preserve the quiet relationship between Training Plan Snapshot, Workout Session and Actual Training Data in both copy and visual hierarchy."
+    ],
+    "donts": [
+      "Don't make this an over-gamified, noisy fitness app that relies on badges or leaderboards.",
+      "Don't add a second visual language for timed actions, audio controls or Wake Lock; extend the focus execution surface.",
+      "Don't use decorative gradients, default glassmorphism, colored side-stripe borders or oversized shadow-plus-border treatments on new components.",
+      "Don't tighten display letter-spacing beyond -0.04em or let large headings overflow a mobile viewport.",
+      "Don't make sound the only way to understand a timer, status, error or saved result."
+    ]
+  }
+}

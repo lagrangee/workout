@@ -14,4 +14,6 @@ coverage/
 exports/
 tmp/
 test-results/
+.playwright-cli/
+output/
 *.zip

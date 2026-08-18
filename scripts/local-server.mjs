@@ -16,7 +16,7 @@ localAthlete.plan_revisions.push({ revision_key: opaqueKey("rev"), revision_sequ
 await store.save(localAthlete);
 const handler = createHandler({ STORE: store, LOCAL_AUTH: "true", PUBLIC_ORIGIN: "http://127.0.0.1:8787", ASSETS: { fetch: assetFetch } });
 /** @type {Record<string, string>} */
-const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
+const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".wav": "audio/wav" };
 /** @param {Request} request @returns {Promise<Response>} */
 async function assetFetch(request) {
   const path = new URL(request.url).pathname;

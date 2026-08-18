@@ -16,6 +16,23 @@ _Avoid_: Preferences, profile configuration
 A complete, point-in-time JSON representation of one Athlete's portable plan and training records. It is a readable data-ownership artifact, not a database backup, restore package, or Plan Update Package.
 _Avoid_: CSV export, database dump, plan import
 
+**Training Archive**:
+A local, read-optimized, derived archive that joins one Athlete-local Workout
+read with explicitly scoped COROS aerobic telemetry for historical and weekly
+analysis. It contains readable daily Markdown, sanitized COROS JSON sidecars,
+and optional private FIT sidecars for trajectory analysis. Workout and COROS remain authoritative, and the archive is never imported into either source.
+_Avoid_: source of truth, automatic backup, plan import, route database
+
+**COROS Activity Archive**:
+One sanitized local record for an in-scope COROS aerobic activity, identified by
+the provider activity reference and sport type, with an activity summary and
+separate lap groups. A private FIT sidecar may accompany it as trajectory
+evidence. It may carry a user-supplied or user-confirmed route key, but it
+never claims a provider route ID. A derived route assignment on a training
+record may also carry `route_direction` as `forward` or `reverse`; the route
+itself has no direction.
+_Avoid_: Workout Session, provider route ID, public route export
+
 **Coach Agent**:
 An unauthenticated ChatGPT Agent that uses a Coach Share to discover and read one Athlete's plan and training data.
 _Avoid_: Coach Viewer, coach account, administrator
@@ -73,7 +90,7 @@ One Athlete's actual execution or explicit skip of exactly one Scheduled Workout
 _Avoid_: Scheduled Workout status, plan item, free workout
 
 **Training Interval**:
-One contiguous span of active training time within a Workout Session. Starting or continuing training opens a new interval, only ending training closes it, and the Session's actual duration is the sum of its closed intervals.
+One contiguous span of active training time within a Workout Session. Starting or resuming training opens a new interval; pausing, ending, or explicit expiry closes the active interval, and the Session's actual duration is the sum of its closed intervals. An in-progress Session may therefore be paused with no open interval until the Athlete resumes it.
 _Avoid_: Workout Session, wall-clock gap, rest countdown
 
 **Training Plan Snapshot**:

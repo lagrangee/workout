@@ -28,8 +28,577 @@
   font-weight: 700;
 }
 
+.session-wake-notice {
+  display: grid;
+  gap: 3px;
+  margin: 10px 18px 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.session-wake-notice strong {
+  font-size: 13px;
+}
+
+.session-wake-notice span {
+  font-weight: 500;
+}
+
+.session-wake-notice.is-paused {
+  background: #fff5e2;
+  color: #765922;
+}
+
+.session-wake-notice.is-fallback {
+  background: #fbe8e1;
+  color: #8e3626;
+}
+
+.timed-audio-notice {
+  display: grid;
+  gap: 3px;
+  margin: 10px 18px 0;
+  color: #8e3626;
+  background: #fbe8e1;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.timed-audio-notice strong {
+  font-size: 13px;
+}
+
+.timed-audio-notice span {
+  font-weight: 500;
+}
+
+.records-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.records-page-head {
+  margin-bottom: 16px;
+}
+
+.records-page-heading {
+  min-width: 0;
+}
+
+.records-page-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.records-page-title-row h1 {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.records-page-heading .muted {
+  margin: 8px 0 0;
+}
+
+.records-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.records-page-actions .records-tabs {
+  min-width: 0;
+}
+
+.records-back-button {
+  margin-bottom: 12px;
+}
+
+.records-tab {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.records-tab.is-selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.records-context {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.records-overview-days {
+  display: grid;
+  gap: 0;
+}
+
+.records-overview-day {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.records-overview-day > div {
+  display: grid;
+  gap: 4px;
+}
+
+.records-overview-day > div:last-child {
+  justify-items: end;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.records-overview-day small {
+  color: var(--muted);
+}
+
+.metric-grid .records-overview-metric {
+  min-width: 0;
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  color: var(--ink);
+  text-align: left;
+}
+
+button.records-overview-metric {
+  cursor: pointer;
+}
+
+button.records-overview-metric:hover,
+button.records-overview-metric:focus-visible {
+  border-color: var(--accent);
+}
+
+button.records-overview-metric:focus-visible {
+  outline: 3px solid rgba(214, 93, 63, .28);
+  outline-offset: 2px;
+}
+
+.aerobic-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.aerobic-filters select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+}
+
+.aerobic-activity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.aerobic-activity-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 86px;
+  padding: 15px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+  text-align: left;
+}
+
+.aerobic-activity-card:hover,
+.aerobic-activity-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 8px 20px rgba(214, 93, 63, .12);
+}
+
+.aerobic-activity-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.aerobic-activity-main strong,
+.aerobic-activity-main span,
+.aerobic-activity-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aerobic-activity-main strong {
+  font-size: 15px;
+}
+
+.aerobic-activity-main span {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.aerobic-activity-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.aerobic-activity-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  overflow: visible !important;
+  white-space: normal !important;
+}
+
+.aerobic-activity-title > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aerobic-activity-route {
+  flex: 0 0 auto;
+  max-width: 42%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
+}
+
+.aerobic-activity-arrow {
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.aerobic-detail-card {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+}
+
+.aerobic-detail-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.aerobic-metrics {
+  margin: 0;
+}
+
+.aerobic-source {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.aerobic-source div {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.aerobic-source dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.aerobic-source dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.aerobic-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.routes-button {
+  min-height: 42px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.routes-button:hover,
+.routes-button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.route-status-button {
+  min-width: 0;
+  max-width: 60%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-status-button:hover,
+.route-status-button:focus-visible {
+  border-color: var(--accent);
+}
+
+.aerobic-detail-status .status-pill {
+  margin-bottom: 0;
+}
+
+.aerobic-route-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.aerobic-activity-pane {
+  min-width: 0;
+}
+
+.route-sidebar,
+.route-mobile-page {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+}
+
+.route-sidebar {
+  display: none;
+}
+
+.route-mobile-page {
+  display: block;
+}
+
+.route-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.route-panel-kicker {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.route-sidebar h2,
+.route-mobile-page h2 {
+  margin: 0;
+}
+
+.route-key {
+  margin: 5px 0 16px;
+  overflow-wrap: anywhere;
+}
+
+.route-list,
+.route-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.route-panel-head + .route-list {
+  margin-top: 0;
+}
+
+.route-list-row,
+.route-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.route-list-row:first-child,
+.route-history-row:first-child {
+  border-top: 0;
+}
+
+.route-list-row:hover,
+.route-list-row:focus-visible,
+.route-history-row:hover,
+.route-history-row:focus-visible {
+  color: var(--accent);
+}
+
+.route-list-row span:first-child,
+.route-history-row span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.route-list-row small,
+.route-history-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.route-list-row > span:last-child,
+.route-history-row > span:last-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.route-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 18px 0 4px;
+}
+
+.route-summary span {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.route-summary strong {
+  font-size: 15px;
+}
+
+.route-summary small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.route-history h3 {
+  margin: 0 0 2px;
+  font-size: 14px;
+}
+
+.route-detail-actions {
+  margin-top: -4px;
+}
+
+.aerobic-date-scope {
+  margin: -8px 0 12px;
+}
+
+@media (min-width: 980px) {
+  .aerobic-route-layout.route-focus {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    align-items: start;
+  }
+
+  .route-sidebar {
+    display: block;
+    position: sticky;
+    top: 18px;
+  }
+
+  .route-mobile-page {
+    display: none;
+  }
+}
+
+@media (max-width: 979px) {
+  .aerobic-route-layout.route-focus .aerobic-activity-pane {
+    display: none;
+  }
+}
+
 .calendar-head {
   padding-bottom: 12px;
+}
+
+.calendar-title-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.calendar-title-row h1 {
+  margin-bottom: 12px;
+}
+
+.calendar-maintenance-button {
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.calendar-maintenance-notice {
+  margin: 10px 0 0;
 }
 
 .calendar-week-controls {
@@ -209,6 +778,37 @@
   margin-bottom: 0;
 }
 
+.calendar-aerobic-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #d9e0ca;
+  border-radius: 18px;
+  background: #f3f7ea;
+}
+
+.calendar-aerobic-summary h3,
+.calendar-aerobic-summary p {
+  margin: 0;
+}
+
+.calendar-aerobic-summary h3 {
+  margin: 2px 0 4px;
+}
+
+.calendar-aerobic-summary .eyebrow {
+  font-size: 10px;
+}
+
+.calendar-aerobic-summary button {
+  min-height: 42px;
+  padding: 9px 12px;
+  font-size: 12px;
+}
+
 .calendar-prescription h3 {
   margin: 24px 0 8px;
 }
@@ -253,6 +853,19 @@
 }
 
 @media (max-width: 520px) {
+  .calendar-aerobic-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .calendar-aerobic-summary button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .records-overview-day {
+    align-items: start;
+  }
+
   .calendar-week {
     grid-template-columns: 1fr;
     gap: 6px;
@@ -302,7 +915,7 @@
 .session-header {
   min-height: 58px;
   display: grid;
-  grid-template-columns: 48px 1fr 48px;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
@@ -317,6 +930,65 @@
 
 .today-content {
   padding: 24px 22px 28px;
+}
+
+.mutation-feedback {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mutation-feedback.is-pending {
+  color: var(--muted);
+  background: #fbf7f0;
+}
+
+.mutation-feedback.is-error {
+  color: #8e3626;
+  background: #fbe8e1;
+}
+
+.mutation-feedback strong,
+.mutation-feedback span:last-child {
+  grid-column: 1 / -1;
+}
+
+.mutation-feedback.is-pending span:last-child {
+  grid-column: 2;
+}
+
+.mutation-feedback.is-error span:last-child {
+  color: #8e3626;
+  font-size: 12px;
+}
+
+.mutation-indicator {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: mutation-spin .8s linear infinite;
+}
+
+button:disabled,
+button[aria-busy="true"] {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+@keyframes mutation-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mutation-indicator { animation: none; }
 }
 
 .today-content h1 {
@@ -457,6 +1129,7 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-top: 18px;
+  margin-bottom: 16px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -511,10 +1184,18 @@
   color: var(--ink);
 }
 
-.session-timer-toggle {
+.session-header-actions {
+  display: flex;
+  align-items: center;
   justify-self: end;
-  min-width: 48px;
-  padding: 8px 0;
+  gap: 2px;
+}
+
+.session-mute-toggle,
+.session-timer-toggle {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 5px;
   border-radius: 10px;
   background: transparent;
   color: var(--accent-dark);
@@ -522,6 +1203,7 @@
   font-weight: 760;
 }
 
+.session-mute-toggle[aria-pressed="true"],
 .session-timer-toggle[aria-pressed="true"] {
   background: #f8ece6;
 }
@@ -616,6 +1298,63 @@
   line-height: 1.5;
 }
 
+.timed-execution {
+  margin-top: 22px;
+  padding: 18px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fbf7f0;
+  text-align: center;
+}
+
+.timed-execution-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timed-execution-label {
+  color: var(--accent-dark);
+  font-weight: 760;
+}
+
+.timed-action-state {
+  min-height: 20px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.timed-remaining {
+  margin: 12px 0 16px;
+  color: var(--ink);
+  font-size: 68px;
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.timed-start {
+  min-height: 48px;
+}
+
+.timed-actual-fields {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  text-align: left;
+}
+
+.timed-actual-fields input:disabled {
+  background: #f4f2ef;
+  color: var(--muted);
+}
+
 .actual-panel {
   margin-top: 22px;
   padding: 0 14px;
@@ -679,6 +1418,10 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-top: 8px;
+}
+
+.focus-secondary.is-timed {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .focus-secondary .secondary {
