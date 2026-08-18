@@ -282,7 +282,10 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
 }
 
 async function settle() {
-  for (let index = 0; index < 16; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  for (let index = 0; index < 8; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 async function seedPartialSession(handler) {
