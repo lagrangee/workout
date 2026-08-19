@@ -309,6 +309,36 @@ async function seedPartialSession(handler) {
   return started.body.session_key;
 }
 
+async function seedCanonicalPallofPlan(fixture) {
+  const state = await fixture.store.getByEmail("athlete-a@example.invalid");
+  state.plan_revisions.at(-1).week[weekdayKey(today)] = {
+    kind: "workout",
+    title: "核心稳定",
+    start_time: "08:00",
+    estimated_duration_min: 15,
+    blocks: [{
+      title: "核心",
+      exercises: [{
+        occurrence_key: "pallof_press_main",
+        exercise_id: "pallof_press",
+        execution_mode: "per_side",
+        name: "Pallof Press",
+        definition_version: 1,
+        sets: [{
+          set_id: "pallof_press_set_1",
+          ordinal: 1,
+          target: { metric: "reps", value: 10 },
+          resistance_mode: "external_load",
+          resistance_kg: null,
+          tempo: "0-0-0-1",
+          rest_after_sec: 30,
+        }],
+      }],
+    }],
+  };
+  await fixture.store.save(state);
+}
+
 async function seedExpiredCalendarSession(store) {
   const state = await store.getByEmail("athlete-a@example.invalid");
   const scheduledDate = addDays(today, -7);
@@ -417,6 +447,28 @@ test("browser seam: failed Completion Item save is retryable and retains actual 
   assert.match(browser.root.innerHTML, /1 \/ 4 完成/);
   assert.match(browser.root.innerHTML, /组间休息/);
   assert.equal(browser.calls.filter((request) => request.method === "GET" && request.path.startsWith("/api/private/sessions/")).length, 0);
+});
+
+test("browser seam: canonical external-load action with unspecified load sends nullable resistance", async () => {
+  const fixture = appFixture();
+  await seedCanonicalPallofPlan(fixture);
+  const browser = await openBrowser(fixture.handler, async () => null);
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+  browser.root.querySelector('[data-action="complete"]').click();
+  await settle();
+
+  const recordRequest = browser.calls.find((request) => request.path.endsWith("/record"));
+  assert.ok(recordRequest);
+  const body = JSON.parse(recordRequest.options.body);
+  assert.equal(body.record_schema_version, 2);
+  assert.equal(body.set_results[0].resistance, null);
+
+  const saved = await fixture.store.getByEmail("athlete-a@example.invalid");
+  assert.equal(saved.sessions[0].set_results.length, 1);
+  assert.equal(saved.sessions[0].set_results[0].resistance_mode, null);
+  assert.match(browser.root.innerHTML, /1 \/ 2 完成/);
 });
 
 test("browser seam: failed start restores a retryable Today control", async () => {
