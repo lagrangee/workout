@@ -11,6 +11,11 @@ uses the relational Plan and Session rows as the Workout source after the
   `0009_canonical_workout_cutover.sql` to the target D1 database.
 - Export exactly one Athlete's current canonical state, or pass
   `--athlete-key` when the input contains multiple Athletes.
+- For the current legacy v1 export, run the explicit converter with
+  `--range-policy max`. It maps old ranges to their maximum value, maps
+  `left_right` to `per_side`, maps a registry-supported together-only
+  occurrence to `bilateral`, and converts object tempo to the canonical
+  four-phase string. Unsupported legacy modes fail.
 - Stop normal writes for the bounded cutover window and inspect the generated
   SQL before applying it.
 - Keep the private local archive available. The archive is derived evidence,
@@ -19,16 +24,25 @@ uses the relational Plan and Session rows as the Workout source after the
 ## Generate and review
 
 ```sh
+node scripts/convert-legacy-workout-state.mjs \
+  --input ./private/legacy-d1-export.json \
+  --output ./private/canonical-d1-export.json \
+  --range-policy max
+
 node scripts/rebuild-canonical-d1.mjs \
-  --input ./private/athlete-state.json \
+  --input ./private/canonical-d1-export.json \
   --output ./private/canonical-cutover.sql \
   --athlete-key ath_example
 ```
 
-The command rejects legacy ranges, unknown Exercise IDs, and incomplete
-canonical snapshots. It emits one transaction that rebuilds only the selected
-Athlete, clears the legacy Workout arrays from `state_json`, and writes the
-cutover marker after the canonical rows are ready.
+The converter retains the exact v1 `plan_revisions` and `sessions` under the
+non-authoritative `legacy_workout_v1` archive field, so fields not represented
+by canonical v2 (for example old target-effort fields) remain recoverable. The
+rebuild command rejects unknown Exercise IDs and incomplete canonical
+snapshots. It emits one transaction that rebuilds only the selected Athlete,
+clears the active legacy Workout arrays from `state_json` while retaining that
+archive field, and writes the cutover marker after the canonical rows are
+ready.
 
 ## Apply with rollback evidence
 
