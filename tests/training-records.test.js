@@ -253,3 +253,48 @@ test("ticket 03 private Records and Calendar reads are Athlete-scoped and Calend
   const invalidInclude = await call(handler, "/api/private/schedule?from=2026-08-15&to=2026-08-15&include=full_aerobic_history");
   assert.equal(invalidInclude.response.status, 400);
 });
+
+test("Calendar reports explicit COROS route evidence without creating a Workout Session relation", async () => {
+  const { handler, store } = appFixture();
+  const athlete = await store.getByEmail("athlete-a@example.invalid");
+  athlete.plan_revisions[0].week.saturday = {
+    kind: "workout",
+    title: "香山鸡腿线",
+    start_time: "08:30",
+    estimated_duration_min: 150,
+    recording_intent: { schema_version: 1, source: "coros", sport_type: 102, route_key: "香山鸡腿线" },
+    blocks: [{
+      title: "越野专项",
+      exercises: [{
+        occurrence_key: "chicken_line_trail",
+        exercise_id: "trail_run_hike",
+        execution_mode: "none",
+        name: "越野跑与爬升快走",
+        definition_version: 1,
+        sets: [{ set_id: "chicken_line_1", ordinal: 1, target: { metric: "duration_sec", value: 9000 }, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: null }],
+      }],
+    }],
+  };
+  athlete.aerobic_activities = [activity({
+    sport_type: 102,
+    sport_name: "trail_run",
+    route_key: "香山鸡腿线",
+    route_direction: "forward",
+    route_match_status: "matched",
+  })];
+  await store.save(athlete);
+
+  const result = await call(handler, "/api/private/schedule?from=2026-08-15&to=2026-08-15&expand=prescription&include=aerobic_summary");
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.entries[0].session_key, null);
+  assert.equal(result.body.entries[0].recording_evidence.status, "recorded");
+  assert.equal(result.body.entries[0].recording_evidence.match_count, 1);
+  assert.equal(result.body.entries[0].recording_evidence.route_key, "香山鸡腿线");
+  assert.equal("activity_ref" in result.body.entries[0].recording_evidence, false);
+
+  athlete.aerobic_activities = [activity({ activity_ref: "other-route", source_ref: "coros:activity:other-route", sport_type: 102, sport_name: "trail_run", route_key: "其他路线", route_direction: "forward", route_match_status: "matched" })];
+  await store.save(athlete);
+  const unmatched = await call(handler, "/api/private/schedule?from=2026-08-15&to=2026-08-15&include=aerobic_summary");
+  assert.equal(unmatched.body.entries[0].recording_evidence.status, "needs_link");
+  assert.equal(unmatched.body.entries[0].recording_evidence.match_count, 0);
+});

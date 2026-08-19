@@ -13,8 +13,9 @@ The range is inclusive, interpreted in the authenticated Athlete's IANA timezone
 The first effective plan date is exposed by the private plan read as `first_effective_from`. The Calendar UI does not navigate before that date. Explicit schedule reads may still return `no_plan` for a pre-plan date.
 
 The optional `include=aerobic_summary` parameter adds one compact, date-scoped
-COROS read model to every entry. Unknown `include` values fail with `400
-invalid_request`.
+COROS read model to every entry. When a workout slot has a `recording_intent`,
+the same response also adds one compact `recording_evidence` projection.
+Unknown `include` values fail with `400 invalid_request`.
 
 ```text
 aerobic_summary = {
@@ -36,6 +37,30 @@ reference. Calendar renders it only when `activity_count > 0` and offers a
 Records link for full aerobic history. This is date context, not a cross-source
 event join.
 
+```text
+recording_evidence = {
+  schema_version: 1,
+  generated_at: Instant,
+  source: "coros",
+  sport_type: 100|102|104|200,
+  route_key: string,
+  status: awaiting_sync|recorded|needs_link,
+  activity_count: number,
+  match_count: number,
+  source_status: complete|none|partial|error,
+  data_as_of: Instant|null,
+  records_href: string
+}
+```
+
+`recorded` requires exactly one same-date COROS Activity whose `sport_type`
+and `route_key` equal the explicit Recording Intent. Zero matching Activities
+with some same-date aerobic data, or multiple matching Activities, is
+`needs_link`; no same-date aerobic data is `awaiting_sync`. The compact value
+does not expose `activity_ref`. It may satisfy Calendar's display state as
+“已记录”, but it never changes `session_key`, creates a Session, or rewrites
+`is_overdue_unstarted`, whose meaning remains Session-specific.
+
 ## Selected-day detail
 
 `GET /api/private/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD&expand=prescription`
@@ -48,7 +73,7 @@ When the expanded entry has a `session_key`, the UI makes the separate authentic
 
 ## Calendar and Today boundary
 
-The Calendar navigation is `今日 | 日历 | 记录 | 设置`. Calendar provides no start, continue, restart, skip, record, or end action. Today remains the only execution surface. Historical completed, partial, and skipped Session details may link to the existing `校正记录` flow; correction preserves the Scheduled Workout date and immutable Training Plan Snapshot.
+The Calendar navigation is `今日 | 日历 | 记录 | 设置`. Calendar provides no start, continue, restart, skip, record, or end action. Today remains the only Workout Session execution surface. When today's workout has a Recording Intent, Today replaces Session start/skip actions with COROS recording and `sync data YYYY-MM-DD` guidance; the Athlete does not duplicate the activity in Workout. Historical completed, partial, and skipped Session details may link to the existing `校正记录` flow; correction preserves the Scheduled Workout date and immutable Training Plan Snapshot.
 
 Calendar may expose one explicit maintenance action for stale execution state:
 

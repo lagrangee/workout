@@ -92,6 +92,7 @@ export function scheduleEntry(state, date, now = new Date(), includePrescription
     session_key: session?.session_key ?? null,
     is_due: isDue, is_overdue_unstarted: isPast && !session,
     source_ref: `schedule:${date}:${revision.revision_key}`, revision_key: revision.revision_key,
+    ...(slot.recording_intent ? { recording_intent: deepClone(slot.recording_intent) } : {}),
   };
   if (includePrescription) entry.prescription = planSlotProjection(slot);
   return entry;
@@ -188,6 +189,7 @@ export function planUpdateWeekProjection(week) {
       title: slot.title,
       start_time: slot.start_time,
       estimated_duration_min: slot.estimated_duration_min,
+      ...(slot.recording_intent ? { recording_intent: deepClone(slot.recording_intent) } : {}),
       blocks: slot.blocks.map(/** @param {any} block */ (block) => ({
         title: block.title,
         exercises: block.exercises.map(/** @param {any} exercise */ (exercise) => {

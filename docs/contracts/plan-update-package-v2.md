@@ -48,6 +48,27 @@ Athlete-local ID-to-name map.
 }
 ```
 
+A route workout may additionally declare one explicit external Recording
+Intent at the workout-slot level:
+
+```json
+{
+  "recording_intent": {
+    "schema_version": 1,
+    "source": "coros",
+    "sport_type": 102,
+    "route_key": "香山鸡腿线"
+  }
+}
+```
+
+The field is optional. When present, the slot must contain an Exercise whose
+registry capability supports the selected COROS route sport type. `route_key`
+is the stable Workout route identity; it is never a COROS activity reference.
+The intent is stored with the immutable Plan Revision and supplies matching
+criteria only. It does not create a Session or import COROS telemetry into the
+Plan.
+
 `occurrence_key` is unique within one workout slot. The same global
 `exercise_id` may occur more than once when occurrence keys differ. One
 occurrence selects exactly one `execution_mode` and cannot switch mode between

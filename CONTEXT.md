@@ -78,8 +78,16 @@ _Avoid_: Multi-week plan, progression program, partial week patch
 The deterministic Athlete-local date projection of the Weekly Template applicable on that date. It describes prescribed intent, may be a workout or Rest Day, and never owns execution state.
 _Avoid_: Workout record, completed workout
 
+**Recording Intent**:
+An optional Plan-owned criterion for a Scheduled Workout whose actual aerobic
+activity is recorded outside Workout. Version 1 names `coros`, one controlled
+sport type, and one stable `route_key`. It lets a read model report whether
+there is exactly one matching COROS Activity on the Scheduled Workout date;
+it never turns that Activity into a Workout Session or merges their IDs.
+_Avoid_: implicit same-date join, COROS activity ID, synthetic Session
+
 **Calendar**:
-The authenticated, read-only date-browsing surface over an Athlete's Scheduled Workouts and Workout Sessions. It starts at the first effective Plan Revision date, reads one Athlete-local week at a time, and joins Session summaries by `session_key`; it never creates or executes a Session. Historical completed, partial, and skipped Sessions may expose the existing correction flow as a secondary action.
+The authenticated, read-only date-browsing surface over an Athlete's Scheduled Workouts, Workout Sessions, and explicitly requested external Recording Evidence. It starts at the first effective Plan Revision date, reads one Athlete-local week at a time, and joins Session summaries by `session_key`; it never creates or executes a Session. Historical completed, partial, and skipped Sessions may expose the existing correction flow as a secondary action.
 _Avoid_: Plan editor, execution surface, synthetic history
 
 **Exercise**:

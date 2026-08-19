@@ -69,8 +69,18 @@ function assemblePlanSlot(revision, weekday, slot, exerciseRows, setRows) {
     title: slot.title,
     start_time: slot.start_time,
     estimated_duration_min: slot.estimated_duration_min,
+    ...(assembleRecordingIntent(slot) ? { recording_intent: assembleRecordingIntent(slot) } : {}),
     blocks: blocks.map(({ title, exercises: blockExercises }) => ({ title, exercises: blockExercises })),
   };
+}
+
+/** @param {any} slot */
+function assembleRecordingIntent(slot) {
+  if (slot.recording_source == null && slot.recording_sport_type == null && slot.recording_route_key == null) return null;
+  if (slot.recording_source !== "coros" || ![100, 102, 104, 200].includes(Number(slot.recording_sport_type)) || typeof slot.recording_route_key !== "string" || !slot.recording_route_key.trim()) {
+    throw new Error("Plan Slot recording intent is inconsistent");
+  }
+  return { schema_version: 1, source: "coros", sport_type: Number(slot.recording_sport_type), route_key: slot.recording_route_key };
 }
 
 /** @param {any} value */

@@ -6,6 +6,8 @@ import test from "node:test";
 const migration = readFileSync(new URL("../migrations/0004_restore_session_date_guard.sql", import.meta.url), "utf8");
 const initialMigration = readFileSync(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8");
 const agentTokenMigration = readFileSync(new URL("../migrations/0005_agent_token_lookup.sql", import.meta.url), "utf8");
+const canonicalPlanMigration = readFileSync(new URL("../migrations/0006_canonical_plan_records.sql", import.meta.url), "utf8");
+const routeRecordingMigration = readFileSync(new URL("../migrations/0010_plan_recording_intent.sql", import.meta.url), "utf8");
 
 test("ticket 24 migration restores an idempotent per-Athlete date guard", () => {
   const db = new DatabaseSync(":memory:");
@@ -51,6 +53,21 @@ test("ticket 01 migration adds an idempotent Agent Token lookup boundary", () =>
     assert.ok(row);
     assert.equal(row.revoked_at, null);
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_token_lookup'").get());
+  } finally {
+    db.close();
+  }
+});
+
+test("plan recording intent migration adds nullable COROS route columns", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(initialMigration);
+    db.exec(canonicalPlanMigration);
+    db.exec(routeRecordingMigration);
+    const columns = db.prepare("PRAGMA table_info('plan_slots')").all().map((column) => column.name);
+    assert.ok(columns.includes("recording_source"));
+    assert.ok(columns.includes("recording_sport_type"));
+    assert.ok(columns.includes("recording_route_key"));
   } finally {
     db.close();
   }

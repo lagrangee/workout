@@ -234,12 +234,31 @@ function validateCanonicalSet(value, path, errors, exercise) {
   return target ? { set_id: value.set_id, ordinal: value.ordinal, target, ...resistance, tempo: value.tempo, rest_after_sec: value.rest_after_sec } : null;
 }
 
+/** @param {any} value @param {string} path @param {string[]} errors @param {any[]} blocks */
+function validateRecordingIntent(value, path, errors, blocks) {
+  if (value === undefined) return null;
+  if (!requireObject(value, path, errors)) return null;
+  exactKeys(value, ["schema_version", "source", "sport_type", "route_key"], path, errors);
+  if (value.schema_version !== 1) errors.push(`${path}/schema_version: must equal integer 1`);
+  if (value.source !== "coros") errors.push(`${path}/source: must equal coros`);
+  if (![100, 102, 104, 200].includes(value.sport_type)) errors.push(`${path}/sport_type: unsupported COROS route sport type`);
+  if (!requireTrimmedString(value.route_key, `${path}/route_key`, errors) || /[\\/]/.test(value.route_key ?? "")) errors.push(`${path}/route_key: must be a safe route key`);
+  const compatible = blocks.flatMap((block) => block.exercises ?? []).some((exercise) => {
+    const capability = resolveExercise(exercise.exercise_id)?.capabilities?.coros_route_recording;
+    return capability?.schema_version === 1 && Array.isArray(capability.sport_types) && capability.sport_types.includes(value.sport_type);
+  });
+  if (!compatible) errors.push(`${path}: workout must contain an Exercise that supports this COROS route sport type`);
+  return value.schema_version === 1 && value.source === "coros" && [100, 102, 104, 200].includes(value.sport_type) && typeof value.route_key === "string"
+    ? { schema_version: 1, source: "coros", sport_type: value.sport_type, route_key: value.route_key }
+    : null;
+}
+
 /** @param {any} value @param {string} path @param {string[]} errors */
 function validateCanonicalSlot(value, path, errors) {
   if (value === null) return null;
   if (!requireObject(value, path, errors)) return null;
   if (value.kind === "rest") { exactKeys(value, ["kind"], path, errors); return { kind: "rest" }; }
-  exactKeys(value, ["kind", "title", "start_time", "estimated_duration_min", "blocks"], path, errors);
+  exactKeys(value, ["kind", "title", "start_time", "estimated_duration_min", "recording_intent", "blocks"], path, errors);
   if (value.kind !== "workout") errors.push(`${path}/kind: must be workout or rest`);
   requireTrimmedString(value.title, `${path}/title`, errors);
   if (value.start_time !== null && (!requireString(value.start_time, `${path}/start_time`, errors) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.start_time))) errors.push(`${path}/start_time: must be HH:mm or null`);
@@ -288,7 +307,8 @@ function validateCanonicalSlot(value, path, errors) {
     blocks.push({ title: block.title, exercises });
   });
   if (completionItems > 200) errors.push(`${path}/blocks: workout may expand to at most 200 Completion Items`);
-  return { kind: "workout", title: value.title, start_time: value.start_time, estimated_duration_min: value.estimated_duration_min, blocks };
+  const recordingIntent = validateRecordingIntent(value.recording_intent, `${path}/recording_intent`, errors, blocks);
+  return { kind: "workout", title: value.title, start_time: value.start_time, estimated_duration_min: value.estimated_duration_min, ...(recordingIntent ? { recording_intent: recordingIntent } : {}), blocks };
 }
 
 /** @param {any} packageValue @param {string} today */

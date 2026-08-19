@@ -299,7 +299,12 @@
       "target": { "metrics": ["duration_sec"] },
       "resistance": { "modes": ["bodyweight"], "units": [] },
       "equipment": { "required": [], "optional": ["trail_running_shoes"] },
-      "capabilities": {}
+      "capabilities": {
+        "coros_route_recording": {
+          "schema_version": 1,
+          "sport_types": [102, 104]
+        }
+      }
     },
     {
       "exercise_id": "treadmill_incline_walk",

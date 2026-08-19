@@ -4,7 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-import { appFixture } from "./helpers.js";
+import { appFixture, today } from "./helpers.js";
+import { weekdayKey } from "../src/util.js";
 
 const [formatterSource, timelineSource, appModuleSource] = await Promise.all([
   readFile(new URL("../public/ui-formatters.js", import.meta.url), "utf8"),
@@ -111,15 +112,37 @@ async function settle() {
   for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
-async function seededBrowser({ activities = [], routes = [], projectionStatus = activities.length ? "complete" : "none" } = {}) {
+async function seededBrowser({ activities = [], routes = [], projectionStatus = activities.length ? "complete" : "none", configureState = null } = {}) {
   const { handler, store } = appFixture();
   const state = await store.getByEmail("athlete-a@example.invalid");
   state.aerobic_activities = activities;
   state.routes = routes;
   state.aerobic_projection = { schema_version: 1, source_status: projectionStatus, data_as_of: "2026-08-16T23:59:00.000Z", updated_at: "2026-08-17T08:00:00.000Z", activity_count: activities.length };
+  if (configureState) configureState(state);
   await store.save(state);
   const requests = [];
   return { ...(await openBrowser(handler, requests)), requests };
+}
+
+function routeRecordingSlot() {
+  return {
+    kind: "workout",
+    title: "香山鸡腿线",
+    start_time: "08:30",
+    estimated_duration_min: 150,
+    recording_intent: { schema_version: 1, source: "coros", sport_type: 102, route_key: "香山鸡腿线" },
+    blocks: [{
+      title: "越野专项",
+      exercises: [{
+        occurrence_key: "chicken_line_trail",
+        exercise_id: "trail_run_hike",
+        execution_mode: "none",
+        name: "越野跑与爬升快走",
+        definition_version: 1,
+        sets: [{ set_id: "chicken_line_1", ordinal: 1, target: { metric: "duration_sec", value: 9000 }, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: null }],
+      }],
+    }],
+  };
 }
 
 function indoorActivity(overrides = {}) {
@@ -291,4 +314,33 @@ test("ticket 03 browser seam: Calendar shows a compact aerobic summary and links
   assert.equal(browser.requests.filter((path) => path.startsWith("/api/private/records/aerobic?")).length, 1);
   assert.match(browser.root.innerHTML, /coros-indoor-1/);
   assert.match(browser.root.innerHTML, /日期：2026-08-17/);
+});
+
+test("Calendar prescription shows each Exercise execution mode once in Chinese", async () => {
+  const browser = await seededBrowser();
+  assert.match(browser.root.innerHTML, /执行方式：不分左右/);
+  assert.match(browser.root.innerHTML, /执行方式：左右分别完成/);
+});
+
+test("COROS route plan requires no duplicate Workout Session action and shows synced evidence", async () => {
+  const matched = outdoorActivity({
+    activity_ref: "coros-chicken-line",
+    source_ref: "coros:activity:coros-chicken-line",
+    local_date: today,
+    sport_type: 102,
+    sport_name: "trail_run",
+    route_key: "香山鸡腿线",
+    route_direction: "forward",
+    route_match_status: "matched",
+  });
+  const browser = await seededBrowser({
+    activities: [matched],
+    configureState(state) { state.plan_revisions.at(-1).week[weekdayKey(today)] = routeRecordingSlot(); },
+  });
+
+  assert.match(browser.root.innerHTML, /已记录（COROS）/);
+  assert.match(browser.root.innerHTML, /路线：香山鸡腿线/);
+  assert.match(browser.root.innerHTML, /不需要在 Workout 页面重复记录/);
+  assert.equal(browser.root.querySelector('[data-action="start"]'), null);
+  assert.equal(browser.root.querySelector('[data-action="skip"]'), null);
 });

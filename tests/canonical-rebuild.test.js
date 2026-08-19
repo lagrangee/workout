@@ -17,6 +17,7 @@ const MIGRATIONS = [
   "0007_canonical_session_records.sql",
   "0008_canonical_session_read_model.sql",
   "0009_canonical_workout_cutover.sql",
+  "0010_plan_recording_intent.sql",
 ];
 
 function execMigrations(db) {

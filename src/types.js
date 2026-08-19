@@ -33,7 +33,8 @@
 
 /** @typedef {{ title: string, exercises: PlanExercise[] }} PlanBlock */
 
-/** @typedef {{ kind: "workout", title: string, start_time: string | null, estimated_duration_min: number, blocks: PlanBlock[] }} WorkoutSlot */
+/** @typedef {{ schema_version: 1, source: "coros", sport_type: 100 | 102 | 104 | 200, route_key: string }} RecordingIntent */
+/** @typedef {{ kind: "workout", title: string, start_time: string | null, estimated_duration_min: number, recording_intent?: RecordingIntent, blocks: PlanBlock[] }} WorkoutSlot */
 
 /** @typedef {{ kind: "rest" }} RestSlot */
 

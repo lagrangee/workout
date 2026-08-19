@@ -14,6 +14,11 @@ weekday slots, Exercise Prescriptions, and ordered Prescribed Sets. The stored
 resolves the registry's current formal `name` from stable `exercise_id`.
 Historical Session snapshots never use that current-name lookup.
 
+A workout slot may carry one versioned `recording_intent` with COROS sport and
+route matching criteria. D1 stores those criteria on the Plan Slot. The
+assembler either returns the complete intent or rejects inconsistent partial
+columns; it never infers a route from a workout title.
+
 ## Session
 
 A Session assembles into its frozen Training Plan Snapshot, Completion Items,
@@ -38,5 +43,7 @@ status, actual value, canonical resistance, RIR, note, and safe Session
 provenance. Athlete filtering occurs before assembly and no row from another
 Athlete is addressable through the read boundary.
 
-The model contains no Markdown links, date-to-date relationships, raw D1
-columns, COROS payloads, GPS/FIT data, or credentials.
+The Plan/Session model contains no Markdown links, date-to-date relationships,
+COROS payloads, GPS/FIT data, or credentials. A Schedule adapter may compare an
+explicit Recording Intent with the separate safe COROS read model and emit a
+bounded evidence status without changing either source identity.

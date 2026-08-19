@@ -267,6 +267,35 @@ export function compactAerobicSummary(state, date, now = new Date()) {
 }
 
 /**
+ * Compare one explicit Plan-owned Recording Intent with COROS evidence while
+ * preserving separate Workout and COROS record identities.
+ * @param {any} state
+ * @param {string} date
+ * @param {any} intent
+ * @param {Date} now
+ */
+export function recordingEvidence(state, date, intent, now = new Date()) {
+  if (!intent) return null;
+  requiredLocalDate(date, "date");
+  const activities = (state.aerobic_activities ?? []).map(safeAerobicActivity).filter((activity) => activity.local_date === date);
+  const matches = activities.filter((activity) => activity.sport_type === intent.sport_type && activity.route_key === intent.route_key);
+  const status = matches.length === 1 ? "recorded" : activities.length ? "needs_link" : "awaiting_sync";
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    source: "coros",
+    sport_type: intent.sport_type,
+    route_key: intent.route_key,
+    status,
+    activity_count: activities.length,
+    match_count: matches.length,
+    source_status: aggregateActivityStatus(activities),
+    data_as_of: latestDataAsOf(activities),
+    records_href: `/app#records-aerobic-${date}`,
+  };
+}
+
+/**
  * Build the date Hub. The two source lists are deliberately separate in both
  * machine refs and links; there is no paired event or cross-source join.
  *

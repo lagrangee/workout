@@ -227,7 +227,11 @@ without raw COROS payloads, GPS/FIT data, or credentials.
 
 The record graph deliberately has no COROS field on a Workout Session and no
 Workout field on a COROS Activity Archive. `relation_policy:
-same_local_date_context_only` is the explicit contract for same-date coexistence.
+same_local_date_context_only` is the default contract for same-date
+coexistence. A Scheduled Workout may separately own an explicit Recording
+Intent whose source, sport type, and route key are compared by the Calendar
+read model. That comparison emits evidence status only; it does not add a
+cross-source identifier or merge the records.
 
 ## COROS activity archive
 

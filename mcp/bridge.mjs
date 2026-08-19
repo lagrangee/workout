@@ -35,13 +35,25 @@ const PLAN_UPDATE_BLOCK_SCHEMA = exactObject({
   title: { type: "string", minLength: 1, maxLength: 100 },
   exercises: arrayOf(PLAN_UPDATE_EXERCISE_SCHEMA, 1),
 });
-const PLAN_UPDATE_WORKOUT_SCHEMA = exactObject({
-  kind: { const: "workout" },
-  title: { type: "string", minLength: 1, maxLength: 100 },
-  start_time: nullable({ type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }),
-  estimated_duration_min: { type: "integer", minimum: 1 },
-  blocks: arrayOf(PLAN_UPDATE_BLOCK_SCHEMA, 1, 20),
+const PLAN_UPDATE_RECORDING_INTENT_SCHEMA = exactObject({
+  schema_version: { type: "integer", const: 1 },
+  source: { const: "coros" },
+  sport_type: { type: "integer", enum: [100, 102, 104, 200] },
+  route_key: { type: "string", minLength: 1, maxLength: 100, pattern: "^[^/\\\\]+$" },
 });
+const PLAN_UPDATE_WORKOUT_SCHEMA = {
+  type: "object",
+  properties: {
+    kind: { const: "workout" },
+    title: { type: "string", minLength: 1, maxLength: 100 },
+    start_time: nullable({ type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }),
+    estimated_duration_min: { type: "integer", minimum: 1 },
+    recording_intent: PLAN_UPDATE_RECORDING_INTENT_SCHEMA,
+    blocks: arrayOf(PLAN_UPDATE_BLOCK_SCHEMA, 1, 20),
+  },
+  required: ["kind", "title", "start_time", "estimated_duration_min", "blocks"],
+  additionalProperties: false,
+};
 const PLAN_UPDATE_SLOT_SCHEMA = {
   oneOf: [
     { type: "null" },
@@ -482,6 +494,7 @@ function comparablePlanSlot(slot) {
     title: source.title,
     start_time: source.start_time,
     estimated_duration_min: source.estimated_duration_min,
+    ...(source.recording_intent ? { recording_intent: source.recording_intent } : {}),
     blocks: source.blocks.map((block) => ({
       title: block.title,
       exercises: block.exercises.map((exercise) => ({

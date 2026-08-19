@@ -46,6 +46,7 @@ function execMigrations(db) {
     "0007_canonical_session_records.sql",
     "0008_canonical_session_read_model.sql",
     "0009_canonical_workout_cutover.sql",
+    "0010_plan_recording_intent.sql",
   ]) db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
 
@@ -149,13 +150,21 @@ test("D1 canonical save replaces Session facts without duplicating immutable Pla
     insertCanonicalRows(db, "athlete-a", "a@example.invalid", "sess-a", "历史死虫");
     const store = new D1Store(new D1TestDb(db), {});
     const state = await store.getByEmail("a@example.invalid");
+    const routeRevision = structuredClone(state.plan_revisions[0]);
+    routeRevision.revision_key = "rev-athlete-a-route";
+    routeRevision.revision_sequence = 2;
+    routeRevision.effective_from = "2026-08-24";
+    routeRevision.created_at = "2026-08-20T00:00:00.000Z";
+    routeRevision.week.wednesday.recording_intent = { schema_version: 1, source: "coros", sport_type: 102, route_key: "香山鸡腿线" };
+    state.plan_revisions.push(routeRevision);
     await store.save(state);
     const rebuilt = await store.getByEmail("a@example.invalid");
     assert.equal(db.prepare("SELECT count(*) AS count FROM sessions WHERE athlete_key = ?").get("athlete-a").count, 1);
-    assert.equal(db.prepare("SELECT count(*) AS count FROM plan_revisions WHERE athlete_key = ?").get("athlete-a").count, 1);
+    assert.equal(db.prepare("SELECT count(*) AS count FROM plan_revisions WHERE athlete_key = ?").get("athlete-a").count, 2);
     assert.equal(db.prepare("SELECT count(*) AS count FROM set_results WHERE session_key = ?").get("sess-a").count, 2);
     assert.equal(rebuilt.sessions[0].snapshot.completion_items[1].side, "right");
     assert.equal(rebuilt.plan_revisions[0].week.wednesday.blocks[0].exercises[0].sets[0].tempo, "3-1-1-0");
+    assert.deepEqual(rebuilt.plan_revisions[1].week.wednesday.recording_intent, { schema_version: 1, source: "coros", sport_type: 102, route_key: "香山鸡腿线" });
   } finally {
     db.close();
   }
