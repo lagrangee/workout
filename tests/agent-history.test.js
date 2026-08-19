@@ -41,7 +41,7 @@ test("Agent Session list preserves bounded filters, provenance, and training ver
   assert.equal(manifest.response.status, 200);
   assert.equal(manifest.body.links.sessions, "/api/agent/v1/sessions");
   assert.equal(manifest.body.links.progress, "/api/agent/v1/progress");
-  assert.equal(manifest.body.links.exercise, "/api/agent/v1/exercises/{exercise_key}");
+  assert.equal(manifest.body.links.exercise, "/api/agent/v1/exercises/{exercise_id}");
   assert.equal(manifest.body.endpoints.sessions.rules.cursor_ttl_minutes, 15);
   assert.equal(manifest.body.endpoints.progress.rules.max_days, 3660);
 

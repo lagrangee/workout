@@ -2,6 +2,7 @@
 
 import { addDays, canonicalJson, dateRange, dateSpan, deepClone, localDate, opaqueKey, WEEKDAYS, weekdayKey } from "./util.js";
 import { validatePlanPackage } from "./validation.js";
+import { resolveExercise } from "./exercise-registry.js";
 
 /** @param {any} state @param {string} date */
 export function effectiveRevision(state, date) {
@@ -34,26 +35,23 @@ export function expandSnapshot(slot, prefix = "snap") {
     block.exercises.forEach(/** @param {any} exercise @param {number} exerciseIndex */ (exercise, exerciseIndex) => {
       const exerciseOccurrenceKey = opaqueKey(`${prefix}e${blockIndex + 1}${exerciseIndex + 1}`);
       snapshot.exercise_occurrence_keys.push(exerciseOccurrenceKey);
-      const snapshotExercise = {
-        exercise_occurrence_key: exerciseOccurrenceKey,
-        exercise_key: exercise.exercise_key,
-        name: exercise.name,
-        category: exercise.category,
-        side_mode: exercise.side_mode,
-        sets: /** @type {any[]} */ ([]),
-      };
+      const canonical = Boolean(exercise.exercise_id);
+      const snapshotExercise = canonical
+        ? { exercise_occurrence_key: exerciseOccurrenceKey, occurrence_key: exercise.occurrence_key ?? exerciseOccurrenceKey, exercise_id: exercise.exercise_id, name: exercise.name, definition_version: exercise.definition_version, execution_mode: exercise.execution_mode, sets: /** @type {any[]} */ ([]) }
+        : { exercise_occurrence_key: exerciseOccurrenceKey, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: /** @type {any[]} */ ([]) };
       exercise.sets.forEach(/** @param {any} set @param {number} setIndex */ (set, setIndex) => {
-        const setKey = opaqueKey(`${prefix}s${blockIndex + 1}${exerciseIndex + 1}${setIndex + 1}`);
+        const setKey = canonical ? set.set_id : opaqueKey(`${prefix}s${blockIndex + 1}${exerciseIndex + 1}${setIndex + 1}`);
         const snapshotSet = { set_key: setKey, ...deepClone(set) };
         snapshotExercise.sets.push(snapshotSet);
-        const sides = exercise.side_mode === "left_right" ? ["left", "right"] : ["none"];
+        const sides = !canonical ? (exercise.side_mode === "left_right" ? ["left", "right"] : ["none"]) : exercise.execution_mode === "none" ? ["none"] : exercise.execution_mode === "bilateral" ? ["both"] : ["left", "right"];
         sides.forEach(/** @param {string} side */ (side) => snapshot.completion_items.push({
           completion_item_key: opaqueKey(`${prefix}c${snapshot.completion_items.length + 1}`),
           exercise_occurrence_key: exerciseOccurrenceKey,
+          ...(canonical ? { occurrence_key: exercise.occurrence_key ?? exerciseOccurrenceKey, set_id: setKey, resistance_mode: set.resistance_mode, resistance_kg: set.resistance_kg, tempo: set.tempo, rest_after_sec: set.rest_after_sec } : {}),
           set_key: setKey,
           side,
           target: deepClone(set.target),
-          resistance: deepClone(set.resistance),
+          resistance: canonical ? (set.resistance_mode === "bodyweight" ? { mode: "bodyweight" } : set.resistance_mode === "external_load" ? { mode: "external_load", load_kg: set.resistance_kg, quantity: 1 } : null) : deepClone(set.resistance),
         }));
       });
       snapshotBlock.exercises.push(snapshotExercise);
@@ -95,7 +93,7 @@ export function scheduleEntry(state, date, now = new Date(), includePrescription
     is_due: isDue, is_overdue_unstarted: isPast && !session,
     source_ref: `schedule:${date}:${revision.revision_key}`, revision_key: revision.revision_key,
   };
-  if (includePrescription) entry.prescription = deepClone(slot);
+  if (includePrescription) entry.prescription = planSlotProjection(slot);
   return entry;
 }
 
@@ -111,7 +109,7 @@ export function todayModel(state, now = new Date()) {
 export function completionFraction(session) {
   const total = session.snapshot.completion_items.length;
   if (!total) return 0;
-  const completed = session.completion_results.length;
+  const completed = session.completion_results.filter(/** @param {any} result */ (result) => result.status ? result.status === "completed" : result.completed === true).length;
   return completed / total;
 }
 
@@ -125,12 +123,14 @@ export function sessionSummary(session) {
   return {
     session_key: session.session_key,
     scheduled_date: session.scheduled_date,
+    local_date: session.local_date ?? session.scheduled_date,
     title: session.title,
     status: session.status,
     completion_fraction: completionFraction(session),
     training_duration_sec: Math.round(trainingDuration(session)),
     session_rpe: session.session_rpe,
-    exercise_keys: [...new Set(session.snapshot.blocks.flatMap(/** @param {any} block */ (block) => block.exercises.map(/** @param {any} exercise */ (exercise) => exercise.exercise_key)))],
+    exercise_keys: [...new Set(session.snapshot.blocks.flatMap(/** @param {any} block */ (block) => block.exercises.map(/** @param {any} exercise */ (exercise) => exercise.exercise_key ?? exercise.exercise_id)))],
+    exercise_ids: [...new Set(session.snapshot.blocks.flatMap(/** @param {any} block */ (block) => block.exercises.map(/** @param {any} exercise */ (exercise) => exercise.exercise_id ?? exercise.exercise_key)))],
     updated_at: session.updated_at,
     source_ref: `session:${session.scheduled_date}:${session.session_key}`,
   };
@@ -144,9 +144,9 @@ export function planModel(state, now = new Date()) {
   const future = state.plan_revisions
     .filter(/** @param {any} revision */ (revision) => revision.effective_from > today && effectiveRevision(state, revision.effective_from)?.revision_key === revision.revision_key)
     .sort(/** @param {any} left @param {any} right */ (left, right) => left.effective_from.localeCompare(right.effective_from))
-    .map(/** @param {any} revision */ (revision) => ({ effective_from: revision.effective_from, week: deepClone(revision.week) }));
+    .map(/** @param {any} revision */ (revision) => ({ effective_from: revision.effective_from, week: planWeekProjection(revision.week) }));
   return {
-    current: current ? { effective_from: current.effective_from, week: deepClone(current.week) } : null,
+    current: current ? { effective_from: current.effective_from, week: planWeekProjection(current.week) } : null,
     future,
     next_effective_from: future[0]?.effective_from ?? null,
     first_effective_from: firstEffective?.effective_from ?? null,
@@ -169,6 +169,25 @@ function emptyWeek() {
   return Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
 }
 
+/** @param {any} week */
+function planWeekProjection(week) {
+  return Object.fromEntries(WEEKDAYS.map((weekday) => [weekday, planSlotProjection(week[weekday])]));
+}
+
+/** @param {any} slot */
+function planSlotProjection(slot) {
+  if (!slot || slot.kind !== "workout") return deepClone(slot);
+  return {
+    ...deepClone(slot),
+      blocks: slot.blocks.map(/** @param {any} block */ (block) => ({
+      ...deepClone(block),
+        exercises: block.exercises.map(/** @param {any} exercise */ (exercise) => exercise.exercise_id
+        ? { ...deepClone(exercise), name: resolveExercise(exercise.exercise_id)?.name ?? exercise.name }
+        : deepClone(exercise)),
+    })),
+  };
+}
+
 /** @param {any} state @param {any} packageValue */
 export function planUpdateBase(state, packageValue) {
   const revision = effectiveRevision(state, packageValue.effective_from);
@@ -189,6 +208,7 @@ export function validatePlanForState(state, text, now = new Date()) {
   if (!result.ok) return result;
   /** @type {any} */
   const value = result.value;
+  if (state.__canonicalCutover && value.schema_version !== 2) return { ok: false, errors: [{ path: "/schema_version", message: "Canonical D1 cutover requires Plan Update Package schema_version 2" }] };
   const baselineWeek = planUpdateBase(state, value).week ?? emptyWeek();
   if (canonicalJson(baselineWeek) === canonicalJson(value.week)) return { ok: false, errors: [{ path: "/week", message: "This package does not change the effective template" }] };
   return { ok: true, value, preview: packagePreview(state, value, now) };

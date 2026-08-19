@@ -53,10 +53,10 @@ The current read resources are:
 GET /api/agent/v1/overview
 GET /api/agent/v1/plan
 GET /api/agent/v1/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD[&expand=prescription]
-GET /api/agent/v1/sessions[?from=&to=&limit=&cursor=&status=&exercise_key=]
+GET /api/agent/v1/sessions[?from=&to=&limit=&cursor=&status=&exercise_id=]
 GET /api/agent/v1/sessions/:session_key
 GET /api/agent/v1/progress[?from=&to=&preset=&range=&bucket=]
-GET /api/agent/v1/exercises/:exercise_key[?from=&to=&preset=&range=]
+GET /api/agent/v1/exercises/:exercise_id[?from=&to=&preset=&range=]
 GET /api/agent/v1/aerobic/activities[?from=&to=&sport_type=&route_key=&limit=&cursor=]
 GET /api/agent/v1/aerobic/activities/:activity_ref
 GET /api/agent/v1/daily/:local_date
@@ -98,8 +98,8 @@ contains a `prescription`, a Rest Day remains `{ kind: "rest" }`, and an empty
 slot remains `null`. Plan `source_ref` values are scoped to the Agent resource
 and do not expose internal Plan Revision keys.
 
-`sessions` accepts optional inclusive local-date bounds, a status enum, an
-Exercise key, and a limit from 1 to 200 (default 50). Results are ordered by
+`sessions` accepts optional inclusive local-date bounds, a status enum, a
+stable global `exercise_id`, and a limit from 1 to 200 (default 50). Results are ordered by
 scheduled date descending and stable Session key descending. `page.next_cursor`
 is opaque, bound to every filter including the limit, expires after 15 minutes,
 and carries the `training_version`; a version change returns HTTP 409 with
@@ -107,12 +107,14 @@ and carries the `training_version`; a version change returns HTTP 409 with
 expired, or mismatched cursors return HTTP 400 with `invalid_cursor`.
 
 `sessions/:session_key` returns the immutable Training Plan Snapshot alongside
-Actual Training Data: completion results, intervals, status, duration, RPE,
-notes, skip reason, and Exercise Feedback. `progress` returns metric evidence,
+Actual Training Data: exact targets, planned resistance, tempo, rest, side,
+Set Results, actual metric/value, status, canonical kg resistance, RIR, notes,
+intervals, duration, RPE, skip reason, and Exercise Feedback. `progress` returns metric evidence,
 completion and streak values, duration, strength-training days, RPE, and
-requested day/week/month buckets. `exercises/:exercise_key` returns display-name
-history, performed-session count, per-set actuals and resistance semantics,
-side-separated series, and safe Session references. Empty valid windows remain
+requested day/week/month buckets. `exercises/:exercise_id` returns
+definition-version/name history, performed-session count, per-set actuals and
+resistance semantics, side-separated series, and safe Session references.
+Empty valid windows remain
 successful responses with explicit empty arrays or null denominators.
 
 The aerobic activity index is newest-first and bounded to an inclusive
@@ -135,7 +137,7 @@ telemetry remain outside the Agent API.
 
 `plan-updates/validate` is non-mutating. Its request body is exactly
 `{ "package_text": string }`; the string is the canonical Plan Update Package
-v1 JSON consumed by the existing strict validator. The Agent/MCP layer does
+v2 JSON consumed by the existing strict validator. The Agent/MCP layer does
 not parse natural-language coaching requests and does not fill missing package
 fields. A valid response includes the complete resulting week, changed weekday
 count, `package_digest`, `base_plan_digest`, explicit current-plan base

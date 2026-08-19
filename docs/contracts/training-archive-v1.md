@@ -44,7 +44,8 @@ $WORKOUT_ARCHIVE_DIR/
   daily/YYYY-MM-DD.md
   weekly/YYYY-Www.md
   workout/index.md
-  workout/sessions/<session_key>.md
+  workout/sessions/YYYY-MM-DD--<session_key>.md
+  data/workout/YYYY-MM-DD--<session_key>.json
   data/coros/YYYY-MM-DD-<activity_ref>.json
   data/coros/YYYY-MM-DD-<activity_ref>.fit
   .sync/training-archive/YYYY-MM-DD.json
@@ -68,18 +69,26 @@ more than one configured direction matched, and `ignored` for indoor activity.
 ### Obsidian structured record graph
 
 The daily note is a date-scoped `daily-hub` record. Its native Properties keep
-source status, freshness, machine references, and wikilinks to the Workout
-Session records and COROS Activity Archive records for that local date. It is
-a compact navigation and context surface; detailed Session or COROS facts are
+flat source status, freshness, machine references, and wikilinks to the Workout
+Session records and COROS Activity Archive records for that local date. It is a
+compact navigation and context surface; detailed Session or COROS facts are
 not copied into it. `legacy_kind: training-day` may remain during the v1
 migration for readers of the previous daily-note shape.
 
-Each Workout Session is written once at
-`workout/sessions/<session_key>.md` with `kind: workout-session`, a stable
-`source_id`/`session_key`, the Workout source reference, status, completion,
-duration, RPE, freshness, and a link back to its daily Hub. `workout/index.md`
-is a derived Obsidian Dataview/Base-compatible view over those Properties; it
-is not a second manually maintained table or source of facts.
+The daily Hub and a Workout Session have different ownership: the Hub answers
+"what source records are available on this local date?"; the Session note is
+the user-readable projection of one Workout-authoritative event. Each Workout
+Session is written once at
+`workout/sessions/YYYY-MM-DD--<session_key>.md` with `kind: workout-session`, a
+stable `source_id`/`session_key`, the Workout source reference, status,
+completion, duration, RPE, freshness, and a link back to its daily Hub. Its
+bounded plan snapshot, completion results, intervals, feedback, and training
+version are also rendered when available; the same detail is retained in the
+private `data/workout/YYYY-MM-DD--<session_key>.json` sidecar. The `sessions`
+directory is a useful user-facing collection and Dataview scope, not an
+additional source or intermediate copy. `workout/index.md` is a derived
+Obsidian Dataview/Base-compatible view over those Properties; it is not a
+second manually maintained table or source of facts.
 
 The daily Hub keeps Workout and COROS links and machine references in separate
 fields. Matching `local_date` provides context only and never creates an
@@ -91,7 +100,10 @@ projection. `fit_status` and `fit_path` remain explicit Properties;
 `fit_file` is a wikilink only when the byte-preserved sidecar was written.
 Partial or failed FIT retrieval keeps the status and relative path but writes
 `fit_file: null`, so a missing artifact is never presented as a successful
-link. These local Properties and links are not part of the D1 projection.
+link. These local Properties and links are not part of the D1 projection. Lap
+groups are rendered as separate Markdown tables using the versioned COROS
+field catalog; the sanitized JSON sidecar remains the complete local provider
+detail record.
 
 ## Source routing
 
@@ -340,6 +352,7 @@ catalog.
 ## Canonical references
 
 - [Training Archive Wire Catalog v1](training-archive-wire-catalog-v1.md)
+- [COROS Field Catalog v2](coros-field-catalog-v2.md)
 - [Athlete Export v1](athlete-export-v1.md)
 - [Athlete Export Wire Catalog v1](athlete-export-wire-catalog-v1.md)
 - [Workout domain context](../../CONTEXT.md)

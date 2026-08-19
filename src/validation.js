@@ -1,6 +1,7 @@
 // @ts-check
 
 import { isRecord, isValidLocalDate, isValidTimezone, isValidUtcInstant, trimString } from "./util.js";
+import { resolveExercise } from "./exercise-registry.js";
 
 /** @param {string} value */
 function jsonPointerSegment(value) {
@@ -182,6 +183,134 @@ function validateSet(value, path, errors, category) {
   if (category !== "strength" && value.target_rir !== null) errors.push(`${path}/target_rir: only strength may set RIR`);
 }
 
+const CANONICAL_SIDE_MODES = ["none", "bilateral", "per_side", "alternating"];
+const CANONICAL_METRICS = ["reps", "duration_sec"];
+const CANONICAL_KEY = /^[a-z][a-z0-9_]{0,63}$/;
+const CANONICAL_TEMPO = /^(?:0|[1-9]\d*)(?:\.\d+)?-(?:0|[1-9]\d*)(?:\.\d+)?-(?:0|[1-9]\d*)(?:\.\d+)?-(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
+/** @param {number} value @param {string} unit */
+function canonicalKg(value, unit) {
+  const kg = unit === "lb" ? value * 0.45359237 : value;
+  return Math.round(kg * 100000) / 100000;
+}
+
+/** @param {any} value @param {string} path @param {string[]} errors @param {any} exercise */
+function validateCanonicalTarget(value, path, errors, exercise) {
+  if (!requireObject(value, path, errors)) return null;
+  exactKeys(value, ["metric", "value"], path, errors);
+  if (!CANONICAL_METRICS.includes(value.metric)) errors.push(`${path}/metric: unsupported metric`);
+  if (exercise && !exercise.target.metrics.includes(value.metric)) errors.push(`${path}/metric: metric is not supported by ${exercise.exercise_id}`);
+  if (!requireInteger(value.value, `${path}/value`, errors) || value.value <= 0) errors.push(`${path}/value: must be a positive integer`);
+  return { metric: value.metric, value: value.value };
+}
+
+/** @param {any} value @param {string} path @param {string[]} errors @param {any} exercise */
+function validateCanonicalResistance(value, path, errors, exercise) {
+  if (value === null) return { resistance_mode: null, resistance_kg: null };
+  if (!requireObject(value, path, errors)) return { resistance_mode: null, resistance_kg: null };
+  if (value.mode === "bodyweight") {
+    exactKeys(value, ["mode"], path, errors);
+    if (!exercise?.resistance.modes.includes("bodyweight")) errors.push(`${path}/mode: bodyweight is not supported by ${exercise?.exercise_id ?? "exercise"}`);
+    return { resistance_mode: "bodyweight", resistance_kg: null };
+  }
+  exactKeys(value, ["mode", "value", "unit"], path, errors);
+  if (value.mode !== "external_load") errors.push(`${path}/mode: unsupported resistance mode`);
+  if (!exercise?.resistance.modes.includes("external_load")) errors.push(`${path}/mode: external_load is not supported by ${exercise?.exercise_id ?? "exercise"}`);
+  if (!Number.isFinite(value.value) || typeof value.value !== "number" || value.value < 0) errors.push(`${path}/value: must be a non-negative number`);
+  if (!exercise?.resistance.units.includes(value.unit)) errors.push(`${path}/unit: ${value.unit} is not supported by ${exercise?.exercise_id ?? "exercise"}`);
+  return { resistance_mode: "external_load", resistance_kg: typeof value.value === "number" && Number.isFinite(value.value) && value.value >= 0 && (value.unit === "kg" || value.unit === "lb") ? canonicalKg(value.value, value.unit) : null };
+}
+
+/** @param {any} value @param {string} path @param {string[]} errors @param {any} exercise */
+function validateCanonicalSet(value, path, errors, exercise) {
+  if (!requireObject(value, path, errors)) return null;
+  exactKeys(value, ["set_id", "ordinal", "target", "resistance", "tempo", "rest_after_sec"], path, errors);
+  if (!requireString(value.set_id, `${path}/set_id`, errors) || !CANONICAL_KEY.test(value.set_id)) errors.push(`${path}/set_id: invalid key`);
+  if (!requireInteger(value.ordinal, `${path}/ordinal`, errors) || value.ordinal <= 0) errors.push(`${path}/ordinal: must be a positive integer`);
+  const target = validateCanonicalTarget(value.target, `${path}/target`, errors, exercise);
+  const resistance = validateCanonicalResistance(value.resistance, `${path}/resistance`, errors, exercise);
+  if (value.tempo !== null && (typeof value.tempo !== "string" || !CANONICAL_TEMPO.test(value.tempo))) errors.push(`${path}/tempo: must be null or a four-phase string such as 3-1-1-0`);
+  if (value.rest_after_sec !== null && (!requireInteger(value.rest_after_sec, `${path}/rest_after_sec`, errors) || value.rest_after_sec < 0)) errors.push(`${path}/rest_after_sec: must be null or a non-negative integer`);
+  return target ? { set_id: value.set_id, ordinal: value.ordinal, target, ...resistance, tempo: value.tempo, rest_after_sec: value.rest_after_sec } : null;
+}
+
+/** @param {any} value @param {string} path @param {string[]} errors */
+function validateCanonicalSlot(value, path, errors) {
+  if (value === null) return null;
+  if (!requireObject(value, path, errors)) return null;
+  if (value.kind === "rest") { exactKeys(value, ["kind"], path, errors); return { kind: "rest" }; }
+  exactKeys(value, ["kind", "title", "start_time", "estimated_duration_min", "blocks"], path, errors);
+  if (value.kind !== "workout") errors.push(`${path}/kind: must be workout or rest`);
+  requireTrimmedString(value.title, `${path}/title`, errors);
+  if (value.start_time !== null && (!requireString(value.start_time, `${path}/start_time`, errors) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.start_time))) errors.push(`${path}/start_time: must be HH:mm or null`);
+  if (!requireInteger(value.estimated_duration_min, `${path}/estimated_duration_min`, errors) || value.estimated_duration_min <= 0) errors.push(`${path}/estimated_duration_min: must be a positive integer`);
+  if (!requireArray(value.blocks, `${path}/blocks`, errors) || value.blocks.length < 1 || value.blocks.length > 20) { errors.push(`${path}/blocks: must contain 1-20 blocks`); return null; }
+  const occurrences = new Set();
+  let completionItems = 0;
+  /** @type {any[]} */
+  const blocks = [];
+  value.blocks.forEach((block, blockIndex) => {
+    const blockPath = `${path}/blocks/${blockIndex}`;
+    if (!requireObject(block, blockPath, errors)) return;
+    exactKeys(block, ["title", "exercises"], blockPath, errors);
+    requireTrimmedString(block.title, `${blockPath}/title`, errors);
+    if (!requireArray(block.exercises, `${blockPath}/exercises`, errors) || block.exercises.length < 1) { errors.push(`${blockPath}/exercises: must not be empty`); return; }
+    /** @type {any[]} */
+    const exercises = [];
+    block.exercises.forEach((exerciseValue, exerciseIndex) => {
+      const exercisePath = `${blockPath}/exercises/${exerciseIndex}`;
+      if (!requireObject(exerciseValue, exercisePath, errors)) return;
+      exactKeys(exerciseValue, ["occurrence_key", "exercise_id", "execution_mode", "sets"], exercisePath, errors);
+      if (!requireString(exerciseValue.occurrence_key, `${exercisePath}/occurrence_key`, errors) || !CANONICAL_KEY.test(exerciseValue.occurrence_key)) errors.push(`${exercisePath}/occurrence_key: invalid key`);
+      if (occurrences.has(exerciseValue.occurrence_key)) errors.push(`${exercisePath}/occurrence_key: duplicate in workout slot`);
+      occurrences.add(exerciseValue.occurrence_key);
+      if (!requireString(exerciseValue.exercise_id, `${exercisePath}/exercise_id`, errors)) return;
+      const exercise = resolveExercise(exerciseValue.exercise_id);
+      if (!exercise) errors.push(`${exercisePath}/exercise_id: unknown Exercise ID`);
+      else if (exercise.status !== "active") errors.push(`${exercisePath}/exercise_id: deprecated Exercise cannot be selected in a new Plan`);
+      if (!CANONICAL_SIDE_MODES.includes(exerciseValue.execution_mode)) errors.push(`${exercisePath}/execution_mode: unsupported execution mode`);
+      else if (exercise && !exercise.execution.side_modes.includes(exerciseValue.execution_mode)) errors.push(`${exercisePath}/execution_mode: mode is not supported by ${exerciseValue.exercise_id}`);
+      if (!requireArray(exerciseValue.sets, `${exercisePath}/sets`, errors) || exerciseValue.sets.length < 1 || exerciseValue.sets.length > 200) { errors.push(`${exercisePath}/sets: must contain 1-200 sets`); return; }
+      const setIds = new Set();
+      /** @type {any[]} */
+      const sets = [];
+      exerciseValue.sets.forEach((setValue, setIndex) => {
+        const setPath = `${exercisePath}/sets/${setIndex}`;
+        if (setIds.has(setValue?.set_id)) errors.push(`${setPath}/set_id: duplicate within occurrence`);
+        setIds.add(setValue?.set_id);
+        if (setValue?.ordinal !== setIndex + 1) errors.push(`${setPath}/ordinal: must equal its ordered position`);
+        const normalizedSet = validateCanonicalSet(setValue, setPath, errors, exercise);
+        if (normalizedSet) sets.push(normalizedSet);
+        completionItems += ["per_side", "alternating"].includes(exerciseValue.execution_mode) ? 2 : 1;
+      });
+      exercises.push({ occurrence_key: exerciseValue.occurrence_key, exercise_id: exerciseValue.exercise_id, execution_mode: exerciseValue.execution_mode, name: exercise?.name ?? null, definition_version: exercise?.definition_version ?? null, sets });
+    });
+    blocks.push({ title: block.title, exercises });
+  });
+  if (completionItems > 200) errors.push(`${path}/blocks: workout may expand to at most 200 Completion Items`);
+  return { kind: "workout", title: value.title, start_time: value.start_time, estimated_duration_min: value.estimated_duration_min, blocks };
+}
+
+/** @param {any} packageValue @param {string} today */
+function validateCanonicalPlanPackageValue(packageValue, today) {
+  /** @type {string[]} */
+  const errors = [];
+  if (!requireObject(packageValue, "", errors)) return { ok: false, errors: validationErrorDetails(errors) };
+  exactKeys(packageValue, ["schema_version", "effective_from", "week"], "", errors);
+  if (packageValue.schema_version !== 2) errors.push("/schema_version: must equal integer 2");
+  if (!requireString(packageValue.effective_from, "/effective_from", errors) || !isValidLocalDate(packageValue.effective_from)) errors.push("/effective_from: must be a valid local date");
+  else if (packageValue.effective_from <= today) errors.push("/effective_from: must be later than the current local date");
+  if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: validationErrorDetails(errors) };
+  exactKeys(packageValue.week, ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], "/week", errors);
+  /** @type {Record<string, any>} */
+  const week = {};
+  for (const weekday of ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]) {
+    if (!Object.prototype.hasOwnProperty.call(packageValue.week, weekday)) errors.push(`/week/${weekday}: required`);
+    else week[weekday] = validateCanonicalSlot(packageValue.week[weekday], `/week/${weekday}`, errors);
+  }
+  return errors.length ? { ok: false, errors: validationErrorDetails(errors) } : { ok: true, value: { schema_version: 2, effective_from: packageValue.effective_from, week } };
+}
+
 /** @param {any} value @param {string} path @param {string[]} errors */
 function validateSlot(value, path, errors) {
   if (value === null) return;
@@ -230,6 +359,7 @@ export function validatePlanPackage(text, today) {
       errors: [{ path: error instanceof StrictJsonParseError ? error.path : "", message: error instanceof Error ? error.message : "Invalid JSON" }],
     };
   }
+  if (packageValue?.schema_version === 2) return validateCanonicalPlanPackageValue(packageValue, today);
   if (!requireObject(packageValue, "", errors)) return { ok: false, errors: validationErrorDetails(errors) };
   exactKeys(packageValue, ["schema_version", "effective_from", "week"], "", errors);
   if (packageValue.schema_version !== 1) errors.push("/schema_version: must equal integer 1");
@@ -266,8 +396,113 @@ function validateResistanceValue(value, path, errors) {
   if (value.mode !== "bodyweight" && (!Number.isInteger(value.quantity) || value.quantity <= 0)) errors.push(`${path}/quantity: invalid quantity`);
 }
 
+/** @param {any} value @param {string} path @param {string[]} errors @param {any} item */
+function validateCanonicalResultResistance(value, path, errors, item) {
+  if (value === null) return { resistance_mode: null, resistance_kg: null };
+  if (!requireObject(value, path, errors)) return { resistance_mode: null, resistance_kg: null };
+  const plannedMode = item.resistance_mode ?? (item.resistance?.mode === "external_load" ? "external_load" : item.resistance?.mode === "bodyweight" ? "bodyweight" : null);
+  if (value.mode === "bodyweight") {
+    exactKeys(value, ["mode"], path, errors);
+    if (plannedMode && plannedMode !== "bodyweight") errors.push(`${path}/mode: must match snapshot resistance mode`);
+    return { resistance_mode: "bodyweight", resistance_kg: null };
+  }
+  exactKeys(value, ["mode", "value", "unit"], path, errors);
+  if (value.mode !== "external_load") errors.push(`${path}/mode: unsupported resistance mode`);
+  if (plannedMode && plannedMode !== "external_load") errors.push(`${path}/mode: must match snapshot resistance mode`);
+  if (typeof value.value !== "number" || !Number.isFinite(value.value) || value.value < 0) errors.push(`${path}/value: must be a non-negative number`);
+  if (!["kg", "lb"].includes(value.unit)) errors.push(`${path}/unit: must be kg or lb`);
+  return { resistance_mode: "external_load", resistance_kg: typeof value.value === "number" && Number.isFinite(value.value) && value.value >= 0 && ["kg", "lb"].includes(value.unit) ? canonicalKg(value.value, value.unit) : null };
+}
+
+/** @param {any} value @param {string} path @param {string[]} errors @param {any} item */
+function validateCanonicalSetResult(value, path, errors, item) {
+  if (!requireObject(value, path, errors)) return null;
+  exactKeys(value, ["completion_item_key", "status", "actual", "resistance", "rir", "note", "completed_at"], path, errors);
+  if (!requireString(value.completion_item_key, `${path}/completion_item_key`, errors)) return null;
+  if (!["completed", "partial", "skipped"].includes(value.status)) errors.push(`${path}/status: must be completed, partial, or skipped`);
+  let actual = null;
+  if (value.actual !== null) {
+    if (!requireObject(value.actual, `${path}/actual`, errors)) return null;
+    exactKeys(value.actual, ["metric", "value"], `${path}/actual`, errors);
+    if (value.actual.metric !== item.target.metric) errors.push(`${path}/actual/metric: must match snapshot target`);
+    if (!Number.isInteger(value.actual.value) || value.actual.value <= 0) errors.push(`${path}/actual/value: must be a positive integer`);
+    actual = { metric: value.actual.metric, value: value.actual.value };
+  }
+  if (value.status === "completed" && !actual) errors.push(`${path}/actual: completed result requires an actual value`);
+  if (value.status === "skipped" && actual) errors.push(`${path}/actual: skipped result must use null`);
+  const resistance = validateCanonicalResultResistance(value.resistance, `${path}/resistance`, errors, item);
+  if (value.rir !== null && (!requireInteger(value.rir, `${path}/rir`, errors) || value.rir < 0 || value.rir > 10)) errors.push(`${path}/rir: must be null or 0-10`);
+  if (value.note !== null && (!requireString(value.note, `${path}/note`, errors) || trimString(value.note).length < 1 || trimString(value.note).length > 1000)) errors.push(`${path}/note: must be null or 1-1000 trimmed characters`);
+  if (value.completed_at !== null && (!requireString(value.completed_at, `${path}/completed_at`, errors) || !isValidUtcInstant(value.completed_at))) errors.push(`${path}/completed_at: must be null or RFC 3339 UTC`);
+  if (value.status !== "skipped" && value.completed_at === null) errors.push(`${path}/completed_at: completed or partial result requires a timestamp`);
+  return { completion_item_key: value.completion_item_key, status: value.status, actual, ...resistance, rir: value.rir, note: value.note, completed_at: value.completed_at };
+}
+
+/** @param {any} record @param {any} session @param {string} now @param {string} mode */
+function validateCanonicalSessionRecord(record, session, now, mode) {
+  /** @type {string[]} */
+  const errors = [];
+  if (!requireObject(record, "$", errors)) return errors;
+  exactKeys(record, ["record_schema_version", "set_results", "training_intervals", "session_rpe", "note", "exercise_feedback", "skip_reason"], "$", errors);
+  if (record.record_schema_version !== 2) errors.push("/record_schema_version: must equal integer 2");
+  if (!requireArray(record.set_results, "/set_results", errors)) return errors;
+  if (!requireArray(record.training_intervals, "/training_intervals", errors)) return errors;
+  if (!requireArray(record.exercise_feedback, "/exercise_feedback", errors)) return errors;
+  const itemMap = new Map(session.snapshot.completion_items.map(/** @param {any} item */ (item) => [item.completion_item_key, item]));
+  const resultKeys = new Set();
+  for (const [index, value] of record.set_results.entries()) {
+    const path = `/set_results/${index}`;
+    const item = itemMap.get(value?.completion_item_key);
+    if (resultKeys.has(value?.completion_item_key)) errors.push(`${path}/completion_item_key: duplicate`);
+    resultKeys.add(value?.completion_item_key);
+    if (!item) { errors.push(`${path}/completion_item_key: unknown snapshot Completion Item`); continue; }
+    validateCanonicalSetResult(value, path, errors, item);
+  }
+  const intervalKeys = new Set(); let openCount = 0;
+  for (const [index, interval] of record.training_intervals.entries()) {
+    const path = `/training_intervals/${index}`;
+    if (!requireObject(interval, path, errors)) continue;
+    exactKeys(interval, ["interval_key", "started_at", "ended_at"], path, errors);
+    if (intervalKeys.has(interval.interval_key)) errors.push(`${path}/interval_key: duplicate`); intervalKeys.add(interval.interval_key);
+    if (!isValidUtcInstant(interval.started_at)) errors.push(`${path}/started_at: invalid instant`);
+    if (interval.ended_at === null) openCount += 1;
+    else if (!isValidUtcInstant(interval.ended_at)) errors.push(`${path}/ended_at: invalid instant`);
+    else if (Date.parse(interval.ended_at) <= Date.parse(interval.started_at)) errors.push(`${path}: ended_at must be after started_at`);
+  }
+  for (let index = 1; index < record.training_intervals.length; index += 1) {
+    const previous = record.training_intervals[index - 1]; const current = record.training_intervals[index];
+    if (isValidUtcInstant(previous.ended_at) && isValidUtcInstant(current.started_at) && Date.parse(current.started_at) < Date.parse(previous.ended_at)) errors.push(`/training_intervals/${index}: intervals overlap or are out of order`);
+  }
+  for (const [index, value] of record.set_results.entries()) {
+    if (!isValidUtcInstant(value?.completed_at)) continue;
+    const completedAt = Date.parse(value.completed_at);
+    const insideInterval = record.training_intervals.some((interval) => isValidUtcInstant(interval.started_at) && completedAt >= Date.parse(interval.started_at) && (interval.ended_at === null || (isValidUtcInstant(interval.ended_at) && completedAt <= Date.parse(interval.ended_at))));
+    if (!insideInterval) errors.push(`/set_results/${index}/completed_at: must fall inside a Session interval`);
+    if (completedAt > Date.parse(now)) errors.push(`/set_results/${index}/completed_at: cannot be in the future`);
+  }
+  if (mode === "in_progress" && (openCount !== 1 || record.training_intervals.at(-1)?.ended_at !== null)) errors.push("/training_intervals: in-progress record needs exactly one open interval last");
+  if (mode === "terminal" && (openCount !== 0 || record.training_intervals.length === 0)) errors.push("/training_intervals: terminal record needs at least one closed interval");
+  if (mode === "skipped" && (record.training_intervals.length !== 0 || record.set_results.length !== 0 || openCount !== 0)) errors.push("/training_intervals: skipped record cannot contain training intervals or results");
+  if (record.session_rpe !== null && (!Number.isInteger(record.session_rpe) || record.session_rpe < 0 || record.session_rpe > 10)) errors.push("/session_rpe: must be null or 0-10");
+  if (mode === "in_progress" && record.session_rpe !== null) errors.push("/session_rpe: must be null while in progress");
+  if (mode === "in_progress" && record.skip_reason !== null) errors.push("/skip_reason: must be null while in progress");
+  if (record.note !== null && (!requireString(record.note, "/note", errors) || trimString(record.note).length < 1 || trimString(record.note).length > 5000)) errors.push("/note: must be null or 1-5000 trimmed characters");
+  if (record.skip_reason !== null && (!requireString(record.skip_reason, "/skip_reason", errors) || trimString(record.skip_reason).length < 1 || trimString(record.skip_reason).length > 500)) errors.push("/skip_reason: must be null or 1-500 trimmed characters");
+  const feedbackKeys = new Set();
+  for (const [index, feedback] of record.exercise_feedback.entries()) {
+    const path = `/exercise_feedback/${index}`;
+    if (!requireObject(feedback, path, errors)) continue;
+    exactKeys(feedback, ["exercise_occurrence_key", "text"], path, errors);
+    if (feedbackKeys.has(feedback.exercise_occurrence_key)) errors.push(`${path}/exercise_occurrence_key: duplicate`); feedbackKeys.add(feedback.exercise_occurrence_key);
+    if (!session.snapshot.exercise_occurrence_keys.includes(feedback.exercise_occurrence_key)) errors.push(`${path}/exercise_occurrence_key: unknown snapshot exercise`);
+    if (!requireString(feedback.text, `${path}/text`, errors) || trimString(feedback.text).length < 1 || trimString(feedback.text).length > 1000) errors.push(`${path}/text: must contain 1-1000 trimmed characters`);
+  }
+  return errors;
+}
+
 /** @param {any} record @param {any} session @param {string} now @param {string} mode */
 export function validateSessionRecord(record, session, now, mode = "replace") {
+  if (isRecord(record) && record.record_schema_version === 2) return validateCanonicalSessionRecord(record, session, now, mode);
   /** @type {string[]} */
   const errors = [];
   if (!requireObject(record, "$", errors)) return errors;

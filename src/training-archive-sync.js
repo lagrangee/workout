@@ -3,8 +3,9 @@
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { addDays, canonicalJson, isValidLocalDate, localDate, sha256Hex } from "./util.js";
+import { COROS_LAP_TABLE_COLUMNS } from "./coros-field-catalog.js";
 import { COROS_SPORT_TYPES, SOURCE_STATUSES, containsSensitiveText, normalizeCorosActivity, normalizeTimezone, safeAerobicActivity } from "./training-archive.js";
-import { dailyHubModel, dailyHubNote, normalizeWorkoutSessionRecord, workoutIndexNote, workoutSessionNote } from "./training-records.js";
+import { dailyHubModel, dailyHubNote, normalizeWorkoutSessionDetails, normalizeWorkoutSessionRecord, workoutIndexNote, workoutSessionDataPath, workoutSessionNote, workoutSessionRelativePath } from "./training-records.js";
 import { assignRoute, readRouteRegistry, routeFilePath, routeLink, safeRouteProjection, writeRouteRegistry } from "./route-registry.js";
 import { createAerobicProjectionPublisher } from "./training-archive-cloud-publisher.js";
 
@@ -176,21 +177,38 @@ function safeSessions(value, targetDate, timezone, dataAsOf, sourceStatus) {
   if (!Array.isArray(value)) return [];
   return value.map((session) => {
     const sessionKey = safeReference(session?.session_key ?? session?.sessionKey);
-    if (!sessionKey) return null;
-    const scheduledDate = typeof (session?.scheduled_date ?? session?.local_date) === "string" && isValidLocalDate(session.scheduled_date ?? session.local_date) ? (session.scheduled_date ?? session.local_date) : targetDate;
+    if (!sessionKey) throw new Error("Workout Session must include a safe session_key");
+    const scheduledDate = session?.scheduled_date ?? session?.local_date;
+    if (typeof scheduledDate !== "string" || !isValidLocalDate(scheduledDate)) throw new Error(`Workout Session ${sessionKey} must include a valid scheduled_date`);
+    const localDateValue = session?.local_date ?? scheduledDate;
+    if (typeof localDateValue !== "string" || !isValidLocalDate(localDateValue)) throw new Error(`Workout Session ${sessionKey} must include a valid local_date`);
+    const sourceRef = safeReference(session?.source_ref ?? session?.sourceRef);
+    if (!sourceRef) throw new Error(`Workout Session ${sessionKey} must include a safe source_ref`);
+    const title = typeof session?.title === "string" && session.title.trim() ? session.title.trim() : null;
+    if (!title) throw new Error(`Workout Session ${sessionKey} must include a title`);
+    const status = session?.status;
+    if (!["planned", "in_progress", "completed", "partial", "abandoned", "skipped"].includes(status)) throw new Error(`Workout Session ${sessionKey} must include a supported status`);
+    const normalizedDataAsOf = safeInstant(session?.data_as_of ?? session?.dataAsOf ?? dataAsOf);
+    if (!normalizedDataAsOf) throw new Error(`Workout Session ${sessionKey} must include a valid data_as_of`);
+    const details = normalizeWorkoutSessionDetails(session);
     return {
       session_key: sessionKey,
-      source_ref: safeReference(session?.source_ref ?? session?.sourceRef) ?? `session:${scheduledDate}:${sessionKey}`,
+      source_ref: sourceRef,
       scheduled_date: scheduledDate,
-      title: typeof session?.title === "string" ? session.title : "Workout Session",
-      status: session?.status,
+      local_date: localDateValue,
+      scheduled_workout_key: safeReference(session?.scheduled_workout_key ?? session?.scheduledWorkoutKey ?? details.scheduled_workout_key),
+      plan_id: safeReference(session?.plan_id ?? session?.planId ?? details.plan_id),
+      plan_revision_key: safeReference(session?.plan_revision_key ?? session?.planRevisionKey ?? details.plan_revision_key),
+      title,
+      status,
       completion_fraction: typeof session?.completion_fraction === "number" ? session.completion_fraction : null,
       training_duration_sec: typeof session?.training_duration_sec === "number" ? session.training_duration_sec : null,
       session_rpe: typeof session?.session_rpe === "number" ? session.session_rpe : null,
       source_status: SOURCE_STATUSES.includes(session?.source_status) ? session.source_status : sourceStatus,
-      data_as_of: safeInstant(session?.data_as_of ?? session?.dataAsOf) ?? safeInstant(dataAsOf),
+      data_as_of: normalizedDataAsOf,
       updated_at: safeInstant(session?.updated_at ?? session?.updatedAt),
       timezone,
+      details,
     };
   }).filter(Boolean);
 }
@@ -332,6 +350,7 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
   let fitBytes = 0;
   await mkdir(join(archiveDir, "daily"), { recursive: true });
   await mkdir(join(archiveDir, "data", "coros"), { recursive: true });
+  await mkdir(join(archiveDir, "data", "workout"), { recursive: true });
   await mkdir(join(archiveDir, "workout", "sessions"), { recursive: true });
 
   const workoutRecords = (workout.sessions ?? [])
@@ -339,12 +358,15 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
       timezone,
       dataAsOf: workout.data_as_of,
       sourceStatus: workout.source_status,
+      includeDetails: true,
     }))
     .filter((record) => record.local_date === targetDate);
   for (const record of workoutRecords) {
-    const sessionPath = join(archiveDir, "workout", "sessions", `${fileComponent(record.session_key)}.md`);
+    const sessionPath = join(archiveDir, `${workoutSessionRelativePath(record.local_date, record.session_key)}.md`);
+    const sessionDataPath = join(archiveDir, `${workoutSessionDataPath(record.local_date, record.session_key)}.json`);
     await writeFile(sessionPath, workoutSessionNote(record), "utf8");
-    workoutPaths.push(relativePath(archiveDir, sessionPath));
+    await writeFile(sessionDataPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    workoutPaths.push(relativePath(archiveDir, sessionPath), relativePath(archiveDir, sessionDataPath));
   }
   const indexPath = join(archiveDir, "workout", "index.md");
   await writeFile(indexPath, workoutIndexNote(), "utf8");
@@ -362,7 +384,7 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
       activityPaths.push(relativePath(archiveDir, fitPath));
     }
     await writeFile(jsonPath, `${JSON.stringify(activity, null, 2)}\n`, "utf8");
-    await writeFile(notePath, activityNote(activity), "utf8");
+    await writeFile(notePath, corosActivityNote(activity), "utf8");
     activityPaths.push(relativePath(archiveDir, jsonPath), relativePath(archiveDir, notePath));
   }
   const routeHistoryActivities = mergeActivityHistory(await readArchivedActivities(archiveDir), activitiesForNote);
@@ -594,7 +616,7 @@ async function writeRetriedFitArtifact(archiveDir, targetDate, activityRef, byte
 
   const notePath = join(archiveDir, "data", "coros", `${stem}.md`);
   try {
-    await writeFile(notePath, activityNote(record), "utf8");
+    await writeFile(notePath, corosActivityNote(record), "utf8");
   } catch {
     // The JSON sidecar is the required record; an absent note is not a reason to duplicate source reads.
   }
@@ -818,7 +840,7 @@ function listYaml(values) {
   return values.length ? values.map((value) => `  - ${yamlValue(value)}`).join("\n") : "  []";
 }
 
-function activityNote(activity) {
+export function corosActivityNote(activity) {
   const routeLines = activity.route_key
     ? [`route_key: ${yamlValue(activity.route_key)}`, `route_direction: ${yamlValue(activity.route_direction)}`, `route_match_status: ${yamlValue(activity.route_match_status ?? "matched")}`, `route: ${yamlValue(routeLink(activity.route_key))}`]
     : [`route_key: null`, `route_direction: null`, `route_match_status: ${yamlValue(activity.route_match_status ?? "unmatched")}`];
@@ -826,11 +848,13 @@ function activityNote(activity) {
   const fitPath = activity.fit_file?.relative_path ?? null;
   const fitLink = fitStatus === "complete" && fitPath ? `[[${fitPath}]]` : null;
   const summary = activity.summary;
+  const detailLines = renderActivityDetailSections(activity);
   return [
     "---",
     "kind: coros-activity",
     "schema_version: 1",
-    "field_catalog_version: 1",
+    `field_catalog_version: ${activity.field_catalog_version ?? 2}`,
+    "projection_version: 2",
     "source: coros",
     `source_ref: ${yamlValue(activity.source_ref)}`,
     `activity_ref: ${yamlValue(activity.activity_ref)}`,
@@ -855,12 +879,199 @@ function activityNote(activity) {
     `- 平均心率：${summary.average_heart_rate_bpm ?? "—"} bpm`,
     `- 消耗：${summary.calories_kcal ?? "—"} kcal`,
     "",
+    ...detailLines,
     "## 来源",
     `- COROS activity_ref：${activity.activity_ref}`,
     `- FIT：${fitLink ?? fitStatus ?? "—"}`,
     activity.route_key ? `- 路线：${routeLink(activity.route_key)}` : "- 路线：未匹配（不适用或尚未确认）",
     "",
   ].join("\n");
+}
+
+const ACTIVITY_METRIC_LABELS = Object.freeze({
+  duration_sec: "用时",
+  total_duration_sec: "总用时",
+  distance_km: "距离",
+  average_heart_rate_bpm: "平均心率",
+  max_heart_rate_bpm: "最大心率",
+  calories_kcal: "消耗",
+  training_load: "训练负荷",
+  aerobic_te: "有氧训练效果",
+  anaerobic_te: "无氧训练效果",
+  training_focus: "训练重点",
+  perceived_effort: "主观用力感",
+  average_pace_sec_per_km: "平均配速",
+  max_pace_sec_per_km: "最大配速",
+  average_speed_kmh: "平均速度",
+  max_speed_kmh: "最大速度",
+  cadence: "步频/踏频",
+});
+
+/** @param {string} key @returns {string} */
+function activityMetricLabel(key) {
+  return ACTIVITY_METRIC_LABELS[key] ?? key;
+}
+
+/** @param {any} value @returns {string|null} */
+function activityMetricValue(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try { return JSON.stringify(value); } catch { return null; }
+}
+
+/** @param {any} value @param {string} prefix @returns {string[]} */
+function renderActivityMetricMap(value, prefix = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const lines = [];
+  for (const [key, child] of Object.entries(value)) {
+    const label = prefix ? `${prefix} · ${activityMetricLabel(key)}` : activityMetricLabel(key);
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      lines.push(...renderActivityMetricMap(child, label));
+    } else {
+      const formatted = activityMetricValue(child);
+      if (formatted !== null) lines.push(`- ${label}：${formatted}`);
+    }
+  }
+  return lines;
+}
+
+/** @param {unknown} value @returns {number|null} */
+function lapNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** @param {unknown} value @returns {string} */
+function formatElapsed(value) {
+  const seconds = lapNumber(value);
+  if (seconds === null) return "—";
+  const rounded = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const remainder = rounded % 60;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+/** @param {unknown} value @returns {string} */
+function formatPace(value) {
+  const seconds = lapNumber(value);
+  if (seconds === null) return "—";
+  const rounded = Math.max(0, Math.round(seconds));
+  return `${Math.floor(rounded / 60)}'${String(rounded % 60).padStart(2, "0")}"/km`;
+}
+
+/** @param {unknown} value @returns {string} */
+function formatDistance(value) {
+  const meters = lapNumber(value);
+  if (meters === null) return "—";
+  if (meters >= 1000) return `${(meters / 1000).toFixed(2)} km`;
+  return `${Number.isInteger(meters) ? meters : meters.toFixed(1)} m`;
+}
+
+/** @param {unknown} value @param {string} unit @returns {string} */
+function formatLapQuantity(value, unit) {
+  const number = lapNumber(value);
+  if (number === null) return "—";
+  const formatted = Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  return `${formatted} ${unit}`;
+}
+
+/** @param {string} value @returns {string} */
+function markdownCell(value) {
+  return String(value ?? "—").replaceAll("|", "\\|").replaceAll("\n", " ").replaceAll("\r", " ");
+}
+
+/** @param {any} group @param {number} index @returns {string} */
+function lapGroupLabel(group, index) {
+  if (group?.group_type === -1) return "总计";
+  const rawDistance = lapNumber(group?.lap_distance_raw);
+  if (rawDistance !== null && rawDistance > 0) {
+    const kilometers = rawDistance / 100000;
+    if (kilometers >= 1) return `${Number.isInteger(kilometers) ? kilometers : kilometers.toFixed(2)} km 分段`;
+    return `${Math.round(kilometers * 1000)} m 分段`;
+  }
+  return group?.group_type == null ? `分组 ${index + 1}` : `分组 ${group.group_type}`;
+}
+
+/** @param {number} key @param {any} value @returns {string} */
+function formatLapCell(key, value) {
+  if (key === "lap_index") return value == null ? "—" : String(value);
+  if (key === "distance_m") return formatDistance(value);
+  if (key === "duration_sec" || key === "cumulative_duration_sec") return formatElapsed(value);
+  if (["elevation_gain_m", "elevation_loss_m"].includes(key)) return formatLapQuantity(value, "m");
+  if (key === "average_heart_rate_bpm" || key === "max_heart_rate_bpm") return formatLapQuantity(value, "bpm");
+  if (key === "average_cadence_spm") return formatLapQuantity(value, "spm");
+  if (key === "average_stride_length_cm") return formatLapQuantity(value, "cm");
+  if (key === "average_pace_sec_per_km" || key === "adjusted_pace_sec_per_km") return formatPace(value);
+  if (key === "vertical_speed_m_per_h") {
+    const number = lapNumber(value);
+    return number === null ? "—" : formatLapQuantity(Math.round(number), "m/h");
+  }
+  if (key === "average_power_w") return formatLapQuantity(value, "W");
+  return activityMetricValue(value) ?? "—";
+}
+
+/** @param {any} group @returns {string[]} */
+function renderLapGroupTable(group) {
+  const laps = Array.isArray(group?.laps) ? group.laps : [];
+  if (!laps.length) return [];
+  const header = `| ${COROS_LAP_TABLE_COLUMNS.map((column) => column.label).join(" | ")} |`;
+  const separator = `| ${COROS_LAP_TABLE_COLUMNS.map(() => "---:").join(" | ")} |`;
+  const rows = laps.map((lap, index) => {
+    const metrics = lap?.normalized_metrics ?? {};
+    return `| ${COROS_LAP_TABLE_COLUMNS.map((column) => markdownCell(formatLapCell(column.key, column.key === "lap_index" ? (lap?.lap_index ?? index + 1) : metrics[column.key]))).join(" | ")} |`;
+  });
+  return [header, separator, ...rows];
+}
+
+/** @param {any} activity @returns {string[]} */
+function renderActivityDetailSections(activity) {
+  const lines = [];
+  const summary = activity.summary ?? {};
+  const extendedSummary = [
+    "total_duration_sec",
+    "max_heart_rate_bpm",
+    "training_load",
+    "aerobic_te",
+    "anaerobic_te",
+    "training_focus",
+    "perceived_effort",
+  ].filter((key) => summary[key] !== null && summary[key] !== undefined);
+  const sportMetrics = renderActivityMetricMap(summary.sport_metrics);
+  if (extendedSummary.length || sportMetrics.length) {
+    lines.push("## 详细指标");
+    for (const key of extendedSummary) {
+      const value = activityMetricValue(summary[key]);
+      if (value !== null) lines.push(`- ${activityMetricLabel(key)}：${value}`);
+    }
+    lines.push(...sportMetrics);
+    lines.push("");
+  }
+  const providerShape = activity.provider_shape;
+  if (providerShape && typeof providerShape === "object") {
+    const columns = Array.isArray(providerShape.columns) ? providerShape.columns.map((column) => column?.label || column?.name).filter(Boolean) : [];
+    lines.push("## COROS 细分字段");
+    if (providerShape.mode !== null && providerShape.mode !== undefined) lines.push(`- 模式：${providerShape.mode}${providerShape.sub_mode == null ? "" : ` / ${providerShape.sub_mode}`}`);
+    lines.push(`- 细分数据：${providerShape.sport_data_details_present ? "有" : "无"}`);
+    if (columns.length) lines.push(`- 字段：${columns.join("、")}`);
+    lines.push("");
+  }
+  const groups = Array.isArray(activity.lap_groups) ? activity.lap_groups : [];
+  if (groups.length) {
+    lines.push("## 分段");
+    for (const [groupIndex, group] of groups.entries()) {
+      lines.push(`### ${lapGroupLabel(group, groupIndex)}`);
+      lines.push(...renderLapGroupTable(group));
+      lines.push("");
+    }
+  }
+  const warnings = Array.isArray(activity.lap_field_warnings) ? activity.lap_field_warnings : [];
+  if (warnings.length) {
+    lines.push("## 解析提示");
+    lines.push(`- 未识别 provider 字段：${warnings.join("、")}（已保留在 JSON，未进入分段表格）`);
+    lines.push("");
+  }
+  return lines;
 }
 
 function routeNote(route, activities) {

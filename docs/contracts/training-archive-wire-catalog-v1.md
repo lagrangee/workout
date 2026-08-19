@@ -9,7 +9,8 @@ Workout plan or Session write APIs.
 Known absence uses `null` in the stable envelope. Provider-native metrics are
 kept in a sanitized map with their source field names; a normalized metric is
 emitted only when its unit and semantic meaning are recorded in the field
-catalog.
+catalog. The current lap field catalog is
+[`coros-field-catalog-v2.md`](coros-field-catalog-v2.md).
 
 ## Shared types
 
@@ -144,17 +145,14 @@ frontmatter is equivalent to:
 kind: daily-hub
 legacy_kind: training-day
 schema_version: 1
-date: 2026-08-16
-local_date: 2026-08-16
-timezone: Asia/Shanghai
-captured_at: 2026-08-17T09:00:00+08:00
-updated_at: 2026-08-17T09:00:00+08:00
-source_status:
-  workout: complete
-  coros: complete
-data_as_of:
-  workout: 2026-08-16T23:59:00Z
-  coros: 2026-08-16T23:59:00Z
+local_date: "2026-08-16"
+timezone: "Asia/Shanghai"
+captured_at: "2026-08-17T09:00:00+08:00"
+updated_at: "2026-08-17T09:00:00+08:00"
+source_status_workout: "complete"
+source_status_coros: "complete"
+data_as_of_workout: "2026-08-16T23:59:00Z"
+data_as_of_coros: "2026-08-16T23:59:00Z"
 relation_policy: same_local_date_context_only
 workout_session_keys: []
 workout_sessions: []
@@ -179,23 +177,31 @@ The body has stable headings:
 Daily analysis is not a required section. Weekly analysis is stored in a
 separate `weekly/YYYY-Www.md` file.
 
+The daily Hub is only the date-scoped navigation/context record; one Workout
+Session is the user-readable projection of one Workout-authoritative event.
 Every Workout Session written by the local stage has one
-`workout/sessions/<session_key>.md` record:
+`workout/sessions/YYYY-MM-DD--<session_key>.md` record and one private detail
+sidecar at `data/workout/YYYY-MM-DD--<session_key>.json`:
 
 ```yaml
 kind: workout-session
 schema_version: 1
 source: workout
-source_id: sess-2026-08-16
+source_id: "sess-2026-08-16"
 source_ref: "session:2026-08-16:sess-2026-08-16"
 session_key: "sess-2026-08-16"
-local_date: 2026-08-16
-timezone: Asia/Shanghai
-source_status: complete
-data_as_of: 2026-08-16T23:59:00Z
-updated_at: 2026-08-17T09:00:00Z
+local_date: "2026-08-16"
+timezone: "Asia/Shanghai"
+source_status: "complete"
+data_as_of: "2026-08-16T23:59:00Z"
+updated_at: "2026-08-17T09:00:00Z"
+scheduled_workout_key: "sw_athlete-a_2026-08-16"
+plan_id: "plan_athlete-a"
+plan_revision_key: "rev-2026-08-01"
+exercise_ids:
+  - "dead_bug"
 title: "下肢力量"
-status: completed
+status: "completed"
 completion_fraction: 1
 training_duration_sec: 3600
 session_rpe: 7
@@ -206,6 +212,18 @@ daily_hub: "[[daily/2026-08-16]]"
 "workout-session"` Properties. It may sort and filter by date, status, title,
 duration, source status, and links, but does not contain independently editable
 facts.
+
+When the source Session contains the canonical Training Plan Snapshot v2, the
+Markdown body also renders one table for every snapshotted Exercise occurrence.
+Each row is one Completion Item and includes the Set ordinal, side, fixed
+target, planned resistance, tempo, rest, actual metric/value, actual kg
+resistance, result status (`completed`, `partial`, `skipped`), RIR, and the
+Set Result note. The snapshot keeps the global `exercise_id`, frozen formal
+name, and `definition_version`; the table never resolves a historical Session
+through the current registry name. Missing actuals remain visibly absent and
+are not converted to zero. Exercise Feedback and the Session note are rendered
+as separate sections. The private JSON sidecar retains the same typed detail
+without raw COROS payloads, GPS/FIT data, or credentials.
 
 The record graph deliberately has no COROS field on a Workout Session and no
 Workout field on a COROS Activity Archive. `relation_policy:
@@ -218,7 +236,7 @@ Each `data/coros/YYYY-MM-DD-<activity_ref>.json` has this stable envelope:
 ```text
 CorosActivityArchiveV1 = {
   schema_version: 1,
-  field_catalog_version: 1,
+  field_catalog_version: 2,
   provider: "coros",
   activity_ref: string,
   sport_type: SportType,
@@ -232,7 +250,8 @@ CorosActivityArchiveV1 = {
   fit_file: FitArtifact|null,
   summary: ActivitySummary,
   provider_shape: ProviderLapShape,
-  lap_groups: LapGroup[]
+  lap_groups: LapGroup[],
+  lap_field_warnings: string[]
 }
 ```
 
@@ -362,23 +381,23 @@ coordinates, route URLs, raw sensor streams, and export payloads.
 such as `distance_m`, `duration_sec`, `average_heart_rate_bpm`,
 `elevation_gain_m`, and the sport-specific pace/speed fields. An unverified
 provider field remains in `provider_metrics` and is not silently converted.
+`lap_field_warnings` contains sorted additive provider keys that are retained
+in JSON but excluded from the Markdown table. The bridge forwards upstream
+responses without guaranteeing a stable provider schema; therefore, adding a
+new normalized field requires a catalog update and a new
+`field_catalog_version`, while an unknown additive field must not be inferred
+from a similarly named field.
 
-## Observed field catalog v1
+## COROS activity Markdown projection
 
-| Field family | Observed source fields | Archive treatment |
-|---|---|---|
-| Identity | `labelId`, `sportType`, `startTimestamp`, `endTimestamp` | Stable envelope and provenance |
-| Time | `time`, `totalLength` | Preserve provider value; normalize to seconds only when the field catalog confirms the row shape |
-| Distance | `distance`, `lapDistance` | Preserve raw value and group identity; normalized meters require the catalog conversion |
-| Heart rate | `avgHr`, `maxHr` | Normalize to BPM when present |
-| Running | `avgPace`, `adjustedPace`, cadence, stride, running dynamics | Keep under running metrics; do not apply to cycling or hiking |
-| Hiking | `avgSpeedV2`, `vertSpeed`, `elevGain`, `totalDescent` | Keep under hiking metrics; do not treat hiking pace as running pace |
-| Cycling | `avgSpeedV2`, `maxSpeed`, `avgPower`, `np`, `iff`, cadence | Keep under cycling metrics with cycling-specific units |
-| Optional dynamics | `groundTime`, `groundBalance`, `strideRatio`, `strideHeight`, `formPower`, `legStiffness`, `bodyTemperature` | Provider metrics only until units and semantics are verified |
-
-The bridge forwards upstream responses without guaranteeing a stable provider
-schema. Therefore, adding a new normalized field requires a catalog update and
-new `field_catalog_version`; it is not inferred from a similarly named field.
+The Obsidian activity note carries `projection_version: 2`. Each lap group is
+rendered as its own Markdown table so 1 km, 5 km, 10 km, interval, and total
+groups are not mixed. The trail-run table uses the COROS app labels `距离`,
+`时间`, `累计时间`, `上升`, `下降`, `平均心率`, `最大心率`, `步频`, `步幅`,
+`平均配速`, `等效配速`, `垂直速度`, and `跑步功率`. Provider-only fields stay
+in the JSON sidecar until their catalog entry is confirmed. Markdown is a
+readable projection; the sanitized JSON sidecar remains the complete local
+provider record.
 
 ## FIT trajectory evidence
 

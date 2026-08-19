@@ -9,9 +9,11 @@ import { appFixture, call } from "./helpers.js";
 import { syncTrainingArchive } from "../src/training-archive-sync.js";
 import {
   dailyHubModel,
+  dailyHubNote,
   normalizeWorkoutSessionRecord,
   recordsOverviewModel,
   workoutTableModel,
+  workoutSessionNote,
 } from "../src/training-records.js";
 
 const now = new Date("2026-08-17T08:00:00.000Z");
@@ -83,13 +85,61 @@ test("ticket 03 daily Hub keeps same-date strength and aerobic records as separa
   assert.equal(hub.kind, "daily-hub");
   assert.deepEqual(hub.machine_refs.workout_session_keys, ["sess-2026-08-15"]);
   assert.deepEqual(hub.machine_refs.activity_refs, ["coros-2026-08-15"]);
-  assert.deepEqual(hub.links.workout_sessions, ["[[workout/sessions/sess-2026-08-15]]"]);
+  assert.deepEqual(hub.links.workout_sessions, ["[[workout/sessions/2026-08-15--sess-2026-08-15]]"]);
   assert.deepEqual(hub.links.coros_activities, ["[[data/coros/2026-08-15-coros-2026-08-15]]"]);
   assert.equal(hub.relation_policy, "same_local_date_context_only");
   assert.equal(hub.summary.workout.session_count, 1);
   assert.equal(hub.summary.coros.activity_count, 1);
   assert.equal(Object.hasOwn(hub.summary.workout, "activity_ref"), false);
   assert.equal(Object.hasOwn(hub.summary.coros, "session_key"), false);
+});
+
+test("ticket 03 renders Obsidian-native scalar/link Properties and full Workout detail", () => {
+  const detailedSession = session({
+    session_key: "sess-detailed",
+    snapshot: {
+      blocks: [{
+        title: "核心",
+        exercises: [{
+          exercise_key: "dead-bug",
+          name: "死虫",
+          sets: [{ set_key: "set-1", target: { metric: "reps", min: 8, max: 10 }, resistance: { kind: "bodyweight" } }],
+        }],
+      }],
+    },
+    completion_items: [{ completion_item_key: "item-1", set_key: "set-1", target: { metric: "reps", min: 8, max: 10 } }],
+    completion_results: [{ completion_item_key: "item-1", actual: { reps: 9 }, completed: true }],
+    exercise_feedback: [{ exercise_key: "dead-bug", note: "动作稳定" }],
+    training_version: 56,
+  });
+  const hub = dailyHubModel({
+    targetDate: "2026-08-15",
+    timezone: "Asia/Shanghai",
+    now,
+    workout: { source_status: "complete", data_as_of: "2026-08-15T04:00:00.000Z", sessions: [detailedSession] },
+    coros: { source_status: "none", data_as_of: null },
+    activities: [],
+  });
+  const daily = dailyHubNote(hub);
+  assert.doesNotMatch(daily, /^date:/m);
+  assert.match(daily, /^local_date: "2026-08-15"$/m);
+  assert.match(daily, /^source_status_workout: "complete"$/m);
+  assert.match(daily, /^data_as_of_workout: "2026-08-15T04:00:00.000Z"$/m);
+  assert.doesNotMatch(daily, /^source_status:\s*$/m);
+  assert.doesNotMatch(daily, /^data_as_of:\s*$/m);
+  assert.match(daily, /^  - "\[\[workout\/sessions\/2026-08-15--sess-detailed\]\]"$/m);
+
+  const record = normalizeWorkoutSessionRecord(detailedSession, {
+    timezone: "Asia/Shanghai",
+    dataAsOf: "2026-08-15T04:00:00.000Z",
+    includeDetails: true,
+  });
+  const sessionNote = workoutSessionNote(record);
+  assert.match(sessionNote, /^local_date: "2026-08-15"$/m);
+  assert.match(sessionNote, /^daily_hub: "\[\[daily\/2026-08-15\]\]"$/m);
+  assert.match(sessionNote, /死虫/);
+  assert.match(sessionNote, /完成结果/);
+  assert.match(sessionNote, /动作稳定/);
 });
 
 test("ticket 03 derives the Workout table from Session Properties and preserves boundary dates", () => {
@@ -157,17 +207,17 @@ test("ticket 03 local sync writes idempotent daily Hub, Workout Session records,
     assert.equal(first.records_written.workout_sessions, 1);
     assert.equal(second.records_written.workout_sessions, 1);
     const daily = await readFile(join(archiveDir, "daily/2026-08-15.md"), "utf8");
-    const workoutNote = await readFile(join(archiveDir, "workout/sessions/sess-2026-08-15.md"), "utf8");
+    const workoutNote = await readFile(join(archiveDir, "workout/sessions/2026-08-15--sess-2026-08-15.md"), "utf8");
     const table = await readFile(join(archiveDir, "workout/index.md"), "utf8");
     assert.match(daily, /kind: daily-hub/);
-    assert.match(daily, /\[\[workout\/sessions\/sess-2026-08-15\]\]/);
+    assert.match(daily, /\[\[workout\/sessions\/2026-08-15--sess-2026-08-15\]\]/);
     assert.match(daily, /\[\[data\/coros\/2026-08-15-coros-2026-08-15\]\]/);
     assert.match(workoutNote, /kind: workout-session/);
     assert.match(workoutNote, /session_key: "sess-2026-08-15"/);
     assert.match(workoutNote, /source_status: "complete"/);
     assert.match(table, /TABLE/);
     assert.match(table, /FROM "workout\/sessions"/);
-    assert.equal((daily.match(/\[\[workout\/sessions\/sess-2026-08-15\]\]/g) || []).length, 1);
+    assert.equal((daily.match(/\[\[workout\/sessions\/2026-08-15--sess-2026-08-15\]\]/g) || []).length, 1);
   } finally {
     await rm(archiveDir, { recursive: true, force: true });
   }

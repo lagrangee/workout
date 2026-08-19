@@ -69,14 +69,14 @@ The endpoint catalog includes the non-mutating validation operation:
 plan_update_validate: {
   method: "POST",
   path: "/api/agent/v1/plan-updates/validate",
-  parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" } },
+  parameters: { package_text: { type: "string", content: "Plan Update Package v2 JSON" } },
   rules: { mutates: false, strict_package: true }
 },
 plan_update_apply: {
   method: "POST",
   path: "/api/agent/v1/plan-updates/apply",
   parameters: {
-    package_text: { type: "string", content: "Plan Update Package v1 JSON" },
+    package_text: { type: "string", content: "Plan Update Package v2 JSON" },
     package_digest: { type: "string", format: "sha256" },
     base_plan_digest: { type: "string", format: "sha256" },
     confirmed: { type: "boolean", const: true },
@@ -174,12 +174,14 @@ AgentSessionIndex = {
 SessionSummary = {
   session_key: string,
   scheduled_date: LocalDate,
+  local_date: LocalDate,
   title: string,
-  status: "in_progress"|"completed"|"partial"|"skipped",
+  status: "planned"|"in_progress"|"completed"|"partial"|"abandoned"|"skipped",
   completion_fraction: number,
   training_duration_sec: integer,
   session_rpe: number|null,
-  exercise_keys: string[],
+  exercise_ids: string[],
+  exercise_keys: string[], # deprecated legacy alias; canonical clients use exercise_ids
   updated_at: Instant,
   source_ref: string
 }
@@ -199,17 +201,21 @@ AgentSessionDetail = {
   generated_at: Instant,
   data_as_of: Instant,
   session_key: string,
+  plan_id: string|null,
+  plan_revision_key: string|null,
   scheduled_date: LocalDate,
+  local_date: LocalDate,
   timezone_at_session: IanaTimezone,
   title: string,
-  status: "in_progress"|"completed"|"partial"|"skipped",
+  status: "planned"|"in_progress"|"completed"|"partial"|"abandoned"|"skipped",
   completion_fraction: number,
   training_duration_sec: integer,
   session_rpe: number|null,
   note: string|null,
   skip_reason: string|null,
-  snapshot: object,
-  completion_results: object[],
+  snapshot: CanonicalSessionSnapshotV2,
+  completion_results: SetResult[],
+  set_results: SetResult[],
   training_intervals: object[],
   exercise_feedback: object[],
   updated_at: Instant,
@@ -240,11 +246,12 @@ AgentExerciseHistory = {
   generated_at: Instant,
   data_as_of: Instant,
   period: Period,
-  exercise_key: string,
+  exercise_id: string,
+  current_name: string,
   display_name_history: object[],
   performed_session_count: integer,
   observations: object[],
-  series: { none: object[], left: object[], right: object[] },
+  series: { none: object[], both: object[], left: object[], right: object[] },
   training_version: integer,
   source_ref: string
 }
@@ -305,6 +312,69 @@ Prescription = {
   start_time: string|null,
   estimated_duration_min: integer,
   blocks: object[]
+}
+
+CanonicalSessionSnapshotV2 = {
+  schema_version: 2,
+  title: string,
+  start_time: string|null,
+  estimated_duration_min: integer|null,
+  blocks: CanonicalBlock[],
+  completion_items: CompletionItem[],
+  exercise_occurrence_keys: string[]
+}
+
+CanonicalBlock = {
+  block_key: string,
+  title: string,
+  exercises: CanonicalExercise[]
+}
+
+CanonicalExercise = {
+  exercise_occurrence_key: string,
+  occurrence_key: string,
+  exercise_id: string,
+  name: string,
+  definition_version: integer,
+  execution_mode: "none"|"bilateral"|"per_side"|"alternating",
+  sets: CanonicalSet[]
+}
+
+CanonicalSet = {
+  set_key: string,
+  set_id: string,
+  ordinal: integer,
+  target: { metric: "reps"|"duration_sec", value: integer },
+  resistance_mode: "bodyweight"|"external_load"|null,
+  resistance_kg: number|null,
+  tempo: string|null,
+  rest_after_sec: integer|null
+}
+
+CompletionItem = {
+  completion_item_key: string,
+  exercise_occurrence_key: string,
+  occurrence_key: string,
+  set_key: string,
+  set_id: string,
+  set_ordinal: integer|null,
+  side: "none"|"both"|"left"|"right",
+  target: { metric: "reps"|"duration_sec", value: integer },
+  resistance_mode: "bodyweight"|"external_load"|null,
+  resistance_kg: number|null,
+  tempo: string|null,
+  rest_after_sec: integer|null
+}
+
+SetResult = {
+  completion_item_key: string,
+  status: "completed"|"partial"|"skipped",
+  actual: { metric: "reps"|"duration_sec", value: integer }|null,
+  resistance_mode: "bodyweight"|"external_load"|null,
+  resistance_kg: number|null,
+  rir: integer|null,
+  note: string|null,
+  completed_at: Instant|null
 }
 
 Period = {
@@ -408,7 +478,7 @@ database identities. A schedule response may leave `prescriptions` empty when
 `expand` is absent; entries still carry their safe stable reference.
 
 Session index cursors are opaque and must be sent back byte-for-byte. They are
-bound to `from`, `to`, `status`, `exercise_key`, and `limit`, expire after 15
+bound to `from`, `to`, `status`, `exercise_id`, and `limit`, expire after 15
 minutes, and include `training_version`. If that version changes, traversal
 must stop and restart from page one; the API returns
 `training_version_changed` with HTTP 409. The index has stable newest-first
@@ -418,11 +488,11 @@ cross-page snapshot.
 Progress evidence keeps empty denominators explicit (`value: null` where a
 rate has no due workouts), and period responses mark a window containing the
 Athlete's current local date as potentially incomplete. Exercise observations
-retain the per-set actual metric, resistance mode and quantities, RIR, side,
-and safe `session:<date>:<session_key>` references; `series.none`, `series.left`,
-and `series.right` never merge sides.
+retain the per-set actual metric, canonical resistance, RIR, side, and safe
+`session:<date>:<session_key>` references; `series.none`, `series.both`,
+`series.left`, and `series.right` never merge sides.
 
-Plan Update validation and application reuse [Plan Update Package v1](plan-update-package-v1.md)
+Plan Update validation and application reuse [Plan Update Package v2](plan-update-package-v2.md)
 as their canonical package contract. The MCP tools accept a structured
 `package` object and serialize it to the Agent request's exact `package_text`
 field; the Worker then runs the strict text validator. The response digest is

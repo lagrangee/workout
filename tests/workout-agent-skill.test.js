@@ -85,7 +85,7 @@ test("Workout Agent Skill keeps credentials and analysis ownership outside the i
   }
   assert.match(skill, /agent-api-v1\.md/);
   assert.match(skill, /agent-api-wire-catalog-v1\.md/);
-  assert.match(skill, /plan-update-package-v1\.md/);
+  assert.match(skill, /plan-update-package-v2\.md/);
 });
 
 test("Workout Agent Skill routes local archive context without changing source authority", async () => {
@@ -99,6 +99,12 @@ test("Workout Agent Skill routes local archive context without changing source a
   assert.match(skill, /querySportRecords/);
   assert.match(skill, /downloadActivityFitFiles/);
   assert.match(skill, /YYYY-MM-DD-<activity_ref>\.fit/);
+  assert.match(skill, /workout\/sessions\/YYYY-MM-DD--<session_key>\.md/);
+  assert.match(skill, /data\/workout\/YYYY-MM-DD--<session_key>\.json/);
+  assert.match(skill, /Obsidian-native/i);
+  assert.match(skill, /source_status_workout/);
+  assert.match(skill, /quoted `\[\[\.\.\.\]\]` list items/i);
+  assert.match(skill, /completion.*results.*training intervals.*exercise feedback/is);
   assert.match(skill, /FIT resource signature/i);
   assert.match(skill, /\[100, 101, 102, 104, 200\]/);
   assert.match(skill, /COROS Strength.*outside this sync scope/i);
@@ -116,4 +122,9 @@ test("Workout Agent Skill routes local archive context without changing source a
   assert.match(skill, /weekly\/YYYY-Www\.md/);
   assert.match(skill, /training-archive-v1\.md/);
   assert.match(skill, /training-archive-wire-catalog-v1\.md/);
+  assert.match(skill, /coros-field-catalog-v2\.md/);
+  assert.match(skill, /projection_version: 2/);
+  assert.match(skill, /each provider lap group separate.*Markdown table/is);
+  assert.match(skill, /unknown additive fields.*sanitized JSON/is);
+  assert.match(skill, /not Skill prose or a second `parser\.mjs`/i);
 });

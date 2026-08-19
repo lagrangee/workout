@@ -4,7 +4,7 @@ MVP 没有 restore UI、R2 backup 或 offline queue。恢复演练只验证 oper
 
 ## Runbook
 
-1. 创建与 production schema 相同的临时 D1 database，按顺序运行 `migrations/0001_initial.sql` 至 `0004_restore_session_date_guard.sql`。
+1. 创建与 production schema 相同的临时 D1 database，按顺序运行 `migrations/0001_initial.sql` 至 `0009_canonical_workout_cutover.sql`；已有 Athlete 的 canonical rebuild 另按 [`canonical-workout-d1-cutover.md`](./canonical-workout-d1-cutover.md) 执行，不在启动时隐式处理。
 2. 写入两条 synthetic Athlete state；不得复制真实 email、Coach Share、token digest、ciphertext 或训练内容。
 3. 记录一次 state snapshot，模拟一个 plan/session correction，再用 Cloudflare Dashboard 的 D1 Time Travel 选择演练时间点恢复临时库。
 4. 在恢复后的临时库上读取一个 Athlete Export fixture，核对：counts 等于 collection 长度；所有 Session、Scheduled Workout、revision 与 snapshot key 可互相解析；`data_as_of` 在所有 collection 中相同。

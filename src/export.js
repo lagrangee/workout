@@ -34,6 +34,7 @@ function exportSchedule(state, date, now) {
 
 /** @param {WorkoutSession} session */
 function exportSession(session) {
+  if (session.snapshot?.schema_version === 2) return exportCanonicalSession(session);
   const snapshot = {
     title: session.snapshot.title,
     start_time: session.snapshot.start_time,
@@ -42,4 +43,31 @@ function exportSession(session) {
     completion_items: session.snapshot.completion_items.map(/** @param {CompletionItem} item */ (item) => ({ completion_item_key: item.completion_item_key, exercise_occurrence_key: item.exercise_occurrence_key, set_key: item.set_key, side: item.side, target: item.target })),
   };
   return { session_key: session.session_key, scheduled_workout_key: session.scheduled_workout_key, scheduled_date: session.scheduled_date, timezone_at_session: session.timezone_at_session, title: session.title, status: session.status, completion_fraction: completionFraction(session), training_duration_sec: Math.round(trainingDuration(session)), session_rpe: session.session_rpe, note: session.note, skip_reason: session.skip_reason, snapshot, completion_results: session.completion_results.map((result) => ({ completion_item_key: result.completion_item_key, actual: result.actual, resistance: result.resistance, rir: result.rir, completed_at: result.completed_at })), training_intervals: deepClone(session.training_intervals), exercise_feedback: deepClone(session.exercise_feedback), created_at: session.created_at, updated_at: session.updated_at };
+}
+
+/** @param {WorkoutSession} session */
+function exportCanonicalSession(session) {
+  return {
+    session_key: session.session_key,
+    scheduled_workout_key: session.scheduled_workout_key,
+    scheduled_date: session.scheduled_date,
+    local_date: session.local_date ?? session.scheduled_date,
+    timezone_at_session: session.timezone_at_session,
+    plan_id: session.plan_id ?? null,
+    plan_revision_key: session.plan_revision_key ?? null,
+    title: session.title,
+    status: session.status,
+    completion_fraction: completionFraction(session),
+    training_duration_sec: Math.round(trainingDuration(session)),
+    session_rpe: session.session_rpe,
+    note: session.note,
+    skip_reason: session.skip_reason,
+    snapshot: deepClone(session.snapshot),
+    completion_results: deepClone(session.completion_results),
+    set_results: deepClone(session.set_results ?? session.completion_results),
+    training_intervals: deepClone(session.training_intervals),
+    exercise_feedback: deepClone(session.exercise_feedback),
+    created_at: session.created_at,
+    updated_at: session.updated_at,
+  };
 }

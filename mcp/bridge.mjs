@@ -8,34 +8,27 @@ const nullable = (schema) => ({ oneOf: [{ type: "null" }, schema] });
 const arrayOf = (items, minItems, maxItems) => ({ type: "array", items, minItems, ...(maxItems === undefined ? {} : { maxItems }) });
 const PLAN_UPDATE_TARGET_SCHEMA = exactObject({
   metric: { type: "string", enum: ["reps", "duration_sec"] },
-  min: { type: "integer", minimum: 1 },
-  max: { type: "integer", minimum: 1 },
+  value: { type: "integer", minimum: 1 },
 });
-const PLAN_UPDATE_RESISTANCE_SCHEMA = nullable(exactObject({
-  mode: { type: "string", enum: ["bodyweight", "external_weight", "assisted_weight"] },
-  load_kg: nullable({ type: "number", minimum: 0 }),
-  quantity: nullable({ type: "integer", minimum: 1 }),
-}));
-const PLAN_UPDATE_TEMPO_SCHEMA = nullable(exactObject({
-  eccentric_sec: nullable({ type: "integer", minimum: 0 }),
-  bottom_hold_sec: nullable({ type: "integer", minimum: 0 }),
-  concentric_sec: nullable({ type: "integer", minimum: 0 }),
-  top_hold_sec: nullable({ type: "integer", minimum: 0 }),
-}));
+const PLAN_UPDATE_RESISTANCE_SCHEMA = {
+  oneOf: [
+    exactObject({ mode: { const: "bodyweight" } }),
+    exactObject({ mode: { const: "external_load" }, value: { type: "number", minimum: 0 }, unit: { type: "string", enum: ["kg", "lb"] } }),
+  ],
+};
+const PLAN_UPDATE_TEMPO_SCHEMA = nullable({ type: "string", pattern: "^(?:0|[1-9]\\d*)-(?:0|[1-9]\\d*)-(?:0|[1-9]\\d*)-(?:0|[1-9]\\d*)$" });
 const PLAN_UPDATE_SET_SCHEMA = exactObject({
+  set_id: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+  ordinal: { type: "integer", minimum: 1 },
   target: PLAN_UPDATE_TARGET_SCHEMA,
   resistance: PLAN_UPDATE_RESISTANCE_SCHEMA,
-  target_rir: nullable({ type: "integer", minimum: 0, maximum: 10 }),
-  target_rpe: nullable({ type: "number", minimum: 0, maximum: 10 }),
   tempo: PLAN_UPDATE_TEMPO_SCHEMA,
   rest_after_sec: nullable({ type: "integer", minimum: 0 }),
-  target_incline_percent: nullable({ type: "number", minimum: 0, maximum: 100 }),
 });
 const PLAN_UPDATE_EXERCISE_SCHEMA = exactObject({
-  exercise_key: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
-  name: { type: "string", minLength: 1, maxLength: 100 },
-  category: { type: "string", enum: ["strength", "endurance", "mobility", "recovery"] },
-  side_mode: { type: "string", enum: ["none", "left_right"] },
+  occurrence_key: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+  exercise_id: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+  execution_mode: { type: "string", enum: ["none", "bilateral", "per_side", "alternating"] },
   sets: arrayOf(PLAN_UPDATE_SET_SCHEMA, 1, 200),
 });
 const PLAN_UPDATE_BLOCK_SCHEMA = exactObject({
@@ -57,7 +50,7 @@ const PLAN_UPDATE_SLOT_SCHEMA = {
   ],
 };
 const PLAN_UPDATE_PACKAGE_SCHEMA = exactObject({
-  schema_version: { type: "integer", const: 1 },
+  schema_version: { type: "integer", const: 2 },
   effective_from: { type: "string", format: "date" },
   week: exactObject(Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, PLAN_UPDATE_SLOT_SCHEMA]))),
 });
@@ -91,7 +84,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "workout_list_sessions",
     description: "List bounded Workout Sessions with Athlete-local filters and an opaque cursor.",
-    inputSchema: { type: "object", properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string" }, status: { type: "string", enum: ["in_progress", "completed", "partial", "skipped"] }, exercise_key: { type: "string" } }, additionalProperties: false },
+    inputSchema: { type: "object", properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string" }, status: { type: "string", enum: ["in_progress", "completed", "partial", "skipped"] }, exercise_id: { type: "string" } }, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
   {
@@ -109,7 +102,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "workout_get_exercise_history",
     description: "Read one Exercise's display-name history, performed Sessions, resistance semantics, and side-separated observations.",
-    inputSchema: { type: "object", properties: { exercise_key: { type: "string" }, from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, preset: { type: "string", enum: ["7d", "30d", "12w", "all"] }, range: { type: "string", enum: ["7d", "30d", "12w", "all"] } }, required: ["exercise_key"], additionalProperties: false },
+    inputSchema: { type: "object", properties: { exercise_id: { type: "string" }, from: { type: "string", format: "date" }, to: { type: "string", format: "date" }, preset: { type: "string", enum: ["7d", "30d", "12w", "all"] }, range: { type: "string", enum: ["7d", "30d", "12w", "all"] } }, required: ["exercise_id"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
   {
@@ -185,7 +178,7 @@ export class WorkoutApiClient {
   async listSessions(args = {}) {
     assertToolArguments("workout_list_sessions", args);
     const query = new URLSearchParams();
-    for (const field of ["from", "to", "limit", "cursor", "status", "exercise_key"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+    for (const field of ["from", "to", "limit", "cursor", "status", "exercise_id"]) if (args[field] !== undefined) query.set(field, String(args[field]));
     return this.get(`/sessions${query.size ? `?${query}` : ""}`);
   }
 
@@ -205,7 +198,7 @@ export class WorkoutApiClient {
     assertToolArguments("workout_get_exercise_history", args);
     const query = new URLSearchParams();
     for (const field of ["from", "to", "preset", "range"]) if (args[field] !== undefined) query.set(field, String(args[field]));
-    return this.get(`/exercises/${encodeURIComponent(args.exercise_key)}${query.size ? `?${query}` : ""}`);
+    return this.get(`/exercises/${encodeURIComponent(args.exercise_id)}${query.size ? `?${query}` : ""}`);
   }
 
   async validatePlanUpdate(args = {}) {
@@ -421,14 +414,18 @@ function comparablePlanSlot(slot) {
     blocks: source.blocks.map((block) => ({
       title: block.title,
       exercises: block.exercises.map((exercise) => ({
-        exercise_key: exercise.exercise_key,
-        name: exercise.name,
-        category: exercise.category,
-        side_mode: exercise.side_mode,
-        sets: exercise.sets.map((set) => {
-          const { set_key: _setKey, ...comparableSet } = set;
-          return comparableSet;
-        }),
+        occurrence_key: exercise.occurrence_key,
+        exercise_id: exercise.exercise_id,
+        execution_mode: exercise.execution_mode,
+        sets: exercise.sets.map((set) => ({
+          set_id: set.set_id,
+          ordinal: set.ordinal,
+          target: set.target,
+          resistance_mode: set.resistance_mode,
+          resistance_kg: set.resistance_kg,
+          tempo: set.tempo,
+          rest_after_sec: set.rest_after_sec,
+        })),
       })),
     })),
   };

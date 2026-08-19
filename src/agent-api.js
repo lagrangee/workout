@@ -47,7 +47,7 @@ export function agentManifest(state, now) {
       schedule: `${AGENT_PREFIX}/schedule`,
       sessions: `${AGENT_PREFIX}/sessions`,
       progress: `${AGENT_PREFIX}/progress`,
-      exercise: `${AGENT_PREFIX}/exercises/{exercise_key}`,
+      exercise: `${AGENT_PREFIX}/exercises/{exercise_id}`,
       plan_update_validate: `${AGENT_PREFIX}/plan-updates/validate`,
       plan_update_apply: `${AGENT_PREFIX}/plan-updates/apply`,
       aerobic_sync: `${AGENT_PREFIX}/aerobic/sync`,
@@ -68,10 +68,10 @@ export function agentManifest(state, now) {
       overview: { method: "GET", path: `${AGENT_PREFIX}/overview`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] } },
       plan: { method: "GET", path: `${AGENT_PREFIX}/plan`, parameters: {} },
       schedule: { method: "GET", path: `${AGENT_PREFIX}/schedule`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", expand: ["prescription"] }, rules: { from_to_required: true, max_days: 366 } },
-      sessions: { method: "GET", path: `${AGENT_PREFIX}/sessions`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string", format: "opaque" }, status: ["in_progress", "completed", "partial", "skipped"], exercise_key: "string" }, rules: { max_days: 3660, date_window_optional: true, cursor_ttl_minutes: 15 } },
+      sessions: { method: "GET", path: `${AGENT_PREFIX}/sessions`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string", format: "opaque" }, status: ["in_progress", "completed", "partial", "skipped"], exercise_id: "string", exercise_key: { type: "string", deprecated: true } }, rules: { max_days: 3660, date_window_optional: true, cursor_ttl_minutes: 15 } },
       session_detail: { method: "GET", path: `${AGENT_PREFIX}/sessions/{session_key}`, parameters: { session_key: { type: "string", location: "path" } } },
       progress: { method: "GET", path: `${AGENT_PREFIX}/progress`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"], bucket: ["day", "week", "month"] }, rules: { max_days: 3660, date_window_optional: true } },
-      exercise_history: { method: "GET", path: `${AGENT_PREFIX}/exercises/{exercise_key}`, parameters: { exercise_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] }, rules: { max_days: 3660, date_window_optional: true } },
+      exercise_history: { method: "GET", path: `${AGENT_PREFIX}/exercises/{exercise_id}`, parameters: { exercise_id: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] }, rules: { max_days: 3660, date_window_optional: true } },
       schemas: { method: "GET", path: `${AGENT_PREFIX}/schemas`, parameters: {}, rules: { token_authenticated: true } },
       aerobic_activities: { method: "GET", path: `${AGENT_PREFIX}/aerobic/activities`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", sport_type: [100, 101, 102, 104, 200], route_key: "string", limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 }, cursor: { type: "string", format: "opaque" } }, rules: { max_days: 3660, date_window_optional: true, cursor_ttl_minutes: 15, response_schema: "aerobic_activity_index" } },
       aerobic_activity: { method: "GET", path: `${AGENT_PREFIX}/aerobic/activities/{activity_ref}`, parameters: { activity_ref: { type: "string", location: "path" } }, rules: { explicit_single_activity_lookup: true, response_schema: "aerobic_activity_detail" } },
@@ -79,8 +79,8 @@ export function agentManifest(state, now) {
       routes: { method: "GET", path: `${AGENT_PREFIX}/routes`, parameters: { sport_type: [100, 101, 102, 104, 200], route_key: "string", limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 }, cursor: { type: "string", format: "opaque" } }, rules: { cursor_ttl_minutes: 15, response_schema: "route_index" } },
       route_detail: { method: "GET", path: `${AGENT_PREFIX}/routes/{route_key}`, parameters: { route_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 }, cursor: { type: "string", format: "opaque" } }, rules: { max_days: 3660, response_schema: "route_detail" } },
       route_history: { method: "GET", path: `${AGENT_PREFIX}/routes/{route_key}/history`, parameters: { route_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 }, cursor: { type: "string", format: "opaque" } }, rules: { max_days: 3660, response_schema: "route_history" } },
-      plan_update_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/validate`, parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" } }, rules: { mutates: false, strict_package: true } },
-      plan_update_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/apply`, parameters: { package_text: { type: "string", content: "Plan Update Package v1 JSON" }, package_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true } },
+      plan_update_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/validate`, parameters: { package_text: { type: "string", content: "Plan Update Package v2 JSON" } }, rules: { mutates: false, strict_package: true } },
+      plan_update_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/apply`, parameters: { package_text: { type: "string", content: "Plan Update Package v2 JSON" }, package_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true } },
       aerobic_sync: { method: "POST", path: `${AGENT_PREFIX}/aerobic/sync`, parameters: { projection: { type: "object", content: "AerobicProjectionV1" }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, idempotent: true, idempotency_window_hours: 24, strict_projection: true, excludes_raw_fit_gps: true } },
     },
   };
@@ -291,24 +291,25 @@ export function agentResource(state, pathname, url, now) {
     return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: "progress" };
   }
   if (pathname.startsWith(`${AGENT_PREFIX}/exercises/`)) {
-    const rawExerciseKey = pathname.slice(`${AGENT_PREFIX}/exercises/`.length);
-    let exerciseKey;
-    try { exerciseKey = decodeURIComponent(rawExerciseKey); } catch { return { error: { code: "invalid_request", field: "exercise_key", message: "exercise_key must be a valid path segment" } }; }
-    if (!exerciseKey || exerciseKey.includes("/") || exerciseKey.includes("\\")) return { error: { code: "invalid_request", field: "exercise_key", message: "exercise_key must be a single non-empty path segment" } };
-    const resource = coachResource(state, `${AGENT_PREFIX}/exercises/${encodeURIComponent(exerciseKey)}`, url, now);
-    return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: `exercise:${exerciseKey}` };
+    const rawExerciseId = pathname.slice(`${AGENT_PREFIX}/exercises/`.length);
+    let exerciseId;
+    try { exerciseId = decodeURIComponent(rawExerciseId); } catch { return { error: { code: "invalid_request", field: "exercise_id", message: "exercise_id must be a valid path segment" } }; }
+    if (!exerciseId || exerciseId.includes("/") || exerciseId.includes("\\")) return { error: { code: "invalid_request", field: "exercise_id", message: "exercise_id must be a single non-empty path segment" } };
+    const resource = coachResource(state, `${AGENT_PREFIX}/exercises/${encodeURIComponent(exerciseId)}`, url, now);
+    return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: `exercise:${exerciseId}` };
   }
   return { error: { code: "not_found", message: "Resource not found" } };
 }
 
 /** @param {string} pathname @param {URL} url */
 export function agentQueryError(pathname, url) {
-  const allowed = pathname === AGENT_PREFIX ? [] : pathname === `${AGENT_PREFIX}/schemas` || pathname.startsWith(`${AGENT_PREFIX}/schemas/`) ? [] : pathname === `${AGENT_PREFIX}/overview` ? ["from", "to", "preset", "range"] : pathname === `${AGENT_PREFIX}/plan` ? [] : pathname === `${AGENT_PREFIX}/schedule` ? ["from", "to", "expand"] : pathname === `${AGENT_PREFIX}/sessions` ? ["from", "to", "limit", "cursor", "status", "exercise_key"] : pathname === `${AGENT_PREFIX}/progress` ? ["from", "to", "preset", "range", "bucket"] : pathname === `${AGENT_PREFIX}/aerobic/activities` ? ["from", "to", "sport_type", "route_key", "limit", "cursor"] : pathname.startsWith(`${AGENT_PREFIX}/aerobic/activities/`) ? [] : pathname === `${AGENT_PREFIX}/daily/` || pathname.startsWith(`${AGENT_PREFIX}/daily/`) ? [] : pathname === `${AGENT_PREFIX}/routes` ? ["sport_type", "route_key", "limit", "cursor"] : pathname.startsWith(`${AGENT_PREFIX}/routes/`) ? ["from", "to", "sport_type", "limit", "cursor"] : pathname.startsWith(`${AGENT_PREFIX}/exercises/`) ? ["from", "to", "preset", "range"] : [];
+  const allowed = pathname === AGENT_PREFIX ? [] : pathname === `${AGENT_PREFIX}/schemas` || pathname.startsWith(`${AGENT_PREFIX}/schemas/`) ? [] : pathname === `${AGENT_PREFIX}/overview` ? ["from", "to", "preset", "range"] : pathname === `${AGENT_PREFIX}/plan` ? [] : pathname === `${AGENT_PREFIX}/schedule` ? ["from", "to", "expand"] : pathname === `${AGENT_PREFIX}/sessions` ? ["from", "to", "limit", "cursor", "status", "exercise_id", "exercise_key"] : pathname === `${AGENT_PREFIX}/progress` ? ["from", "to", "preset", "range", "bucket"] : pathname === `${AGENT_PREFIX}/aerobic/activities` ? ["from", "to", "sport_type", "route_key", "limit", "cursor"] : pathname.startsWith(`${AGENT_PREFIX}/aerobic/activities/`) ? [] : pathname === `${AGENT_PREFIX}/daily/` || pathname.startsWith(`${AGENT_PREFIX}/daily/`) ? [] : pathname === `${AGENT_PREFIX}/routes` ? ["sport_type", "route_key", "limit", "cursor"] : pathname.startsWith(`${AGENT_PREFIX}/routes/`) ? ["from", "to", "sport_type", "limit", "cursor"] : pathname.startsWith(`${AGENT_PREFIX}/exercises/`) ? ["from", "to", "preset", "range"] : [];
   const seen = new Set();
+  if (pathname === `${AGENT_PREFIX}/sessions` && url.searchParams.has("exercise_id") && url.searchParams.has("exercise_key")) return { code: "invalid_request", field: "exercise_id", message: "Use exercise_id or exercise_key, not both" };
   for (const key of url.searchParams.keys()) {
     if (!allowed.includes(key)) return { code: "invalid_request", field: key, message: `Unsupported query parameter: ${key}` };
     if (seen.has(key)) return { code: "invalid_request", field: key, message: `Query parameter may only be provided once: ${key}` };
-    if (["cursor", "status", "exercise_key"].includes(key) && url.searchParams.get(key) === "") return { code: key === "cursor" ? "invalid_cursor" : "invalid_request", field: key, message: key === "cursor" ? "Cursor is malformed, expired, or does not match the filters" : `${key} must not be empty` };
+    if (["cursor", "status", "exercise_id", "exercise_key"].includes(key) && url.searchParams.get(key) === "") return { code: key === "cursor" ? "invalid_cursor" : "invalid_request", field: key, message: key === "cursor" ? "Cursor is malformed, expired, or does not match the filters" : `${key} must not be empty` };
     seen.add(key);
   }
   return null;

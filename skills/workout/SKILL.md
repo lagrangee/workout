@@ -79,9 +79,15 @@ new-route registration.
 
 S2. **Read the Workout slice.** Call `workout_get_schedule` for the exact
    inclusive target date. If the returned entry has a Session reference, call
-   `workout_get_session` for that Session. Preserve the schedule/session
+   `workout_get_session` for that Session. Treat the response as the typed
+   canonical Session boundary: use stable `exercise_id`, the frozen snapshot
+   `name`/`definition_version`, `execution_mode`, ordered Prescribed Sets,
+   Completion Items, side, exact target, planned resistance, tempo, rest, Set
+   Result status/actual value/canonical kg/RIR/note, Exercise Feedback, and
+   Session-level notes as separate facts. Preserve the schedule/session
    `source_ref`, `data_as_of`, `training_version`, Session references, status,
-   actual results, RPE, notes, and correction freshness.
+   actual results, RPE, notes, and correction freshness. Do not rebuild an
+   Exercise name map or infer a result from a summary count.
 
 S3. **Read the aerobic COROS slice.** Call `querySportRecords` for the exact
 target date with the v1 aerobic sport codes `[100, 101, 102, 104, 200]`.
@@ -97,7 +103,14 @@ COROS Strength and unrecognized sport types are outside this sync scope and
 are reported as ignored rather than converted into aerobic data.
 
 S4. **Write an idempotent archive receipt.** Write one
-`daily/YYYY-MM-DD.md` and one
+`daily/YYYY-MM-DD.md` date Hub, one
+`workout/sessions/YYYY-MM-DD--<session_key>.md` human-readable Workout
+Session note, and its private detail sidecar at
+`data/workout/YYYY-MM-DD--<session_key>.json` for every returned Workout
+Session. The Session note contains the bounded plan snapshot, completion
+items/results, training intervals, exercise feedback, and training version
+when the source returns them; the sidecar is the private structured detail
+copy and is never part of the cloud projection. Write one
 `data/coros/YYYY-MM-DD-<activity_ref>.json` plus one
 `data/coros/YYYY-MM-DD-<activity_ref>.fit` per in-scope activity below the
 configured archive root. Re-running a date replaces the same date/activity
@@ -106,6 +119,40 @@ not create duplicate records. Return target date, source statuses, written
 paths, record counts, FIT byte counts, ignored sport types, and structured
 errors. If summary/lap reads succeed but FIT download fails, mark COROS
 `partial`, retain the JSON artifact, and leave an explicit FIT error for retry.
+
+The generated Markdown frontmatter must remain Obsidian-native: dates and
+timestamps are quoted scalar strings, source status/freshness fields are flat
+(`source_status_workout`, `source_status_coros`, `data_as_of_workout`, and
+`data_as_of_coros`), and every wikilink in a list is itself a quoted string.
+Do not emit duplicate `date`/`local_date` date controls, nested objects, or
+unquoted `[[...]]` list items. After writing, audit the daily Hub and Session
+frontmatter for scalar types, link targets, and the absence of nested source
+maps before reporting local success.
+
+Canonical Workout Session notes are readable projections, not a second fact
+model. For every snapshotted Exercise occurrence, render an ordered table with
+the Set ordinal, side (`none`, `both`, `left`, or `right`), fixed target,
+planned resistance, tempo, rest, actual value/resistance, result status, RIR,
+and Set note. Keep Exercise Feedback and the Session note in their own
+sections. A missing actual remains `—`/null; it is never rewritten as zero or
+as a completed Set. The Daily Hub links the Session only because this
+Obsidian adapter derives the path from `local_date`; the link is contextual
+and does not assert that Workout and COROS records are one event.
+
+COROS normalization and Markdown projection are deterministic runtime code,
+not Skill prose or a second `parser.mjs` entry point. The current runtime
+uses the existing COROS normalizer plus the versioned
+[`coros-field-catalog-v2.md`](../../docs/contracts/coros-field-catalog-v2.md).
+The sanitized activity JSON uses `field_catalog_version: 2`; the Obsidian
+activity note uses `projection_version: 2`.
+
+For COROS lap data, keep each provider lap group separate and render it as
+its own Markdown table. Use only catalog-confirmed normalized fields in the
+table, with the COROS app labels and explicit units; retain provider-only and
+unknown additive fields in the sanitized JSON. Unknown fields must produce a
+visible note warning and must not be guessed, silently normalized, or treated
+as a table column. Full lap detail belongs in the JSON sidecar; Markdown is a
+readable local projection.
 
 After the FIT sidecar is available, invoke the route matcher for each COROS
 activity. A unique `matched` result writes its `route_key` and
@@ -260,7 +307,7 @@ Load [`agent-api-v1.md`](../../docs/contracts/agent-api-v1.md) when a resource,
 error, freshness, pagination, confirmation, or readback rule is unclear. Load
 [`agent-api-wire-catalog-v1.md`](../../docs/contracts/agent-api-wire-catalog-v1.md)
 when a response shape or provenance field is unclear. Load
-[`plan-update-package-v1.md`](../../docs/contracts/plan-update-package-v1.md)
+[`plan-update-package-v2.md`](../../docs/contracts/plan-update-package-v2.md)
 before constructing a package or interpreting a validation error. These
 references are the single source of truth for wire and domain details; this
 Skill routes the Agent to them without copying their schemas. Load

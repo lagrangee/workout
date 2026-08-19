@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { strict as assert } from "node:assert";
 
-const files = ["wrangler.toml", "migrations/0001_initial.sql", "migrations/0002_state_revision.sql", "migrations/0003_query_indexes.sql", "migrations/0004_restore_session_date_guard.sql", "migrations/0005_agent_token_lookup.sql", "seed/workout-tracker-weekly-seed.json", "docs/contracts/agent-api-v1.md", "docs/contracts/agent-api-wire-catalog-v1.md", "docs/deployment/cloudflare-production-checklist.md", "docs/deployment/github-actions.md", "docs/deployment/wrangler-manual-deploy.md", "docs/recovery/d1-time-travel-and-export-rehearsal.md", "docs/release/seed-verification.md", "docs/release/production-acceptance.md", "docs/release/agent-mcp-onboarding.md", "docs/release/agent-mcp-acceptance.md", ".github/workflows/ci.yml"];
+const files = ["wrangler.toml", "migrations/0001_initial.sql", "migrations/0002_state_revision.sql", "migrations/0003_query_indexes.sql", "migrations/0004_restore_session_date_guard.sql", "migrations/0005_agent_token_lookup.sql", "migrations/0006_canonical_plan_records.sql", "migrations/0007_canonical_session_records.sql", "migrations/0008_canonical_session_read_model.sql", "migrations/0009_canonical_workout_cutover.sql", "scripts/rebuild-canonical-d1.mjs", "seed/workout-tracker-weekly-seed.json", "docs/contracts/agent-api-v1.md", "docs/contracts/agent-api-wire-catalog-v1.md", "docs/contracts/canonical-workout-read-model-v1.md", "docs/deployment/cloudflare-production-checklist.md", "docs/deployment/github-actions.md", "docs/deployment/wrangler-manual-deploy.md", "docs/recovery/d1-time-travel-and-export-rehearsal.md", "docs/recovery/canonical-workout-d1-cutover.md", "docs/release/seed-verification.md", "docs/release/production-acceptance.md", "docs/release/agent-mcp-onboarding.md", "docs/release/agent-mcp-acceptance.md", ".github/workflows/ci.yml"];
 for (const file of files) await readFile(file, "utf8");
 const wrangler = await readFile("wrangler.toml", "utf8");
 assert.match(wrangler, /workers_dev\s*=\s*false/);
@@ -22,5 +22,10 @@ assert.match(productionReceipt, /Recovery:/);
 assert.match(productionReceipt, /Seed:/);
 assert.match(productionReceipt, /AGENT_TOKEN_SECRET/);
 assert.match(productionReceipt, /0005_agent_token_lookup/);
+const cutoverRunbook = await readFile("docs/recovery/canonical-workout-d1-cutover.md", "utf8");
+assert.match(cutoverRunbook, /--confirm canonical-cutover/);
+assert.match(cutoverRunbook, /--rollback-dir/);
+assert.match(cutoverRunbook, /workout_storage_cutover/);
+assert.match(cutoverRunbook, /never deletes the archive automatically/);
 console.log("Local release acceptance evidence: configuration and recovery artifacts present.");
 console.log("Production acceptance status: manual Wrangler, authenticated seed read-back, and synthetic recovery evidence are recorded; future releases still require the operator to repeat the live checks.");

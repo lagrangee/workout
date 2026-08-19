@@ -62,7 +62,7 @@ An immutable, confirmed replacement of one Athlete's Weekly Template from a spec
 _Avoid_: Edit event, autosave, selectable plan version
 
 **Plan Update Package**:
-A schema-versioned JSON value prepared outside the App that proposes one complete Weekly Template and a future effective date. It contains no conditional progression rules or coaching instructions.
+A schema-versioned JSON value prepared outside the App that proposes one complete Weekly Template and a future effective date. The canonical v2 shape references the global Exercise Registry by `exercise_id`, selects one `execution_mode` per occurrence, and uses exact targets, normalized resistance, tempo strings, and ordered stable Sets. It contains no conditional progression rules or coaching instructions.
 _Avoid_: Web plan edit, AI-generated in App, patch request
 
 **Scheduled Workout**:
@@ -74,8 +74,13 @@ The authenticated, read-only date-browsing surface over an Athlete's Scheduled W
 _Avoid_: Plan editor, execution surface, synthetic history
 
 **Exercise**:
-A planned movement identified across Plan Revisions by an Athlete-scoped stable key. Its display name may change without starting a new exercise history; changing the key creates a distinct Exercise.
-_Avoid_: Database ID, display name
+A global movement definition from the repository Exercise Registry. It has an
+immutable `exercise_id`, a readable slug, a formal name with its own
+`definition_version`, active/deprecated status, and validated execution,
+target, resistance, and equipment capabilities. Plans choose a registry
+Exercise by ID; the Athlete-owned occurrence, prescribed Sets, and personal
+history remain in the Plan or Session.
+_Avoid_: Athlete-scoped Exercise, database row, display name as identity
 
 **Resistance**:
 The structured resistance for a strength prescription or result: bodyweight, external weight, or assisted weight. Numeric resistance is always kg per implement, with quantity expressing multiple equal implements.

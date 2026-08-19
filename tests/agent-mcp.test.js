@@ -64,7 +64,7 @@ test("workout MCP maps Session, progress, and Exercise history arguments without
   });
   const bridge = new McpBridge({ client });
 
-  const sessions = await bridge.handleMessage({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "workout_list_sessions", arguments: { from: "2026-08-01", to: "2026-08-08", limit: 2, cursor: "opaque cursor", status: "partial", exercise_key: "split_squat" } } });
+  const sessions = await bridge.handleMessage({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "workout_list_sessions", arguments: { from: "2026-08-01", to: "2026-08-08", limit: 2, cursor: "opaque cursor", status: "partial", exercise_id: "split_squat" } } });
   assert.equal(sessions.result.structuredContent.training_version, 4);
   assert.equal(new URL(requests[0].url).pathname, "/api/agent/v1/sessions");
   assert.equal(new URL(requests[0].url).searchParams.get("cursor"), "opaque cursor");
@@ -77,7 +77,7 @@ test("workout MCP maps Session, progress, and Exercise history arguments without
   assert.equal(new URL(requests[2].url).searchParams.get("preset"), "all");
   assert.equal(new URL(requests[2].url).searchParams.get("bucket"), "week");
 
-  await bridge.handleMessage({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "workout_get_exercise_history", arguments: { exercise_key: "split_squat", range: "12w" } } });
+  await bridge.handleMessage({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "workout_get_exercise_history", arguments: { exercise_id: "split_squat", range: "12w" } } });
   assert.equal(new URL(requests[3].url).pathname, "/api/agent/v1/exercises/split_squat");
   assert.equal(new URL(requests[3].url).searchParams.get("range"), "12w");
   assert.equal(requests.every((request) => request.options.headers.Authorization === "Bearer local-test-token"), true);
@@ -120,7 +120,7 @@ test("workout MCP preserves typed history errors and never retries stale reads",
 
 test("workout MCP serializes a typed Plan Update Package for non-mutating validation", async () => {
   const requests = [];
-  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: null, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const packageValue = { schema_version: 2, effective_from: "2026-08-09", week: { monday: null, tuesday: null, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
   const client = new WorkoutApiClient({
     origin: "https://workout.example",
     token: "local-test-token",
@@ -173,7 +173,7 @@ test("workout MCP serializes a typed Plan Update Package for non-mutating valida
 
 test("workout MCP applies a confirmed package and verifies plan and schedule readback", async () => {
   const requests = [];
-  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const packageValue = { schema_version: 2, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
   const client = new WorkoutApiClient({
     origin: "https://workout.example",
     token: "local-test-token",
@@ -206,7 +206,7 @@ test("workout MCP applies a confirmed package and verifies plan and schedule rea
 });
 
 test("workout MCP accepts an applied revision when it is now the Current Plan", async () => {
-  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const packageValue = { schema_version: 2, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
   const client = new WorkoutApiClient({
     origin: "https://workout.example",
     token: "local-test-token",
@@ -222,7 +222,7 @@ test("workout MCP accepts an applied revision when it is now the Current Plan", 
 
 test("workout MCP preserves a successful apply when post-apply readback fails", async () => {
   let calls = 0;
-  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const packageValue = { schema_version: 2, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
   const client = new WorkoutApiClient({
     origin: "https://workout.example",
     token: "local-test-token",
@@ -240,7 +240,7 @@ test("workout MCP preserves a successful apply when post-apply readback fails", 
 });
 
 test("workout MCP reports a readback mismatch instead of claiming verification", async () => {
-  const packageValue = { schema_version: 1, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
+  const packageValue = { schema_version: 2, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: { kind: "rest" }, friday: null, saturday: null, sunday: null } };
   const client = new WorkoutApiClient({
     origin: "https://workout.example",
     token: "local-test-token",

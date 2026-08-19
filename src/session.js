@@ -35,12 +35,15 @@ export function createSession(state, date, now, kind, skipReason = null) {
     if ((kind === "start" && existing.status === "in_progress") || (kind === "skip" && existing.status === "skipped")) return { session: existing, replay: true };
     return { error: { code: "session_state_conflict", message: "A different action cannot be applied to this Session" } };
   }
-  const { slot } = resolveSlot(state, date);
+  const { revision, slot } = resolveSlot(state, date);
   const sessionKey = opaqueKey("sess");
   const session = {
     session_key: sessionKey,
+    plan_id: `plan_${state.athlete_key}`,
+    plan_revision_key: revision.revision_key,
     scheduled_workout_key: scheduledWorkoutKey(state, date),
     scheduled_date: date,
+    local_date: date,
     timezone_at_session: state.timezone,
     title: slot.title,
     status: kind === "skip" ? "skipped" : "in_progress",
@@ -62,6 +65,7 @@ export function createSession(state, date, now, kind, skipReason = null) {
 
 /** @param {any} slot */
 function expandForSession(slot) {
+  if (slot.blocks.some(/** @param {any} block */ (block) => block.exercises.some(/** @param {any} exercise */ (exercise) => exercise.exercise_id))) return expandCanonicalForSession(slot);
   // Kept local to avoid making the mutation route depend on a mutable plan
   // object after the snapshot has been captured.
   /** @type {any} */
@@ -88,8 +92,72 @@ function expandForSession(slot) {
   return snapshot;
 }
 
+/** @param {any} slot */
+function expandCanonicalForSession(slot) {
+  /** @type {any} */
+  const snapshot = {
+    schema_version: 2,
+    title: slot.title,
+    start_time: slot.start_time,
+    estimated_duration_min: slot.estimated_duration_min,
+    blocks: /** @type {any[]} */ ([]),
+    completion_items: /** @type {any[]} */ ([]),
+    exercise_occurrence_keys: /** @type {string[]} */ ([]),
+  };
+  slot.blocks.forEach(/** @param {any} block @param {number} blockIndex */ (block, blockIndex) => {
+    const blockKey = opaqueKey(`sb${blockIndex + 1}`);
+    const snapshotBlock = { block_key: blockKey, title: block.title, exercises: /** @type {any[]} */ ([]) };
+    block.exercises.forEach(/** @param {any} exercise @param {number} exerciseIndex */ (exercise, exerciseIndex) => {
+      const occurrenceKey = exercise.occurrence_key;
+      snapshot.exercise_occurrence_keys.push(occurrenceKey);
+      const snapshotExercise = {
+        exercise_occurrence_key: occurrenceKey,
+        occurrence_key: occurrenceKey,
+        exercise_id: exercise.exercise_id,
+        name: exercise.name,
+        definition_version: exercise.definition_version,
+        execution_mode: exercise.execution_mode,
+        sets: /** @type {any[]} */ ([]),
+      };
+      exercise.sets.forEach(/** @param {any} set */ (set) => {
+        const setKey = set.set_id;
+        const snapshotSet = { set_key: setKey, ...deepClone(set) };
+        snapshotExercise.sets.push(snapshotSet);
+        const sides = exercise.execution_mode === "none" ? ["none"] : exercise.execution_mode === "bilateral" ? ["both"] : ["left", "right"];
+        sides.forEach(/** @param {string} side */ (side) => snapshot.completion_items.push({
+          completion_item_key: opaqueKey(`ci${snapshot.completion_items.length + 1}`),
+          exercise_occurrence_key: occurrenceKey,
+          occurrence_key: occurrenceKey,
+          set_id: setKey,
+          set_key: setKey,
+          set_ordinal: set.ordinal,
+          side,
+          target: deepClone(set.target),
+          resistance: canonicalResistanceForSnapshot(set),
+          resistance_mode: set.resistance_mode,
+          resistance_kg: set.resistance_kg,
+          tempo: set.tempo,
+          rest_after_sec: set.rest_after_sec,
+        }));
+      });
+      snapshotBlock.exercises.push(snapshotExercise);
+    });
+    snapshot.blocks.push(snapshotBlock);
+  });
+  return snapshot;
+}
+
+/** @param {any} set */
+function canonicalResistanceForSnapshot(set) {
+  if (set?.resistance_mode === "bodyweight") return { mode: "bodyweight" };
+  if (set?.resistance_mode === "external_load") return { mode: "external_load", load_kg: set.resistance_kg, quantity: 1 };
+  return null;
+}
+
 /** @param {any} state @param {any} session @param {any} record @param {Date} now @param {string} mode */
 export function replaceRecord(state, session, record, now, mode = "replace") {
+  if (isCanonicalSession(session) && record?.record_schema_version !== 2) return { error: { code: "invalid_session_record", message: "Canonical Sessions require Session Record schema_version 2", details: [{ path: "/record_schema_version", message: "must equal integer 2 for a canonical Session" }] } };
+  if (isCanonicalSession(session)) return replaceCanonicalRecord(state, session, record, now, mode);
   if (session.status === "skipped") {
     if (record.completion_results.length || record.training_intervals.length || record.session_rpe !== null || record.exercise_feedback.length) return { error: { code: "invalid_skipped_record", message: "A skipped Session can only correct its note and skip reason until restart" } };
   }
@@ -132,6 +200,8 @@ export function endSession(state, sessionKey, payload, now) {
     if (!proposedOpen) return { error: { code: "invalid_session_record", message: "End record must include the open interval" } };
     proposedOpen.ended_at = payload.ended_at;
   }
+  if (isCanonicalSession(session) && proposed.record_schema_version !== 2) return { error: { code: "invalid_session_record", message: "Canonical Sessions require Session Record schema_version 2", details: [{ path: "/record_schema_version", message: "must equal integer 2 for a canonical Session" }] } };
+  if (isCanonicalSession(session)) return replaceCanonicalRecord(state, session, proposed, now, "terminal");
   const errors = validateSessionRecord(proposed, session, now.toISOString(), "terminal");
   if (errors.length) return { error: { code: "invalid_session_record", message: "The final Session Record is invalid", details: errors } };
   session.completion_results = deepClone(proposed.completion_results);
@@ -235,11 +305,15 @@ export function sessionDetail(session) {
   return {
     ...sessionSummary(session),
     scheduled_workout_key: session.scheduled_workout_key,
+    plan_id: session.plan_id ?? null,
+    plan_revision_key: session.plan_revision_key ?? null,
+    local_date: session.local_date ?? session.scheduled_date,
     timezone_at_session: session.timezone_at_session,
     note: session.note,
     skip_reason: session.skip_reason,
     snapshot: deepClone(session.snapshot),
     completion_results: deepClone(session.completion_results),
+    set_results: session.set_results ? deepClone(session.set_results) : undefined,
     training_intervals: deepClone(session.training_intervals),
     exercise_feedback: deepClone(session.exercise_feedback),
     created_at: session.created_at,
@@ -248,3 +322,43 @@ export function sessionDetail(session) {
 
 /** @param {any} state @param {string} sessionKey */
 export function findSession(state, sessionKey) { return state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey) ?? null; }
+
+/** @param {any} session */
+function isCanonicalSession(session) {
+  return session?.snapshot?.schema_version === 2 || session?.snapshot?.blocks?.some(/** @param {any} block */ (block) => block.exercises?.some(/** @param {any} exercise */ (exercise) => exercise.exercise_id));
+}
+
+/** @param {any} state @param {any} session @param {any} record @param {Date} now @param {string} mode */
+function replaceCanonicalRecord(state, session, record, now, mode) {
+  if (session.status === "skipped" && (record.set_results.length || record.training_intervals.length || record.session_rpe !== null || record.exercise_feedback.length)) return { error: { code: "invalid_skipped_record", message: "A skipped Session can only correct its note and skip reason until restart" } };
+  const existingOpen = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
+  if (session.status === "in_progress" && mode === "in_progress" && !existingOpen) return { error: { code: "session_state_conflict", message: "Resume the paused Session before recording a Set Result" } };
+  const errors = validateSessionRecord(record, session, now.toISOString(), mode === "replace" ? session.status === "in_progress" ? "in_progress" : session.status === "skipped" ? "skipped" : "terminal" : mode);
+  if (errors.length) return { error: { code: "invalid_session_record", message: "The canonical Session Record is invalid", details: errors } };
+  if (session.status === "in_progress" && mode === "in_progress") {
+    const submittedOpen = record.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
+    if (!existingOpen || !submittedOpen || submittedOpen.interval_key !== existingOpen.interval_key) return { error: { code: "invalid_session_record", message: "The open interval is server-owned and must be preserved" } };
+  }
+  const setResults = record.set_results.map(/** @param {any} result */ (result) => ({ ...deepClone(result), ...normalizedResultResistance(result.resistance), completed: result.status === "completed" }));
+  session.set_results = setResults;
+  session.completion_results = deepClone(setResults);
+  session.training_intervals = deepClone(record.training_intervals);
+  session.session_rpe = session.status === "in_progress" || session.status === "skipped" ? null : record.session_rpe;
+  session.note = record.note;
+  session.exercise_feedback = deepClone(record.exercise_feedback);
+  session.skip_reason = session.status === "skipped" ? record.skip_reason : null;
+  if (mode === "terminal") session.status = completionFraction(session) === 1 ? "completed" : "partial";
+  session.updated_at = now.toISOString();
+  state.training_version += 1;
+  return { session };
+}
+
+/** @param {any} resistance */
+function normalizedResultResistance(resistance) {
+  if (resistance === null || resistance?.mode === "bodyweight") return { resistance_mode: resistance?.mode === "bodyweight" ? "bodyweight" : null, resistance_kg: null };
+  if (resistance?.mode === "external_load") {
+    const value = resistance.unit === "lb" ? resistance.value * 0.45359237 : resistance.value;
+    return { resistance_mode: "external_load", resistance_kg: Math.round(value * 100000) / 100000 };
+  }
+  return { resistance_mode: null, resistance_kg: null };
+}

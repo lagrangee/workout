@@ -2,6 +2,8 @@
 
 import { addDays, dateRange, dateSpan, isValidLocalDate, localDate, mondayOf, roundHalfUp } from "./util.js";
 import { completionFraction, scheduleEntry, sessionSummary } from "./plan.js";
+import { assembleExerciseHistory } from "./canonical-assembler.js";
+import { resolveExercise } from "./exercise-registry.js";
 
 /** @param {any} state @param {string} from @param {string} to @param {Date} now */
 export function metricSet(state, from, to, now = new Date()) {
@@ -26,7 +28,7 @@ export function metricSet(state, from, to, now = new Date()) {
   const duration = Math.round(trainingSessions.reduce((sum, session) => sum + session.training_intervals.reduce((total, interval) => interval.ended_at ? total + (Date.parse(interval.ended_at) - Date.parse(interval.started_at)) / 1000 : total, 0), 0));
   const strengthDates = new Set();
   for (const session of trainingSessions) {
-    const strengthOccurrences = new Set(session.snapshot.blocks.flatMap((block) => block.exercises.filter((exercise) => exercise.category === "strength").map((exercise) => exercise.exercise_occurrence_key)));
+    const strengthOccurrences = new Set(session.snapshot.blocks.flatMap((block) => block.exercises.filter((exercise) => exercise.category === "strength" || exercise.exercise_id).map((exercise) => exercise.exercise_occurrence_key)));
     const strengthItems = new Set(session.snapshot.completion_items.filter((item) => strengthOccurrences.has(item.exercise_occurrence_key)).map((item) => item.completion_item_key));
     if (session.completion_results.some((result) => strengthItems.has(result.completion_item_key))) strengthDates.add(session.scheduled_date);
   }
@@ -99,7 +101,11 @@ export function progressModel(state, now, from, to, preset, bucket = "week", ran
   const metrics = makeMetric(period.from, period.to);
   const buckets = progressBuckets(period, bucket, makeMetric);
   const weekBuckets = progressBuckets(period, "week", makeMetric).map(({ from, to, is_partial, week_start, week_end, included_from, included_to, metrics: bucketMetrics }) => ({ week_start, week_end, included_from, included_to, is_partial, metrics: bucketMetrics }));
-  const exercises = exerciseKeys(state).map((exerciseKey) => ({ exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to && session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey && session.completion_results.some((result) => session.snapshot.completion_items.some((item) => item.completion_item_key === result.completion_item_key && item.exercise_occurrence_key === exercise.exercise_occurrence_key))))).length, detail_ref: `exercise:${exerciseKey}` }));
+  const canonical = state.sessions.some((session) => session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_id)));
+  const exercises = exerciseKeys(state).map((exerciseKey) => {
+    const performedSessionCount = state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to && session.snapshot.blocks.some((block) => block.exercises.some((exercise) => (exercise.exercise_id ?? exercise.exercise_key) === exerciseKey && session.completion_results.some((result) => session.snapshot.completion_items.some((item) => item.completion_item_key === result.completion_item_key && item.exercise_occurrence_key === (exercise.exercise_occurrence_key ?? exercise.occurrence_key)))))).length;
+    return canonical ? { exercise_id: exerciseKey, exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: performedSessionCount, detail_ref: `exercise:${exerciseKey}` } : { exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: performedSessionCount, detail_ref: `exercise:${exerciseKey}` };
+  });
   return {
     metric_semantics_version: 1,
     period: periodContext(period, state.timezone, today),
@@ -159,10 +165,11 @@ function nextMonthStart(date) {
 
 /** @param {any} state */
 function exerciseKeys(state) {
-  return [...new Set(state.sessions.flatMap((session) => session.snapshot.blocks.flatMap((block) => block.exercises.map((exercise) => exercise.exercise_key))))].sort();
+  return [...new Set(state.sessions.flatMap((session) => session.snapshot.blocks.flatMap((block) => block.exercises.map((exercise) => exercise.exercise_id ?? exercise.exercise_key).filter(Boolean))))].sort();
 }
 /** @param {any} state @param {string} key */
 function latestExerciseName(state, key) {
+  if (resolveExercise(key)) return resolveExercise(key).name;
   const occurrence = state.sessions.slice().sort((left, right) => right.scheduled_date.localeCompare(left.scheduled_date) || right.updated_at.localeCompare(left.updated_at)).flatMap((session) => session.snapshot.blocks.flatMap((block) => block.exercises)).find((exercise) => exercise.exercise_key === key);
   return occurrence?.name ?? key;
 }
@@ -171,6 +178,7 @@ function latestExerciseName(state, key) {
 export function exerciseDetail(state, exerciseKey, now, from, to, preset, range) {
   const period = resolvePeriod(state, now, from, to, preset ?? (range === undefined && from === undefined && to === undefined ? "12w" : undefined), range);
   if (period.error) return period;
+  if (state.sessions.some((session) => session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_id === exerciseKey)))) return canonicalExerciseDetail(state, exerciseKey, now, period);
   const matching = state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to);
   const observations = [];
   const series = { none: [], left: [], right: [] };
@@ -194,6 +202,17 @@ export function exerciseDetail(state, exerciseKey, now, from, to, preset, range)
   for (const side of ["none", "left", "right"]) series[side].sort(sortObservation);
   observations.sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date) || a.session_key.localeCompare(b.session_key));
   return { period: periodContext(period, state.timezone, localDate(now, state.timezone)), exercise_key: exerciseKey, display_name_history: exerciseNameHistory(state, exerciseKey), performed_session_count: observations.length, observations, series };
+}
+
+/** @param {any} state @param {string} exerciseId @param {Date} now @param {any} period */
+function canonicalExerciseDetail(state, exerciseId, now, period) {
+  const history = assembleExerciseHistory(state.sessions, exerciseId, { from: period.from, to: period.to });
+  if (!history.display_name_history.length) return { error: { code: "not_found", message: "Exercise not found" } };
+  const observations = history.observations.map((observation) => ({
+    ...observation,
+    sets: observation.sets.map((set) => ({ ...set, set_key: set.set_id, total_external_kg: set.total_external_kg })),
+  }));
+  return { period: periodContext(period, state.timezone, localDate(now, state.timezone)), exercise_id: exerciseId, exercise_key: exerciseId, current_name: history.current_name, display_name_history: history.display_name_history, performed_session_count: history.performed_session_count, observations, series: history.series };
 }
 
 function exerciseNameHistory(state, exerciseKey) {

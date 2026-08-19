@@ -1,6 +1,7 @@
 // @ts-nocheck
 
 import { addDays, dateSpan, isValidLocalDate, localDate } from "./util.js";
+import { COROS_FIELD_CATALOG_VERSION, normalizeCorosLapMetrics, unknownCorosProviderFields } from "./coros-field-catalog.js";
 
 export const COROS_SPORT_TYPES = Object.freeze({
   100: "outdoor_run",
@@ -143,7 +144,7 @@ function normalizeLapGroups(raw) {
       const lapIndex = Number(lap.lap_index ?? lap.lapIndex);
       if (!Number.isInteger(lapIndex) || lapIndex < 0) return [];
       const providerMetrics = safeDetailValue(lap.provider_metrics ?? lap.providerMetrics ?? {}) ?? {};
-      const normalizedMetrics = safeDetailValue(lap.normalized_metrics ?? lap.normalizedMetrics ?? {}) ?? {};
+      const normalizedMetrics = normalizeCorosLapMetrics(providerMetrics, safeDetailValue(lap.normalized_metrics ?? lap.normalizedMetrics ?? {}) ?? {});
       return [{ lap_index: lapIndex, provider_metrics: providerMetrics, normalized_metrics: normalizedMetrics }];
     }).slice(0, 1000) : [];
     const groupType = typeof group.group_type === "number" && Number.isFinite(group.group_type)
@@ -213,9 +214,11 @@ export function normalizeCorosActivity(raw, context) {
   const fitFile = normalizeFitArtifact(raw.fit_file ?? raw.fitFile ?? { fit_status: raw.fit_status }, activityRef);
   const status = sourceStatus(raw.source_status ?? raw.sourceStatus ?? context.sourceStatus);
   const dataAsOf = instantOrNull(raw.data_as_of ?? raw.dataAsOf) ?? instantOrNull(context.dataAsOf) ?? null;
+  const lapGroups = normalizeLapGroups(raw);
+  const lapFieldWarnings = [...new Set(lapGroups.flatMap((group) => group.laps.flatMap((lap) => unknownCorosProviderFields(lap.provider_metrics))))].sort();
   return {
     schema_version: 1,
-    field_catalog_version: 1,
+    field_catalog_version: COROS_FIELD_CATALOG_VERSION,
     provider: "coros",
     kind: "coros-activity",
     activity_ref: activityRef,
@@ -235,7 +238,8 @@ export function normalizeCorosActivity(raw, context) {
     updated_at: instantOrNull(context.updatedAt) ?? dataAsOf,
     summary: normalizeActivitySummary(raw.summary ?? raw),
     provider_shape: normalizeProviderShape(raw),
-    lap_groups: normalizeLapGroups(raw),
+    lap_groups: lapGroups,
+    lap_field_warnings: lapFieldWarnings,
   };
 }
 
