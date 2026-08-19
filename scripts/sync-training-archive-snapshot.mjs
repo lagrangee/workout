@@ -69,6 +69,7 @@ export async function runSnapshot(payload) {
     now,
     workoutSource: { read: async (date) => payload.workoutByDate?.[date] ?? { source_status: "none", data_as_of: null, sessions: [] } },
     corosSource: { read: async (date) => payload.corosByDate?.[date] ?? { source_status: "none", data_as_of: null, activities: [] } },
+    retryCloudOnly: payload.retryCloudOnly,
     publish: async (projection, context) => {
       publishAerobicProjection(state, projection, now);
       if (!cloudPublisher) return {
