@@ -17,8 +17,10 @@ export function buildCanonicalRebuildSql(state, options = {}) {
   const rollbackRef = options.rollbackRef ?? null;
   const sourceStateRevision = options.sourceStateRevision ?? state.__d1StateRevision ?? null;
   const planId = `plan_${state.athlete_key}`;
+  // Wrangler's remote D1 file execution is the transaction boundary. D1
+  // rejects explicit BEGIN/COMMIT statements in imported SQL files, while
+  // keeping the file execution atomic when it fails.
   const statements = [
-    "BEGIN IMMEDIATE;",
     `DELETE FROM session_intervals WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM exercise_feedback WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM session_notes WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
@@ -68,7 +70,6 @@ export function buildCanonicalRebuildSql(state, options = {}) {
   delete persistedState.__d1StateRevision;
   statements.push(`UPDATE athlete_state SET state_json = ${sql(JSON.stringify(persistedState))}, updated_at = ${sql(now)}, state_revision = state_revision + 1 WHERE athlete_key = ${sql(state.athlete_key)};`);
   statements.push(`INSERT INTO workout_storage_cutover (athlete_key, canonical_version, rebuilt_at, source_state_revision, rollback_ref) VALUES (${sql(state.athlete_key)}, 1, ${sql(now)}, ${numberOrNull(sourceStateRevision)}, ${sql(rollbackRef)}) ON CONFLICT(athlete_key) DO UPDATE SET canonical_version = excluded.canonical_version, rebuilt_at = excluded.rebuilt_at, source_state_revision = excluded.source_state_revision, rollback_ref = excluded.rollback_ref;`);
-  statements.push("COMMIT;");
   return `${statements.join("\n")}\n`;
 }
 

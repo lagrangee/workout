@@ -42,7 +42,8 @@ rebuild command rejects unknown Exercise IDs and incomplete canonical
 snapshots. It emits one transaction that rebuilds only the selected Athlete,
 clears the active legacy Workout arrays from `state_json` while retaining that
 archive field, and writes the cutover marker after the canonical rows are
-ready.
+ready. The generated file intentionally omits explicit `BEGIN`/`COMMIT`;
+remote Wrangler D1 file execution provides the atomic batch boundary.
 
 ## Apply with rollback evidence
 
@@ -72,7 +73,7 @@ and an authenticated application/Agent read before reopening writes. Then run
 the local archive sync for the affected dates; archive files remain derived
 and can be regenerated from the authoritative sources.
 
-If the cutover fails before commit, the transaction leaves the target Athlete
-unchanged. If an already committed cutover needs recovery, use the retained
+If the remote D1 batch fails, D1 leaves the target Athlete unchanged. If an
+already committed cutover needs recovery, use the retained
 private archive copy and the D1 Time Travel/export operator procedure; do not
 add a startup repair path or silently reintroduce the old JSON shapes.

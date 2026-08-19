@@ -38,7 +38,7 @@ test("canonical rebuild CLI generates a reviewable SQL artifact without applying
     const sql = await readFile(output, "utf8");
     const receipt = JSON.parse(result.stdout);
     assert.equal(receipt.applied, false);
-    assert.match(sql, /BEGIN IMMEDIATE/);
+    assert.doesNotMatch(sql, /BEGIN IMMEDIATE|COMMIT;/);
     assert.match(sql, /workout_storage_cutover/);
   } finally {
     await rm(root, { recursive: true, force: true });
