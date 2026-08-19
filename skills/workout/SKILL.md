@@ -244,12 +244,16 @@ for a later retry.
    change a future plan, read `workout_get_plan` first. Preserve existing
    values deliberately for unspecified slots and ask a clarifying question
    for any value required by a new or changed prescription. Construct a
-   complete seven-day Plan Update Package using the canonical contract.
+   complete seven-day Plan Update Package using the canonical contract. When
+   the accepted proposal spans two to four consecutive Monday templates,
+   construct one complete Plan Update Batch instead of applying its packages
+   separately.
    Completion: a complete package exists, or the missing user decision is
    explicit and the flow remains at clarification.
 
 6. **Validate before showing a proposal.** Call
-   `workout_validate_plan_update` with the complete package. For a valid
+   `workout_validate_plan_update` with the complete package, or
+   `workout_validate_plan_update_batch` with the complete batch. For a valid
    result, show the effective date, changed-slot summary, complete resulting
    week, and the returned package/base evidence. Treat validation as
    non-mutating. Completion: a valid preview and its digests are ready for
@@ -259,16 +263,19 @@ for a later retry.
 7. **Separate confirmation from application.** Show the validated preview
    before asking for confirmation. A separate, explicit confirmation that
    refers to that preview is the gate; then call `workout_apply_plan_update`
-   with the exact validated package, the same `package_digest` and
-   `base_plan_digest` returned by validation, `confirmed: true`, and a fresh
-   idempotency key.
+   with the exact validated package and digests, or
+   `workout_apply_plan_update_batch` with the exact validated batch,
+   `batch_digest`, and `base_plan_digest`. In either case pass
+   `confirmed: true` and a fresh idempotency key.
    Completion: the user has either confirmed the exact preview or declined or
    changed it, in which case the package returns to validation.
 
 8. **Verify the write.** After an application response, inspect its readback.
    Treat the change as verified only when the readback status is verified and
    the returned Current Plan and inclusive seven-day Schedule correspond to
-   the applied effective date and package. A stale-plan response starts a new
+   the applied effective date and package; batch readback must cover every
+   included revision and the full inclusive batch Schedule. A stale-plan
+   response starts a new
    read-first cycle; a readback failure is reported as a readback failure and
    is never converted into an unverified success. Completion: the final
    report distinguishes applied, verified, and failed-readback states.
@@ -308,7 +315,9 @@ error, freshness, pagination, confirmation, or readback rule is unclear. Load
 [`agent-api-wire-catalog-v1.md`](../../docs/contracts/agent-api-wire-catalog-v1.md)
 when a response shape or provenance field is unclear. Load
 [`plan-update-package-v2.md`](../../docs/contracts/plan-update-package-v2.md)
-before constructing a package or interpreting a validation error. These
+before constructing a package or interpreting a validation error. Load
+[`plan-update-batch-v1.md`](../../docs/contracts/plan-update-batch-v1.md) before
+constructing or interpreting a two-to-four-week atomic batch. These
 references are the single source of truth for wire and domain details; this
 Skill routes the Agent to them without copying their schemas. Load
 [`training-archive-v1.md`](../../docs/contracts/training-archive-v1.md) when

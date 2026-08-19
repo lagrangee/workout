@@ -65,6 +65,15 @@ _Avoid_: Edit event, autosave, selectable plan version
 A schema-versioned JSON value prepared outside the App that proposes one complete Weekly Template and a future effective date. The canonical v2 shape references the global Exercise Registry by `exercise_id`, selects one `execution_mode` per occurrence, and uses exact targets, normalized resistance, tempo strings, and ordered stable Sets. It contains no conditional progression rules or coaching instructions.
 _Avoid_: Web plan edit, AI-generated in App, patch request
 
+**Plan Update Batch**:
+A transient, schema-versioned request that orders two to four complete Plan
+Update Package v2 values on consecutive Monday effective dates. Validation
+simulates the sequence, and one confirmed application appends all included
+Plan Revisions atomically while incrementing the Athlete's training version
+once. The batch is not stored as a plan object and does not change Weekly
+Template repetition semantics.
+_Avoid_: Multi-week plan, progression program, partial week patch
+
 **Scheduled Workout**:
 The deterministic Athlete-local date projection of the Weekly Template applicable on that date. It describes prescribed intent, may be a workout or Rest Day, and never owns execution state.
 _Avoid_: Workout record, completed workout

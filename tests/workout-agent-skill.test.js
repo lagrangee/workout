@@ -31,6 +31,8 @@ test("Workout Agent Skill maps bounded questions to typed MCP tools", async () =
     "workout_get_exercise_history",
     "workout_validate_plan_update",
     "workout_apply_plan_update",
+    "workout_validate_plan_update_batch",
+    "workout_apply_plan_update_batch",
   ]) {
     assert.match(skill, new RegExp(`\\b${tool}\\b`));
   }
@@ -86,6 +88,7 @@ test("Workout Agent Skill keeps credentials and analysis ownership outside the i
   assert.match(skill, /agent-api-v1\.md/);
   assert.match(skill, /agent-api-wire-catalog-v1\.md/);
   assert.match(skill, /plan-update-package-v2\.md/);
+  assert.match(skill, /plan-update-batch-v1\.md/);
 });
 
 test("Workout Agent Skill routes local archive context without changing source authority", async () => {

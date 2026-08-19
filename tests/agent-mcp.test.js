@@ -11,10 +11,11 @@ test("workout MCP exposes exactly the typed tools", async () => {
   await assert.rejects(() => client.getSchedule({ expand: "" }), /** @param {any} error */ (error) => error.code === "invalid_arguments");
   const bridge = new McpBridge({ client });
   const listed = await bridge.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" });
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update", "workout_apply_plan_update"]);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update", "workout_apply_plan_update", "workout_validate_plan_update_batch", "workout_apply_plan_update_batch"]);
   assert.equal(listed.result.tools.some((tool) => tool.name === "http_request"), false);
-  assert.equal(listed.result.tools.filter((tool) => tool.name !== "workout_apply_plan_update").every((tool) => tool.annotations.readOnlyHint === true), true);
+  assert.equal(listed.result.tools.filter((tool) => !tool.name.startsWith("workout_apply_")).every((tool) => tool.annotations.readOnlyHint === true), true);
   assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_plan_update").annotations.readOnlyHint, false);
+  assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_plan_update_batch").annotations.readOnlyHint, false);
 });
 
 test("workout MCP maps typed calls to authenticated Agent API reads and preserves errors", async () => {
@@ -203,6 +204,34 @@ test("workout MCP applies a confirmed package and verifies plan and schedule rea
   const missingKey = await bridge.handleMessage({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "" } } });
   assert.equal(missingKey.error.code, -32602);
   assert.equal(requests.length, 3);
+});
+
+test("workout MCP validates and atomically applies a typed four-week batch with full readback", async () => {
+  const requests = [];
+  const emptyWeek = { monday: null, tuesday: null, wednesday: null, thursday: null, friday: null, saturday: null, sunday: { kind: "rest" } };
+  const batch = { schema_version: 1, updates: [0, 1, 2, 3].map((index) => ({ schema_version: 2, effective_from: `2026-08-${10 + index * 7}`, week: emptyWeek })) };
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), options });
+      if (String(url).endsWith("/plan-update-batches/validate")) return new Response(JSON.stringify({ valid: true, batch_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
+      if (String(url).endsWith("/plan-update-batches/apply")) return new Response(JSON.stringify({ applied: true, from: "2026-08-10", to: "2026-09-06", update_count: 4 }), { headers: { "Content-Type": "application/json" } });
+      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ current: null, future: batch.updates.map(({ effective_from, week }) => ({ effective_from, week })) }), { headers: { "Content-Type": "application/json" } });
+      const entries = Array.from({ length: 28 }, (_, index) => { const date = new Date("2026-08-10T00:00:00Z"); date.setUTCDate(date.getUTCDate() + index); return { date: date.toISOString().slice(0, 10) }; });
+      return new Response(JSON.stringify({ from: "2026-08-10", to: "2026-09-06", entries }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const bridge = new McpBridge({ client });
+  const validation = await bridge.handleMessage({ jsonrpc: "2.0", id: 25, method: "tools/call", params: { name: "workout_validate_plan_update_batch", arguments: { batch } } });
+  assert.equal(validation.result.structuredContent.valid, true);
+  assert.deepEqual(JSON.parse(requests[0].options.body), { batch_text: JSON.stringify(batch) });
+
+  const applied = await bridge.handleMessage({ jsonrpc: "2.0", id: 26, method: "tools/call", params: { name: "workout_apply_plan_update_batch", arguments: { batch, batch_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "batch-apply-1" } } });
+  assert.equal(applied.result.structuredContent.readback.status, "verified");
+  assert.equal(requests[1].url, "https://workout.example/api/agent/v1/plan-update-batches/apply");
+  assert.equal(requests[1].options.headers["Idempotency-Key"], "batch-apply-1");
+  assert.equal(requests[3].url, "https://workout.example/api/agent/v1/schedule?from=2026-08-10&to=2026-09-06&expand=prescription");
 });
 
 test("workout MCP accepts an applied revision when it is now the Current Plan", async () => {

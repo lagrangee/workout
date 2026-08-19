@@ -174,6 +174,47 @@ function planWeekProjection(week) {
   return Object.fromEntries(WEEKDAYS.map((weekday) => [weekday, planSlotProjection(week[weekday])]));
 }
 
+/**
+ * Project an internally normalized week back to the public Plan Update Package
+ * shape so the UI's "copy current plan" action always produces valid input.
+ * @param {any} week
+ */
+export function planUpdateWeekProjection(week) {
+  return Object.fromEntries(WEEKDAYS.map((weekday) => {
+    const slot = week[weekday];
+    if (!slot || slot.kind !== "workout") return [weekday, deepClone(slot)];
+    return [weekday, {
+      kind: "workout",
+      title: slot.title,
+      start_time: slot.start_time,
+      estimated_duration_min: slot.estimated_duration_min,
+      blocks: slot.blocks.map(/** @param {any} block */ (block) => ({
+        title: block.title,
+        exercises: block.exercises.map(/** @param {any} exercise */ (exercise) => {
+          if (!exercise.exercise_id) return deepClone(exercise);
+          return {
+            occurrence_key: exercise.occurrence_key,
+            exercise_id: exercise.exercise_id,
+            execution_mode: exercise.execution_mode,
+            sets: exercise.sets.map(/** @param {any} set */ (set) => ({
+              set_id: set.set_id,
+              ordinal: set.ordinal,
+              target: deepClone(set.target),
+              resistance: set.resistance_mode === "bodyweight"
+                ? { mode: "bodyweight" }
+                : set.resistance_mode === "external_load"
+                  ? { mode: "external_load", value: set.resistance_kg, unit: "kg" }
+                  : null,
+              tempo: set.tempo,
+              rest_after_sec: set.rest_after_sec,
+            })),
+          };
+        }),
+      })),
+    }];
+  }));
+}
+
 /** @param {any} slot */
 function planSlotProjection(slot) {
   if (!slot || slot.kind !== "workout") return deepClone(slot);

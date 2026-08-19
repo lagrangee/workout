@@ -6,6 +6,7 @@ import { coachOverview, coachResource, prescriptionProjection } from "./coach.js
 import { parseStrictJson, validatePlanPackage } from "./validation.js";
 import { AGENT_ARCHIVE_LIMIT, agentAerobicActivities, agentAerobicActivityDetail, agentDailyContext, agentRouteDetail, agentRouteHistory, agentRoutes, agentSchemaCatalog, agentSchemaResource } from "./agent-archive-api.js";
 import { syncAerobicProjection } from "./training-archive-projection.js";
+import { PLAN_UPDATE_BATCH_MAX_BYTES, appendPlanUpdateBatch, parsePlanUpdateBatch, planUpdateBatchDigests, validatePlanUpdateBatchForState } from "./plan-update-batch.js";
 
 const AGENT_PREFIX = "/api/agent/v1";
 
@@ -50,6 +51,8 @@ export function agentManifest(state, now) {
       exercise: `${AGENT_PREFIX}/exercises/{exercise_id}`,
       plan_update_validate: `${AGENT_PREFIX}/plan-updates/validate`,
       plan_update_apply: `${AGENT_PREFIX}/plan-updates/apply`,
+      plan_update_batch_validate: `${AGENT_PREFIX}/plan-update-batches/validate`,
+      plan_update_batch_apply: `${AGENT_PREFIX}/plan-update-batches/apply`,
       aerobic_sync: `${AGENT_PREFIX}/aerobic/sync`,
       schemas: `${AGENT_PREFIX}/schemas`,
       aerobic_activities: `${AGENT_PREFIX}/aerobic/activities`,
@@ -81,6 +84,8 @@ export function agentManifest(state, now) {
       route_history: { method: "GET", path: `${AGENT_PREFIX}/routes/{route_key}/history`, parameters: { route_key: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 }, cursor: { type: "string", format: "opaque" } }, rules: { max_days: 3660, response_schema: "route_history" } },
       plan_update_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/validate`, parameters: { package_text: { type: "string", content: "Plan Update Package v2 JSON" } }, rules: { mutates: false, strict_package: true } },
       plan_update_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/apply`, parameters: { package_text: { type: "string", content: "Plan Update Package v2 JSON" }, package_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true } },
+      plan_update_batch_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-update-batches/validate`, parameters: { batch_text: { type: "string", content: "Plan Update Batch v1 JSON" } }, rules: { mutates: false, strict_batch: true, minimum_updates: 2, maximum_updates: 4 } },
+      plan_update_batch_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-update-batches/apply`, parameters: { batch_text: { type: "string", content: "Plan Update Batch v1 JSON" }, batch_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_batch: true, atomic: true } },
       aerobic_sync: { method: "POST", path: `${AGENT_PREFIX}/aerobic/sync`, parameters: { projection: { type: "object", content: "AerobicProjectionV1" }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, idempotent: true, idempotency_window_hours: 24, strict_projection: true, excludes_raw_fit_gps: true } },
     },
   };
@@ -148,6 +153,59 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
 }
 
 /** @param {any} state @param {string} rawBody @param {Date} now */
+export async function agentValidatePlanUpdateBatch(state, rawBody, now) {
+  const parsed = parseAgentJson(rawBody, PLAN_UPDATE_BATCH_MAX_BYTES + 64 * 1024);
+  if (!parsed.ok) return parsed.error;
+  const body = parsed.value;
+  if (!isRecord(body) || Object.keys(body).length !== 1 || typeof body.batch_text !== "string") return { error: { code: "invalid_request", message: "batch_text is required and must be a string" } };
+  const result = validatePlanUpdateBatchForState(state, body.batch_text, now);
+  if (!result.ok) return { error: { code: "invalid_plan_batch", message: "The plan update batch needs repair", details: result.errors } };
+  const evidence = await planUpdateBatchDigests(state, result.value, now);
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    data_as_of: now.toISOString(),
+    training_version: state.training_version,
+    source_ref: "plan-update-batch:validation",
+    valid: true,
+    ...evidence,
+    preview: result.preview,
+  };
+}
+
+/** @param {any} state @param {string} rawBody @param {Date} now */
+export async function agentApplyPlanUpdateBatch(state, rawBody, now) {
+  const parsed = parseAgentJson(rawBody, PLAN_UPDATE_BATCH_MAX_BYTES + 64 * 1024);
+  if (!parsed.ok) return parsed.error;
+  const body = parsed.value;
+  if (!isRecord(body) || Object.keys(body).length !== 4 || typeof body.batch_text !== "string" || !isSha256(body.batch_digest) || !isSha256(body.base_plan_digest) || body.confirmed !== true) {
+    return { error: { code: body?.confirmed !== true ? "confirmation_required" : "invalid_request", message: body?.confirmed !== true ? "confirmed must be true" : "batch_text, batch_digest, base_plan_digest, and confirmed are required" } };
+  }
+  const batchResult = parsePlanUpdateBatch(body.batch_text, now, state.timezone);
+  if (!batchResult.ok) return { error: { code: "invalid_plan_batch", message: "The plan update batch needs repair", details: batchResult.errors } };
+  const evidence = await planUpdateBatchDigests(state, batchResult.value, now);
+  if (evidence.batch_digest !== body.batch_digest) return { error: { code: "package_digest_mismatch", message: "batch_digest does not match batch_text" } };
+  if (evidence.base_plan_digest !== body.base_plan_digest) return { error: { code: "stale_plan", message: "The Current Plan changed after this batch was validated" } };
+  const result = validatePlanUpdateBatchForState(state, body.batch_text, now);
+  if (!result.ok) return { error: { code: "invalid_plan_batch", message: "The plan update batch needs repair", details: result.errors } };
+  appendPlanUpdateBatch(state, result.value, now);
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    data_as_of: now.toISOString(),
+    training_version: state.training_version,
+    source_ref: "plan-update-batch:application",
+    applied: true,
+    from: result.preview.from,
+    to: result.preview.to,
+    update_count: result.value.updates.length,
+    batch_digest: evidence.batch_digest,
+    base_plan_digest: evidence.base_plan_digest,
+    preview: result.preview,
+  };
+}
+
+/** @param {any} state @param {string} rawBody @param {Date} now */
 export function agentSyncAerobicProjection(state, rawBody, now) {
   const result = syncAerobicProjection(state, rawBody, now);
   return result.error ? result : result.body;
@@ -162,8 +220,8 @@ function planUpdateBaseEvidence(state, packageValue) {
 function isSha256(value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); }
 
 /** @param {string} rawBody */
-function parseAgentJson(rawBody) {
-  try { return { ok: true, value: parseStrictJson(rawBody, 512 * 1024) }; }
+function parseAgentJson(rawBody, maxBytes = 512 * 1024) {
+  try { return { ok: true, value: parseStrictJson(rawBody, maxBytes) }; }
   catch { return { ok: false, error: { error: { code: "invalid_json", message: "Request body must be valid JSON" } } }; }
 }
 

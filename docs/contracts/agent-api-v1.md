@@ -66,6 +66,8 @@ GET /api/agent/v1/routes/:route_key/history[?from=&to=&limit=&cursor=]
 GET /api/agent/v1/schemas[/:schema_name]
 POST /api/agent/v1/plan-updates/validate
 POST /api/agent/v1/plan-updates/apply
+POST /api/agent/v1/plan-update-batches/validate
+POST /api/agent/v1/plan-update-batches/apply
 POST /api/agent/v1/aerobic/sync
 ```
 
@@ -171,6 +173,16 @@ successful application, the typed MCP flow reads `/plan` and the inclusive
 seven-day Schedule starting at `effective_from`; if that readback is
 temporarily unavailable, it reports the applied result with a structured
 readback failure rather than retrying or applying again.
+
+`plan-update-batches/validate` and `plan-update-batches/apply` extend that same
+evidence and confirmation boundary to the transient
+[Plan Update Batch v1](plan-update-batch-v1.md). A batch contains two to four
+complete Plan Update Package v2 values on consecutive Monday effective dates.
+Validation simulates every revision without mutation and returns the complete
+weeks, full Schedule window, `batch_digest`, sequential `base_plan_digest`, and
+base evidence. Apply requires both digests, `confirmed: true`, and one
+`Idempotency-Key`; it commits every included Plan Revision atomically and
+increments `training_version` once. An invalid or stale member writes nothing.
 
 `aerobic/sync` is the mutating Agent operation for the safe Training Archive
 projection. Its request body is exactly `{ "projection": AerobicProjectionV1 }`

@@ -61,6 +61,17 @@ const PLAN_UPDATE_APPLY_SCHEMA = exactObject({
   confirmed: { type: "boolean", const: true },
   idempotency_key: { type: "string", minLength: 1, maxLength: 200 },
 });
+const PLAN_UPDATE_BATCH_SCHEMA = exactObject({
+  schema_version: { type: "integer", const: 1 },
+  updates: arrayOf(PLAN_UPDATE_PACKAGE_SCHEMA, 2, 4),
+});
+const PLAN_UPDATE_BATCH_APPLY_SCHEMA = exactObject({
+  batch: PLAN_UPDATE_BATCH_SCHEMA,
+  batch_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  base_plan_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  confirmed: { type: "boolean", const: true },
+  idempotency_key: { type: "string", minLength: 1, maxLength: 200 },
+});
 
 const TOOL_DEFINITIONS = [
   {
@@ -117,6 +128,18 @@ const TOOL_DEFINITIONS = [
     inputSchema: PLAN_UPDATE_APPLY_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
+  {
+    name: "workout_validate_plan_update_batch",
+    description: "Validate 2-4 consecutive Monday Plan Update Packages as one non-mutating atomic batch preview.",
+    inputSchema: { type: "object", properties: { batch: PLAN_UPDATE_BATCH_SCHEMA }, required: ["batch"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "workout_apply_plan_update_batch",
+    description: "Atomically apply one previously validated Plan Update Batch after explicit confirmation, then read back the Plan timeline and full batch Schedule.",
+    inputSchema: PLAN_UPDATE_BATCH_APPLY_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
 ];
 
 export class WorkoutApiError extends Error {
@@ -154,6 +177,8 @@ export class WorkoutApiClient {
     if (name === "workout_get_exercise_history") return this.getExerciseHistory(args);
     if (name === "workout_validate_plan_update") return this.validatePlanUpdate(args);
     if (name === "workout_apply_plan_update") return this.applyPlanUpdate(args);
+    if (name === "workout_validate_plan_update_batch") return this.validatePlanUpdateBatch(args);
+    if (name === "workout_apply_plan_update_batch") return this.applyPlanUpdateBatch(args);
     throw new WorkoutApiError("tool_not_found", `Tool is not available: ${name}`, 0);
   }
 
@@ -223,6 +248,45 @@ export class WorkoutApiClient {
       ]);
       verifyPlanReadback(plan, readbackFrom, args.package);
       verifyScheduleReadback(schedule, readbackFrom, readbackTo);
+      return { ...applied, readback: { status: "verified", plan, schedule } };
+    } catch (error) {
+      return {
+        ...applied,
+        readback: {
+          status: "failed",
+          error: {
+            code: error.code ?? "readback_failed",
+            message: error.message ?? String(error),
+            status: error.status ?? 0,
+            details: error.details ?? [],
+          },
+        },
+      };
+    }
+  }
+
+  async validatePlanUpdateBatch(args = {}) {
+    assertToolArguments("workout_validate_plan_update_batch", args);
+    return this.post("/plan-update-batches/validate", { batch_text: JSON.stringify(args.batch) });
+  }
+
+  async applyPlanUpdateBatch(args = {}) {
+    assertToolArguments("workout_apply_plan_update_batch", args);
+    const applied = await this.post("/plan-update-batches/apply", {
+      batch_text: JSON.stringify(args.batch),
+      batch_digest: args.batch_digest,
+      base_plan_digest: args.base_plan_digest,
+      confirmed: args.confirmed,
+    }, { "Idempotency-Key": args.idempotency_key });
+    const readbackFrom = applied.from;
+    const readbackTo = applied.to;
+    try {
+      const [plan, schedule] = await Promise.all([
+        this.get("/plan"),
+        this.getSchedule({ from: readbackFrom, to: readbackTo, expand: true }),
+      ]);
+      for (const update of args.batch.updates) verifyPlanReadback(plan, update.effective_from, update);
+      verifyScheduleRangeReadback(schedule, readbackFrom, readbackTo);
       return { ...applied, readback: { status: "verified", plan, schedule } };
     } catch (error) {
       return {
@@ -397,6 +461,13 @@ function verifyScheduleReadback(schedule, from, to) {
   if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied seven-day window");
 }
 
+function verifyScheduleRangeReadback(schedule, from, to) {
+  const entries = schedule?.entries;
+  const expectedLength = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+  const expectedDates = Array.from({ length: expectedLength }, (_, index) => addDays(from, index));
+  if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied batch window");
+}
+
 function comparablePlanWeek(week) {
   return Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, comparablePlanSlot(week?.[day])]));
 }
@@ -421,8 +492,8 @@ function comparablePlanSlot(slot) {
           set_id: set.set_id,
           ordinal: set.ordinal,
           target: set.target,
-          resistance_mode: set.resistance_mode,
-          resistance_kg: set.resistance_kg,
+          resistance_mode: set.resistance_mode ?? set.resistance?.mode,
+          resistance_kg: set.resistance_kg ?? (set.resistance?.mode === "external_load" ? Math.round(set.resistance.value * (set.resistance.unit === "lb" ? 0.45359237 : 1) * 100000) / 100000 : null),
           tempo: set.tempo,
           rest_after_sec: set.rest_after_sec,
         })),

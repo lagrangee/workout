@@ -50,12 +50,13 @@ AgentManifest = {
   query_rules: object,
   links: { overview: string, plan: string, schedule: string, sessions: string,
            progress: string, exercise: string, plan_update_validate: string,
-           plan_update_apply: string, aerobic_sync: string, schemas: string,
+           plan_update_apply: string, plan_update_batch_validate: string,
+           plan_update_batch_apply: string, aerobic_sync: string, schemas: string,
            aerobic_activities: string, aerobic_activity: string,
            daily_context: string, routes: string, route: string,
            route_history: string },
   endpoints: object,
-  capabilities: ["read", "plan:write", "aerobic:write"]
+  capabilities: ["read", "plan:write", "plan-batch:write", "aerobic:write"]
 }
 ```
 
@@ -83,6 +84,24 @@ plan_update_apply: {
     idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" }
   },
   rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true }
+},
+plan_update_batch_validate: {
+  method: "POST",
+  path: "/api/agent/v1/plan-update-batches/validate",
+  parameters: { batch_text: { type: "string", content: "Plan Update Batch v1 JSON" } },
+  rules: { mutates: false, strict_batch: true, minimum_updates: 2, maximum_updates: 4 }
+},
+plan_update_batch_apply: {
+  method: "POST",
+  path: "/api/agent/v1/plan-update-batches/apply",
+  parameters: {
+    batch_text: { type: "string", content: "Plan Update Batch v1 JSON" },
+    batch_digest: { type: "string", format: "sha256" },
+    base_plan_digest: { type: "string", format: "sha256" },
+    confirmed: { type: "boolean", const: true },
+    idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" }
+  },
+  rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_batch: true, atomic: true }
 },
 aerobic_sync: {
   method: "POST",
@@ -290,6 +309,36 @@ AgentPlanUpdateApplication = {
     changed_weekday_slot_count: integer,
     source_ref: "plan-update:preview"
   }
+}
+
+AgentPlanUpdateBatchValidation = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  training_version: integer,
+  source_ref: "plan-update-batch:validation",
+  valid: true,
+  batch_digest: string,
+  base_plan_digest: string,
+  base_plan: { updates: object[], source_ref: "plan-update-batch:base" },
+  preview: { from: LocalDate, to: LocalDate, update_count: integer,
+             updates: object[], resulting_schedule: object,
+             source_ref: "plan-update-batch:preview" }
+}
+
+AgentPlanUpdateBatchApplication = {
+  schema_version: 1,
+  generated_at: Instant,
+  data_as_of: Instant,
+  training_version: integer,
+  source_ref: "plan-update-batch:application",
+  applied: true,
+  from: LocalDate,
+  to: LocalDate,
+  update_count: integer,
+  batch_digest: string,
+  base_plan_digest: string,
+  preview: object
 }
 
 ScheduleEntry = {
@@ -508,6 +557,13 @@ application does not expose its revision key. The MCP adapter then reads the
 Current Plan and the affected seven-day Schedule as readback evidence and
 checks that the returned plan date/content and schedule dates match the
 application.
+
+Plan Update Batch validation and application reuse
+[Plan Update Batch v1](plan-update-batch-v1.md). The MCP tools accept a
+structured `batch`, serialize it to `batch_text`, and preserve the same
+preview-before-confirmation boundary. The Worker simulates members in order,
+commits all revisions in one mutation, and increments `training_version` once.
+MCP readback checks every effective date and the full inclusive batch Schedule.
 
 ## Errors
 

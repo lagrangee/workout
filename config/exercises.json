@@ -228,6 +228,90 @@
       "resistance": { "modes": ["bodyweight", "external_load"], "units": ["kg", "lb"] },
       "equipment": { "required": ["step"], "optional": ["dumbbell"] },
       "capabilities": {}
+    },
+    {
+      "exercise_id": "cable_lat_pulldown",
+      "slug": "cable-lat-pulldown",
+      "name": "绳索高位下拉",
+      "definition_version": 1,
+      "status": "active",
+      "execution": { "side_modes": ["none"] },
+      "target": { "metrics": ["reps"] },
+      "resistance": { "modes": ["external_load"], "units": ["kg", "lb"] },
+      "equipment": { "required": ["cable_machine"], "optional": [] },
+      "capabilities": {}
+    },
+    {
+      "exercise_id": "cable_chest_press",
+      "slug": "cable-chest-press",
+      "name": "绳索胸推",
+      "definition_version": 1,
+      "status": "active",
+      "execution": { "side_modes": ["none"] },
+      "target": { "metrics": ["reps"] },
+      "resistance": { "modes": ["external_load"], "units": ["kg", "lb"] },
+      "equipment": { "required": ["cable_machine"], "optional": ["bench"] },
+      "capabilities": {}
+    },
+    {
+      "exercise_id": "cable_fly",
+      "slug": "cable-fly",
+      "name": "绳索飞鸟",
+      "definition_version": 1,
+      "status": "active",
+      "execution": { "side_modes": ["none"] },
+      "target": { "metrics": ["reps"] },
+      "resistance": { "modes": ["external_load"], "units": ["kg", "lb"] },
+      "equipment": { "required": ["cable_machine"], "optional": [] },
+      "capabilities": {}
+    },
+    {
+      "exercise_id": "cable_lateral_raise",
+      "slug": "cable-lateral-raise",
+      "name": "单臂绳索侧平举",
+      "definition_version": 1,
+      "status": "active",
+      "execution": { "side_modes": ["per_side"] },
+      "target": { "metrics": ["reps"] },
+      "resistance": { "modes": ["external_load"], "units": ["kg", "lb"] },
+      "equipment": { "required": ["cable_machine"], "optional": [] },
+      "capabilities": {}
+    },
+    {
+      "exercise_id": "outdoor_easy_run",
+      "slug": "outdoor-easy-run",
+      "name": "户外轻松跑",
+      "definition_version": 1,
+      "status": "active",
+      "execution": { "side_modes": ["none"] },
+      "target": { "metrics": ["duration_sec"] },
+      "resistance": { "modes": ["bodyweight"], "units": [] },
+      "equipment": { "required": [], "optional": ["running_shoes"] },
+      "capabilities": {}
+    },
+    {
+      "exercise_id": "trail_run_hike",
+      "slug": "trail-run-hike",
+      "name": "越野跑与爬升快走",
+      "definition_version": 1,
+      "status": "active",
+      "execution": { "side_modes": ["none"] },
+      "target": { "metrics": ["duration_sec"] },
+      "resistance": { "modes": ["bodyweight"], "units": [] },
+      "equipment": { "required": [], "optional": ["trail_running_shoes"] },
+      "capabilities": {}
+    },
+    {
+      "exercise_id": "treadmill_incline_walk",
+      "slug": "treadmill-incline-walk",
+      "name": "跑步机坡度快走",
+      "definition_version": 1,
+      "status": "active",
+      "execution": { "side_modes": ["none"] },
+      "target": { "metrics": ["duration_sec"] },
+      "resistance": { "modes": ["bodyweight"], "units": [] },
+      "equipment": { "required": ["treadmill"], "optional": [] },
+      "capabilities": {}
     }
   ]
 }

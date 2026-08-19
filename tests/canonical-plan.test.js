@@ -77,6 +77,24 @@ test("canonical Plan Update writes an immutable Athlete-owned revision and reads
   assert.notDeepEqual(other.body.future, plan.body.future);
 });
 
+test("copy current canonical plan returns a valid schema v2 update-package shape", async () => {
+  const { handler, store } = appFixture();
+  const packageText = JSON.stringify(canonicalPackage());
+  const applied = await call(handler, "/api/private/plan-updates/apply", json({ method: "POST", headers: { "Idempotency-Key": "canonical-copy-plan-1" } }, { package_text: packageText }));
+  assert.equal(applied.response.status, 201);
+
+  const state = await store.getByEmail("athlete-a@example.invalid");
+  state.plan_revisions.at(-1).effective_from = addDays(today, -1);
+  await store.save(state);
+
+  const copied = await call(handler, "/api/private/plan/update-package");
+  assert.equal(copied.response.status, 200);
+  assert.equal(copied.body.schema_version, 2);
+  const set = copied.body.week.monday.blocks[0].exercises[1].sets[0];
+  assert.deepEqual(set.resistance, { mode: "external_load", value: 4.53592, unit: "kg" });
+  assert.equal("resistance_mode" in set, false);
+});
+
 test("Agent Plan readback uses the same canonical Exercise Prescription", async () => {
   const { handler } = appFixture();
   const packageText = JSON.stringify(canonicalPackage());

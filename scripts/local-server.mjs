@@ -14,7 +14,16 @@ localWeek[weekdayKey(localToday)] = { kind: "workout", title: "本地演示训�
 localWeek[WEEKDAYS[(WEEKDAYS.indexOf(weekdayKey(localToday)) + 1) % 7]] = { kind: "rest" };
 localAthlete.plan_revisions.push({ revision_key: opaqueKey("rev"), revision_sequence: 1, created_at: new Date().toISOString(), effective_from: addDays(localToday, -7), week: localWeek });
 await store.save(localAthlete);
-const handler = createHandler({ STORE: store, LOCAL_AUTH: "true", PUBLIC_ORIGIN: "http://127.0.0.1:8787", ASSETS: { fetch: assetFetch } });
+const localEnv = {
+  STORE: store,
+  LOCAL_AUTH: "true",
+  PUBLIC_ORIGIN: "http://127.0.0.1:8787",
+  AUTH_A_PASSWORD: "local-workout",
+  AUTH_B_PASSWORD: "local-workout",
+  AUTH_SESSION_SECRET: "local-workout-session-secret-32-bytes",
+  ASSETS: { fetch: assetFetch },
+};
+const handler = createHandler(localEnv);
 /** @type {Record<string, string>} */
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".wav": "audio/wav" };
 /** @param {Request} request @returns {Promise<Response>} */
@@ -28,7 +37,7 @@ const server = createServer(async (req, res) => {
   /** @type {HeadersInit} */
   const headers = Object.entries(req.headers).flatMap(([key, value]) => typeof value === "string" ? [[key, value]] : value ? [[key, value.join(", ")]] : []);
   const request = new Request(`http://127.0.0.1:8787${req.url}`, { method: req.method, headers, body: req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks) });
-  const response = await handler.fetch(request, { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "http://127.0.0.1:8787", ASSETS: { fetch: assetFetch } });
+  const response = await handler.fetch(request, localEnv);
   res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer()));
 });
 server.listen(8787, "127.0.0.1", () => console.log("Workout local server listening on http://127.0.0.1:8787/app"));
