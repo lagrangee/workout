@@ -36,14 +36,17 @@ node scripts/rebuild-canonical-d1.mjs \
 ```
 
 The converter retains the exact v1 `plan_revisions` and `sessions` under the
-non-authoritative `legacy_workout_v1` archive field, so fields not represented
-by canonical v2 (for example old target-effort fields) remain recoverable. The
-rebuild command rejects unknown Exercise IDs and incomplete canonical
-snapshots. It emits one transaction that rebuilds only the selected Athlete,
-clears the active legacy Workout arrays from `state_json` while retaining that
-archive field, and writes the cutover marker after the canonical rows are
-ready. The generated file intentionally omits explicit `BEGIN`/`COMMIT`;
-remote Wrangler D1 file execution provides the atomic batch boundary.
+non-authoritative `legacy_workout_v1` field in the review artifact, so fields
+not represented by canonical v2 (for example old target-effort fields) remain
+recoverable. `--apply` copies the private archive before the D1 write; that
+copy is the durable legacy rollback evidence. The rebuild command rejects
+unknown Exercise IDs and incomplete canonical snapshots. It rebuilds only the
+selected Athlete, clears the active legacy Workout arrays from `state_json`,
+and deliberately omits the raw archive field from the persisted D1 JSON so the
+single UPDATE stays below D1's 100 KB SQL-statement limit. The relational
+canonical rows retain the migrated Workout facts. The generated file
+intentionally omits explicit `BEGIN`/`COMMIT`; remote Wrangler D1 file
+execution provides the atomic batch boundary.
 
 ## Apply with rollback evidence
 

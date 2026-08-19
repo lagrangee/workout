@@ -67,6 +67,11 @@ export function buildCanonicalRebuildSql(state, options = {}) {
     statements.push(`INSERT INTO session_notes (session_key, note, skip_reason, session_rpe) VALUES (${sql(session.session_key)}, ${sql(session.note)}, ${sql(session.skip_reason)}, ${numberOrNull(session.session_rpe)});`);
   }
   const persistedState = { ...state, plan_revisions: [], sessions: [] };
+  // The converter keeps the exact v1 document in the review artifact, and
+  // --apply copies the private archive before this SQL runs. Do not embed the
+  // raw duplicate in state_json: D1 limits one SQL statement to 100 KB, while
+  // the relational canonical rows retain the migrated Workout facts.
+  delete persistedState.legacy_workout_v1;
   delete persistedState.__d1StateRevision;
   statements.push(`UPDATE athlete_state SET state_json = ${sql(JSON.stringify(persistedState))}, updated_at = ${sql(now)}, state_revision = state_revision + 1 WHERE athlete_key = ${sql(state.athlete_key)};`);
   statements.push(`INSERT INTO workout_storage_cutover (athlete_key, canonical_version, rebuilt_at, source_state_revision, rollback_ref) VALUES (${sql(state.athlete_key)}, 1, ${sql(now)}, ${numberOrNull(sourceStateRevision)}, ${sql(rollbackRef)}) ON CONFLICT(athlete_key) DO UPDATE SET canonical_version = excluded.canonical_version, rebuilt_at = excluded.rebuilt_at, source_state_revision = excluded.source_state_revision, rollback_ref = excluded.rollback_ref;`);

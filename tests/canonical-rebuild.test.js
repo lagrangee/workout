@@ -135,6 +135,7 @@ test("bounded canonical rebuild replaces rows, clears legacy state arrays, and r
   const db = new DatabaseSync(":memory:");
   try {
     const state = canonicalState();
+    state.legacy_workout_v1 = { schema_version: 1, plan_revisions: [{ legacy: true }], sessions: [{ legacy: true }] };
     execMigrations(db);
     db.prepare("INSERT INTO athlete_state (athlete_key, email, state_json, updated_at, state_revision) VALUES (?, ?, ?, ?, ?)").run(state.athlete_key, state.email, JSON.stringify({ ...state, plan_revisions: [{ legacy: true }], sessions: [{ legacy: true }] }), state.updated_at, 4);
     db.exec(buildCanonicalRebuildSql(state, { now: "2026-08-19T12:30:00.000Z", rollbackRef: "workout-rollback-test", sourceStateRevision: 4 }));
@@ -149,6 +150,7 @@ test("bounded canonical rebuild replaces rows, clears legacy state arrays, and r
     const persisted = JSON.parse(db.prepare("SELECT state_json FROM athlete_state WHERE athlete_key = ?").get(state.athlete_key).state_json);
     assert.deepEqual(persisted.plan_revisions, []);
     assert.deepEqual(persisted.sessions, []);
+    assert.equal(persisted.legacy_workout_v1, undefined);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally {
     db.close();

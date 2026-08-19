@@ -127,6 +127,6 @@ function usage() {
 
 The command accepts one canonical Athlete state or an explicit one-Athlete
 export. It never deletes on startup. --apply first makes a recoverable copy
-of the bounded private archive, then runs the generated transaction through
+of the bounded private archive, then runs the generated D1 batch through
 Wrangler. Review the SQL file before applying it.`;
 }
