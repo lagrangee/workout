@@ -257,6 +257,7 @@ test("ticket 03 private Records and Calendar reads are Athlete-scoped and Calend
 test("Calendar reports explicit COROS route evidence without creating a Workout Session relation", async () => {
   const { handler, store } = appFixture();
   const athlete = await store.getByEmail("athlete-a@example.invalid");
+  athlete.plan_revisions[0].effective_from = "2026-08-01";
   athlete.plan_revisions[0].week.saturday = {
     kind: "workout",
     title: "香山鸡腿线",

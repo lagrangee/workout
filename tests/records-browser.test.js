@@ -298,10 +298,11 @@ test("ticket 03 browser seam: Records opens the source-separated overview", asyn
 });
 
 test("ticket 03 browser seam: Calendar shows a compact aerobic summary and links into the date-filtered Records list", async () => {
-  const browser = await seededBrowser({ activities: [indoorActivity({ local_date: "2026-08-17" })] });
+  const targetDate = today;
+  const browser = await seededBrowser({ activities: [indoorActivity({ local_date: targetDate })] });
   browser.root.querySelector('[data-view="calendar"]').click();
   await settle();
-  const day = browser.root.querySelector('[data-action="calendar-select"][data-date="2026-08-17"]');
+  const day = browser.root.querySelector(`[data-action="calendar-select"][data-date="${targetDate}"]`);
   assert.ok(day);
   day.click();
   await settle();
@@ -313,7 +314,7 @@ test("ticket 03 browser seam: Calendar shows a compact aerobic summary and links
   await settle();
   assert.equal(browser.requests.filter((path) => path.startsWith("/api/private/records/aerobic?")).length, 1);
   assert.match(browser.root.innerHTML, /coros-indoor-1/);
-  assert.match(browser.root.innerHTML, /日期：2026-08-17/);
+  assert.match(browser.root.innerHTML, new RegExp(`日期：${targetDate}`));
 });
 
 test("prescriptions align each Chinese execution mode with its Exercise heading", async () => {
