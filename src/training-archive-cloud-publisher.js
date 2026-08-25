@@ -23,7 +23,7 @@ export function createAerobicProjectionPublisher(options = {}) {
   const endpoint = new URL(AEROBIC_SYNC_PATH, options.origin);
   if (!/^https?:$/.test(endpoint.protocol)) throw new Error("The Workout application origin must use HTTP(S)");
 
-  /** @param {any} projection @param {{ idempotency_key?: string }} [context] */
+  /** @param {any} projection @param {{ idempotency_key?: string, signal?: AbortSignal }} [context] */
   return async function publish(projection, context = {}) {
     const idempotencyKey = projectionIdempotencyKey(context);
     const response = await fetchImpl(endpoint, {
@@ -34,6 +34,7 @@ export function createAerobicProjectionPublisher(options = {}) {
         "Content-Type": "application/json",
         "Idempotency-Key": idempotencyKey,
       },
+      signal: context.signal,
       body: JSON.stringify({ projection }),
     });
     const payload = await readJson(response);
@@ -69,11 +70,11 @@ export function createAgentAerobicProjectionPublisher(options = {}) {
   /** @type {any} */
   const client = new WorkoutApiClient(/** @type {any} */ ({ origin: options.origin, token: options.token, fetchImpl: options.fetchImpl }));
 
-  /** @param {any} projection @param {{ idempotency_key?: string }} [context] */
+  /** @param {any} projection @param {{ idempotency_key?: string, signal?: AbortSignal }} [context] */
   return async function publish(projection, context = {}) {
     const idempotencyKey = projectionIdempotencyKey(context);
     try {
-      const payload = await client.post(AGENT_AEROBIC_SYNC_PATH, { projection }, { "Idempotency-Key": idempotencyKey });
+      const payload = await client.post(AGENT_AEROBIC_SYNC_PATH, { projection }, { "Idempotency-Key": idempotencyKey }, { signal: context.signal });
       if (!isValidPublicationResponse(payload, projection)) {
         throw Object.assign(new Error("Workout Agent sync returned an invalid response"), { code: "invalid_sync_response", retryable: false });
       }

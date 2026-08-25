@@ -1,6 +1,6 @@
 ---
 name: workout
-description: Workout and multi-source training data: use when the user asks to sync or analyze local training archive data, read Workout or COROS training evidence, inspect a plan or completed sessions, review exercise history, or propose, validate, or apply a future plan change.
+description: "Workout and multi-source training data: use when the user asks to sync or analyze local training archive data, read Workout or COROS training evidence, inspect a plan or completed sessions, review exercise history, or propose, validate, or apply a future plan change."
 ---
 
 # Workout Agent
@@ -8,7 +8,9 @@ description: Workout and multi-source training data: use when the user asks to s
 Use the typed Workout MCP tools as the Workout data boundary and the COROS MCP
 tools as the aerobic telemetry boundary. A local Training Archive is a derived,
 read-optimized context layer: load it first for historical analysis, but never
-let it outrank a live authoritative source. Keep every read bounded and
+let it outrank a live authoritative source. `sync data` is one recoverable
+pipeline — source snapshot, FIT decode, local archive, then cloud projection —
+with the runtime owning checkpoints and retries. Keep every read bounded and
 evidence-led; let the Agent choose the analysis structure, tone, and
 recommendation style for the question.
 
@@ -70,12 +72,11 @@ A2. **Refresh selectively.** Query live Workout when the request concerns the
 `sync data` is an explicit read-then-write operation. It is the only operation
 in this Skill that writes the local Training Archive.
 
-S1. **Resolve the target date.** With no date, use the previous Athlete-local
-date. Accept one explicit local date for a re-run or backfill. A user may supply
-`route_key` as an explicit label, but `route_direction` is derived from the
-activity's GPS start and early trajectory. After a usable COROS FIT is archived,
-sync automatically runs route matching and completes any user-confirmed
-new-route registration.
+S1. **Resolve the target dates.** With no date, use the previous Athlete-local
+   date. Accept one or more explicit local dates as one user-visible sync for a
+   re-run or backfill. A user may supply `route_key` as an explicit label, but
+   `route_direction` is derived from the activity's GPS start and early
+   trajectory. After a usable COROS FIT is archived, sync automatically runs route matching and completes any user-confirmed new-route registration.
 
 S2. **Read the Workout slice.** Call `workout_get_schedule` for the exact
    inclusive target date. If the returned entry has a Session reference, call
@@ -89,18 +90,22 @@ S2. **Read the Workout slice.** Call `workout_get_schedule` for the exact
    actual results, RPE, notes, and correction freshness. Do not rebuild an
    Exercise name map or infer a result from a summary count.
 
-S3. **Read the aerobic COROS slice.** Call `querySportRecords` for the exact
-target date with the v1 aerobic sport codes `[100, 101, 102, 104, 200]`.
+S3. **Read the aerobic COROS slice.** Call `querySportRecords` for each exact
+   target date with the v1 aerobic sport codes `[100, 101, 102, 104, 200]`.
 For every returned activity, call `getActivityDetail` and
 `queryActivityLapData`, then call `downloadActivityFitFiles` with the same
-`labelId` and `sportType`. Keep the `labelId` as `activity_ref` and preserve
-`sportType`, timestamps, summary provenance, lap-group identity, and the
-sanitized provider fields described by
+`labelId` and `sportType`. Bound provider detail/lap/FIT work to two concurrent
+activities. Keep the `labelId` as `activity_ref` and preserve `sportType`,
+timestamps, summary provenance, lap-group identity, and the sanitized provider
+fields described by
 [`training-archive-wire-catalog-v1.md`](../../docs/contracts/training-archive-wire-catalog-v1.md).
-Validate the returned FIT resource signature and write its decoded bytes
-byte-for-byte; do not treat the MCP response envelope as the FIT file.
-COROS Strength and unrecognized sport types are outside this sync scope and
-are reported as ignored rather than converted into aerobic data.
+Validate the returned FIT resource signature and pass its bytes to the runtime
+decoder; do not treat the MCP response envelope as the FIT file. A source
+error, permission failure, or transport failure is `error`/`partial`, never
+`none`; `none` means a successful read confirmed that the slice is empty.
+Before decode, persist the normalized source snapshot and FIT artifacts under
+`.sync/training-archive/snapshots/<snapshot_id>/`; do not persist credentials or
+the raw MCP envelope. COROS Strength and unrecognized sport types are outside this sync scope and are reported as ignored rather than converted into aerobic data.
 
 S4. **Write an idempotent archive receipt.** Write one
 `daily/YYYY-MM-DD.md` date Hub, one
@@ -112,13 +117,21 @@ items/results, training intervals, exercise feedback, and training version
 when the source returns them; the sidecar is the private structured detail
 copy and is never part of the cloud projection. Write one
 `data/coros/YYYY-MM-DD-<activity_ref>.json` plus one
-`data/coros/YYYY-MM-DD-<activity_ref>.fit` per in-scope activity below the
-configured archive root. Re-running a date replaces the same date/activity
-artifacts and updates `captured_at`, `updated_at`, and `data_as_of`; it does
-not create duplicate records. Return target date, source statuses, written
-paths, record counts, FIT byte counts, ignored sport types, and structured
-errors. If summary/lap reads succeed but FIT download fails, mark COROS
-`partial`, retain the JSON artifact, and leave an explicit FIT error for retry.
+   `data/coros/YYYY-MM-DD-<activity_ref>.fit` per in-scope activity below the
+   configured archive root. The receipt at
+   `.sync/training-archive/YYYY-MM-DD.json` records the four phases
+   `source_read`, `fit_decode`, `local_archive`, and `cloud_publish`; each phase
+   is checkpointed atomically so an interrupted run can resume. Re-running a
+   date defaults to `resume`: reuse the private source snapshot and replace the
+   same date/activity artifacts without duplicates. Only explicit `refresh`
+   rereads live sources. A refresh stages new artifacts first and replaces
+   canonical files atomically per artifact only after local validation succeeds.
+   If all requested dates finish locally and in cloud, delete the snapshot;
+   retain it for any partial or failed result. Return per-date status, phase
+   states, source statuses, snapshot id, written paths, record counts, FIT byte
+   counts, ignored sport types, and structured errors. If summary/lap reads
+   succeed but FIT download fails, mark COROS `partial`, retain the JSON
+   artifact, and leave an explicit FIT error for retry.
 
 The generated Markdown frontmatter must remain Obsidian-native: dates and
 timestamps are quoted scalar strings, source status/freshness fields are flat
@@ -139,8 +152,8 @@ as a completed Set. The Daily Hub links the Session only because this
 Obsidian adapter derives the path from `local_date`; the link is contextual
 and does not assert that Workout and COROS records are one event.
 
-COROS normalization and Markdown projection are deterministic runtime code,
-not Skill prose or a second `parser.mjs` entry point. The current runtime
+COROS normalization, FIT decoding, and Markdown projection are deterministic
+runtime code, not Skill prose or a second `parser.mjs` entry point. The runtime
 uses the existing COROS normalizer plus the versioned
 [`coros-field-catalog-v2.md`](../../docs/contracts/coros-field-catalog-v2.md).
 The sanitized activity JSON uses `field_catalog_version: 2`; the Obsidian
@@ -154,8 +167,13 @@ visible note warning and must not be guessed, silently normalized, or treated
 as a table column. Full lap detail belongs in the JSON sidecar; Markdown is a
 readable local projection.
 
-After the FIT sidecar is available, invoke the route matcher for each COROS
-activity. A unique `matched` result writes its `route_key` and
+After the FIT sidecar is available, `src/fit-decoder.js` uses the pinned
+Garmin `@garmin/fitsdk` package and exposes only a narrow normalized contract:
+integrity, record/GPS counts, timestamps, cumulative distance, and normalized
+points.
+Developer-field values remain local decoder evidence and never enter the cloud
+projection. The route matcher consumes the adapter's normalized points, not a
+vendor message object. A unique `matched` result writes its `route_key` and
 `route_direction` into the same activity JSON and daily note. An
 `unmatched` result with a registration proposal pauses for the user's route
 name; after the name is supplied, append the proposal to
@@ -200,8 +218,8 @@ COROS detail files and write `weekly/YYYY-Www.md` with `analysis_as_of`.
 
 ### FIT-backed route matching
 
-During sync, decode the FIT record messages into normalized GPS points and
-invoke the standalone
+During sync, `src/fit-decoder.js` decodes the FIT record messages into
+normalized GPS points and sync invokes the standalone
 [`route-matcher.mjs`](scripts/route-matcher.mjs) program. The route registry is
 the local `config/routes.json`; each configured route may define separate
 `forward` and `reverse` spatial reference signatures and a total-distance
@@ -238,7 +256,11 @@ Sync status is `complete`, `none`, `partial`, or `error`. A successful source
 with no in-scope record is `none`; missing metrics remain `null` or absent and
 are never represented as zero. One source error does not erase a successful
 result from the other source, and a partial artifact remains visibly partial
-for a later retry.
+for a later retry. A FIT decode error preserves the downloaded FIT and COROS
+summary, skips route matching for that activity, and is retried from the local
+snapshot without rereading live sources. Cloud publication uses a 30-second
+per-attempt deadline and at most three attempts; local success remains visible
+when cloud publication is pending.
 
 5. **Build a future change from the Current Plan.** When the user asks to
    change a future plan, read `workout_get_plan` first. Preserve existing
@@ -287,6 +309,13 @@ Keep credentials out of chat, prompts, examples, logs, source references, and
 analysis. When authentication or transport setup fails, report the local
 configuration action required and continue without requesting the credential
 value in conversation.
+
+Treat a macOS TCC or archive-path access failure as an access error with the
+exact failing stage and path class. Do not reinterpret an unreadable iCloud
+directory as an empty Workout/COROS result, and do not claim that disabling a
+shell sandbox grants TCC access. The local runtime may continue only with a
+previously staged snapshot; otherwise stop before replacing canonical archive
+files and report the required owner-side permission action.
 
 Route structured API errors by their meaning: ask for missing information on
  invalid input, restart the same bounded traversal on `invalid_cursor`, and

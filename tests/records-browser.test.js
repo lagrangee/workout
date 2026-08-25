@@ -316,13 +316,14 @@ test("ticket 03 browser seam: Calendar shows a compact aerobic summary and links
   assert.match(browser.root.innerHTML, /日期：2026-08-17/);
 });
 
-test("Calendar prescription shows each Exercise execution mode once in Chinese", async () => {
+test("prescriptions align each Chinese execution mode with its Exercise heading", async () => {
   const browser = await seededBrowser();
-  assert.match(browser.root.innerHTML, /执行方式：不分左右/);
-  assert.match(browser.root.innerHTML, /执行方式：左右分别完成/);
+  assert.match(browser.root.innerHTML, /class="prescription-exercise-head"><strong>[^<]+<\/strong><span class="prescription-execution">不分左右<\/span>/);
+  assert.match(browser.root.innerHTML, /class="prescription-exercise-head"><strong>[^<]+<\/strong><span class="prescription-execution">左右分别完成<\/span>/);
+  assert.doesNotMatch(browser.root.innerHTML, /执行方式：/);
 });
 
-test("COROS route plan requires no duplicate Workout Session action and shows synced evidence", async () => {
+test("COROS route plan keeps one compact status row and removes duplicate route prescription content", async () => {
   const matched = outdoorActivity({
     activity_ref: "coros-chicken-line",
     source_ref: "coros:activity:coros-chicken-line",
@@ -338,9 +339,22 @@ test("COROS route plan requires no duplicate Workout Session action and shows sy
     configureState(state) { state.plan_revisions.at(-1).week[weekdayKey(today)] = routeRecordingSlot(); },
   });
 
-  assert.match(browser.root.innerHTML, /已记录（COROS）/);
-  assert.match(browser.root.innerHTML, /路线：香山鸡腿线/);
-  assert.match(browser.root.innerHTML, /不需要在 Workout 页面重复记录/);
+  assert.match(browser.root.innerHTML, /COROS 记录/);
+  assert.match(browser.root.innerHTML, /已记录/);
+  assert.doesNotMatch(browser.root.innerHTML, /COROS · ROUTE RECORDING/);
+  assert.doesNotMatch(browser.root.innerHTML, /路线：香山鸡腿线/);
+  assert.doesNotMatch(browser.root.innerHTML, /不需要在 Workout 页面重复记录/);
+  assert.doesNotMatch(browser.root.innerHTML, /今日训练计划/);
   assert.equal(browser.root.querySelector('[data-action="start"]'), null);
   assert.equal(browser.root.querySelector('[data-action="skip"]'), null);
+
+  browser.root.querySelector('[data-view="calendar"]').click();
+  await settle();
+  const day = browser.root.querySelector(`[data-action="calendar-select"][data-date="${today}"]`);
+  assert.ok(day);
+  day.click();
+  await settle();
+  assert.equal(browser.root.querySelector(".calendar-detail-head .eyebrow"), null);
+  assert.equal(browser.root.querySelector(".calendar-detail .calendar-prescription"), null);
+  assert.match(browser.root.innerHTML, /class="calendar-recording-guide is-recorded"[^>]*><strong>COROS 记录<\/strong>/);
 });

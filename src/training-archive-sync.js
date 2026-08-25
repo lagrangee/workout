@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { addDays, canonicalJson, isValidLocalDate, localDate, sha256Hex } from "./util.js";
 import { COROS_LAP_TABLE_COLUMNS } from "./coros-field-catalog.js";
@@ -8,9 +8,13 @@ import { COROS_SPORT_TYPES, SOURCE_STATUSES, containsSensitiveText, normalizeCor
 import { dailyHubModel, dailyHubNote, normalizeWorkoutSessionDetails, normalizeWorkoutSessionRecord, workoutIndexNote, workoutSessionDataPath, workoutSessionNote, workoutSessionRelativePath } from "./training-records.js";
 import { assignRoute, readRouteRegistry, routeFilePath, routeLink, safeRouteProjection, writeRouteRegistry } from "./route-registry.js";
 import { createAerobicProjectionPublisher } from "./training-archive-cloud-publisher.js";
+import { decodeFitActivity, toFitBytes } from "./fit-decoder.js";
+import { writeAtomicFile } from "./atomic-file.js";
 
 const MAX_PUBLICATION_ATTEMPTS = 3;
+const DEFAULT_CLOUD_TIMEOUT_MS = 30_000;
 const SYNC_RECEIPT_DIR = [".sync", "training-archive"];
+const SYNC_PHASES = ["source_read", "fit_decode", "local_archive", "cloud_publish"];
 const PRIVACY_OMISSIONS = Object.freeze([
   "fit_file",
   "fit_path",
@@ -49,17 +53,60 @@ export async function syncTrainingArchive(options = {}) {
     return retryPendingPublication({ options, priorReceipt, targetDate, timezone, now, publish });
   }
 
+  const mode = options.syncMode === "refresh" || options.forceRefresh === true ? "refresh" : "resume";
+  const snapshotId = safeReference(options.snapshotId);
+  const phases = createSyncPhases();
+  await persistPhaseCheckpoint(options.archiveDir, {
+    targetDate,
+    timezone,
+    now,
+    mode,
+    snapshotId,
+    phases,
+    sourceStatus: { workout: "pending", coros: "pending" },
+    errors: [],
+  });
+
   const routeRead = await readRouteRegistry(options.archiveDir);
   const routeRegistry = routeRead.registry;
   const workoutResult = await readSource(options.workoutSource, "workout", targetDate, timezone, now);
   const corosResult = await readSource(options.corosSource, "coros", targetDate, timezone, now);
   const prepared = prepareCorosActivities(corosResult, targetDate, timezone, now, routeRegistry, options);
   const errors = [...workoutResult.errors, ...corosResult.errors, ...prepared.errors];
+  phases.source_read = completedPhase(sourceReadPhaseStatus(workoutResult, corosResult), { statuses: { workout: workoutResult.source_status, coros: corosResult.source_status } });
+  phases.fit_decode = completedPhase(prepared.fitDecode.error ? "partial" : (prepared.fitDecode.attempted ? "complete" : "skipped"), prepared.fitDecode);
+  await persistPhaseCheckpoint(options.archiveDir, {
+    targetDate,
+    timezone,
+    now,
+    mode,
+    snapshotId,
+    phases,
+    sourceStatus: { workout: workoutResult.source_status, coros: corosResult.source_status },
+    sourceDataAsOf: { workout: workoutResult.data_as_of, coros: corosResult.data_as_of },
+    errors,
+    pendingArtifacts: prepared.pendingArtifacts,
+  });
   const previousActivities = previousActivitiesForFailedSource(priorReceipt, corosResult.source_status);
   const activities = mergeActivities(prepared.activities, previousActivities);
   const protectedActivityRefs = new Set(previousActivities.map((activity) => activity.activity_ref));
   const activitiesToWrite = prepared.activities.filter((activity) => !protectedActivityRefs.has(activity.activity_ref));
   const sourceStatus = aggregateSourceStatus([workoutResult.source_status, corosResult.source_status]);
+  const syncStatus = prepared.fitDecode.error ? aggregateSourceStatus([sourceStatus, "partial"]) : sourceStatus;
+
+  phases.local_archive = runningPhase();
+  await persistPhaseCheckpoint(options.archiveDir, {
+    targetDate,
+    timezone,
+    now,
+    mode,
+    snapshotId,
+    phases,
+    sourceStatus: { workout: workoutResult.source_status, coros: corosResult.source_status },
+    sourceDataAsOf: { workout: workoutResult.data_as_of, coros: corosResult.data_as_of },
+    errors,
+    pendingArtifacts: prepared.pendingArtifacts,
+  });
 
   let localWrite;
   try {
@@ -83,6 +130,11 @@ export async function syncTrainingArchive(options = {}) {
     localWrite = { write_status: "error", written_paths: [], fit_bytes: 0, workout_sessions: 0 };
   }
 
+  phases.local_archive = completedPhase(localWrite.write_status === "complete" ? "complete" : "error", {
+    write_status: localWrite.write_status,
+    written_paths: localWrite.written_paths ?? [],
+  });
+
   const projection = buildProjection({
     targetDate,
     timezone,
@@ -103,10 +155,28 @@ export async function syncTrainingArchive(options = {}) {
       error: { code: "local_archive_write_failed", message: "Local archive stage failed; cloud publication was not attempted" },
       errors: [],
     };
+    phases.cloud_publish = completedPhase("error", { skipped: true, code: "local_archive_write_failed" });
   } else {
+    phases.cloud_publish = runningPhase();
+    await persistPhaseCheckpoint(options.archiveDir, {
+      targetDate,
+      timezone,
+      now,
+      mode,
+      snapshotId,
+      phases,
+      sourceStatus: { workout: workoutResult.source_status, coros: corosResult.source_status },
+      sourceDataAsOf: { workout: workoutResult.data_as_of, coros: corosResult.data_as_of },
+      errors,
+      pendingArtifacts: prepared.pendingArtifacts,
+    });
     cloudPublication = await publishProjection(publish, projection, options);
   }
   errors.push(...(cloudPublication.errors ?? []));
+  phases.cloud_publish = completedPhase(cloudPublication.status === "complete" || (cloudPublication.status === "none" && projection.activities.length === 0) ? "complete" : cloudPublication.status === "partial" ? "partial" : "error", {
+    status: cloudPublication.status,
+    attempts: cloudPublication.attempts,
+  });
 
   const receipt = makeReceipt({
     targetDate,
@@ -114,10 +184,10 @@ export async function syncTrainingArchive(options = {}) {
     now,
     sourceStatus: { workout: workoutResult.source_status, coros: corosResult.source_status },
     sourceDataAsOf: { workout: workoutResult.data_as_of, coros: corosResult.data_as_of },
-    sourceStatusAggregate: sourceStatus,
+    sourceStatusAggregate: syncStatus,
     dataAsOf: corosResult.data_as_of ?? workoutResult.data_as_of ?? null,
     localWrite,
-    localStatus: localWrite.write_status === "complete" ? sourceStatus : "error",
+    localStatus: localWrite.write_status === "complete" ? syncStatus : "error",
     cloudPublication,
     activitiesWritten: activitiesToWrite.length,
     activitiesPublished: cloudPublication.published_count,
@@ -128,6 +198,9 @@ export async function syncTrainingArchive(options = {}) {
     routeRegistryPath: "config/routes.json",
     privacyEvidence: projectionPrivacyEvidence(projection, now),
     projection,
+    mode,
+    snapshotId,
+    phases,
   });
   await persistReceipt(options.archiveDir, receipt, projection);
   return receipt;
@@ -151,15 +224,18 @@ async function readSource(adapter, source, targetDate, timezone, now) {
     const result = await adapter.read(targetDate, { timezone, now });
     const activities = Array.isArray(result?.activities) ? result.activities : [];
     const sessions = safeSessions(result?.sessions, targetDate, timezone, result?.data_as_of, result?.source_status);
+    const sourceErrors = safeErrors(result?.errors, source);
     const inferredStatus = activities.length || sessions.length ? "complete" : "none";
-    const sourceStatus = result?.source_status ?? inferredStatus;
+    const inferredWithErrors = sourceErrors.length ? (activities.length || sessions.length ? "partial" : "error") : inferredStatus;
+    let sourceStatus = result?.source_status ?? inferredWithErrors;
+    if (sourceErrors.length && sourceStatus === "none") sourceStatus = activities.length || sessions.length ? "partial" : "error";
     if (!SOURCE_STATUSES.includes(sourceStatus)) throw new Error(`Unsupported source_status: ${String(sourceStatus)}`);
     return {
       source_status: sourceStatus,
       data_as_of: safeInstant(result?.data_as_of),
       activities,
       sessions,
-      errors: safeErrors(result?.errors, source),
+      errors: sourceErrors,
     };
   } catch (error) {
     return {
@@ -220,6 +296,7 @@ function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry,
   const ignoredSportTypes = [];
   const errors = [];
   const routeAssignments = { matched: 0, registered: 0, unmatched: 0, ambiguous: 0, ignored: 0, error: 0 };
+  const fitDecode = { attempted: 0, complete: 0, error: 0, skipped: 0 };
   for (const raw of coros.activities) {
     const rawSportType = raw?.sport_type ?? raw?.sportType;
     if (!isInScopeSportType(rawSportType)) {
@@ -228,15 +305,25 @@ function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry,
     }
     const activityRef = safeReference(raw?.activity_ref ?? raw?.activityRef ?? raw?.labelId);
     try {
-      const routeMatch = assignRoute({ raw, activityRef, registry: routeRegistry, options });
-      routeAssignments[routeMatch.status] = (routeAssignments[routeMatch.status] ?? 0) + 1;
       const fitBytes = extractFitBytes(raw);
       const fitStatus = deriveFitStatus(raw, fitBytes);
-      const activityStatus = deriveActivityStatus(raw, coros.source_status, fitStatus);
+      const fitResult = decodeFitForRoute(fitBytes, activityRef);
+      fitDecode[fitResult.status === "complete" ? "complete" : fitResult.status === "error" ? "error" : "skipped"] += 1;
+      if (fitBytes && fitBytes.byteLength > 0) fitDecode.attempted += 1;
+      if (fitResult.status === "error") {
+        errors.push(fitResult.error);
+      }
+      const routeRaw = fitBytes && fitResult.status === "complete" ? { ...raw, fit_points: fitResult.points } : raw;
+      const routeMatch = fitResult.status === "error"
+        ? { status: "error", route_key: null, route_direction: null, matcher_version: null, registration_proposal: null }
+        : assignRoute({ raw: routeRaw, activityRef, registry: routeRegistry, options });
+      routeAssignments[routeMatch.status] = (routeAssignments[routeMatch.status] ?? 0) + 1;
+      const activityStatus = deriveActivityStatus(raw, coros.source_status, fitStatus, fitResult.status);
       const fitFile = {
         ...(raw?.fit_file && typeof raw.fit_file === "object" ? raw.fit_file : {}),
         status: fitStatus,
         bytes: fitBytes ? fitBytes.byteLength : raw?.fit_file?.bytes ?? raw?.fitFile?.bytes ?? null,
+        decode_status: fitResult.status,
       };
       const activity = normalizeCorosActivity({
         ...raw,
@@ -265,7 +352,21 @@ function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry,
       errors.push(safeError(error, "coros", "invalid_activity", activityRef));
     }
   }
-  return { activities: [...byRef.values()], fitBytesByRef, pendingArtifacts, ignoredSportTypes: [...new Set(ignoredSportTypes)], errors, routeAssignments };
+  return { activities: [...byRef.values()], fitBytesByRef, pendingArtifacts, ignoredSportTypes: [...new Set(ignoredSportTypes)], errors, routeAssignments, fitDecode };
+}
+
+function decodeFitForRoute(bytes, activityRef) {
+  if (!bytes || bytes.byteLength === 0) return { status: "skipped", points: [], error: null };
+  try {
+    const decoded = decodeFitActivity(bytes);
+    return { status: "complete", points: decoded.points, diagnostics: decoded.diagnostics, error: null };
+  } catch (error) {
+    return {
+      status: "error",
+      points: [],
+      error: safeError(error, "coros", error?.code ?? "fit_decode_failed", activityRef),
+    };
+  }
 }
 
 function activityDiagnostics(raw, activityRef, fitStatus) {
@@ -284,11 +385,11 @@ function activityDiagnostics(raw, activityRef, fitStatus) {
   return errors;
 }
 
-function deriveActivityStatus(raw, sourceStatus, fitStatus) {
+function deriveActivityStatus(raw, sourceStatus, fitStatus, fitDecodeStatus = "skipped") {
   const explicit = raw?.source_status ?? raw?.sourceStatus;
   if (explicit === "error") return "error";
   if (sourceStatus === "error") return "error";
-  const fitFailure = fitStatus !== "complete" && hasFitOutcome(raw);
+  const fitFailure = (fitStatus !== "complete" && hasFitOutcome(raw)) || fitDecodeStatus === "error";
   if (explicit === "partial" || sourceStatus === "partial" || fitFailure || [activityPartStatus(raw, "detail"), activityPartStatus(raw, "lap")].some((status) => ["partial", "error"].includes(status))) return "partial";
   return sourceStatus;
 }
@@ -329,17 +430,7 @@ function extractFitBytes(raw) {
 }
 
 function toBytes(value) {
-  if (value === null || value === undefined) return null;
-  if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) return new Uint8Array(value);
-  if (value instanceof Uint8Array) return new Uint8Array(value);
-  if (typeof ArrayBuffer !== "undefined" && value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  if (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) return Uint8Array.from(value);
-  if (value && typeof value === "object" && Array.isArray(value.data)) return toBytes(value.data);
-  if (typeof value === "string" && value.startsWith("base64:")) {
-    try { return new Uint8Array(Buffer.from(value.slice("base64:".length), "base64")); } catch { return null; }
-  }
-  return null;
+  return toFitBytes(value);
 }
 
 async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workout, coros, activitiesToWrite, activitiesForNote, fitBytesByRef, routeRegistry, routeAssignments, errors }) {
@@ -364,12 +455,12 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
   for (const record of workoutRecords) {
     const sessionPath = join(archiveDir, `${workoutSessionRelativePath(record.local_date, record.session_key)}.md`);
     const sessionDataPath = join(archiveDir, `${workoutSessionDataPath(record.local_date, record.session_key)}.json`);
-    await writeFile(sessionPath, workoutSessionNote(record), "utf8");
-    await writeFile(sessionDataPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await writeAtomicFile(sessionPath, workoutSessionNote(record), "utf8");
+    await writeAtomicFile(sessionDataPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
     workoutPaths.push(relativePath(archiveDir, sessionPath), relativePath(archiveDir, sessionDataPath));
   }
   const indexPath = join(archiveDir, "workout", "index.md");
-  await writeFile(indexPath, workoutIndexNote(), "utf8");
+  await writeAtomicFile(indexPath, workoutIndexNote(), "utf8");
   workoutPaths.push(relativePath(archiveDir, indexPath));
   for (const activity of activitiesToWrite) {
     const stem = `${targetDate}-${fileComponent(activity.activity_ref)}`;
@@ -378,13 +469,13 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
     const fitPath = join(archiveDir, "data", "coros", `${stem}.fit`);
     const bytes = fitBytesByRef.get(activity.activity_ref);
     if (bytes && bytes.byteLength > 0) {
-      await writeFile(fitPath, bytes);
+      await writeAtomicFile(fitPath, bytes);
       activity.fit_file = { ...activity.fit_file, relative_path: `data/coros/${stem}.fit`, status: "complete", mime_type: "application/octet-stream", bytes: bytes.byteLength };
       fitBytes += bytes.byteLength;
       activityPaths.push(relativePath(archiveDir, fitPath));
     }
-    await writeFile(jsonPath, `${JSON.stringify(activity, null, 2)}\n`, "utf8");
-    await writeFile(notePath, corosActivityNote(activity), "utf8");
+    await writeAtomicFile(jsonPath, `${JSON.stringify(activity, null, 2)}\n`, "utf8");
+    await writeAtomicFile(notePath, corosActivityNote(activity), "utf8");
     activityPaths.push(relativePath(archiveDir, jsonPath), relativePath(archiveDir, notePath));
   }
   const routeHistoryActivities = mergeActivityHistory(await readArchivedActivities(archiveDir), activitiesForNote);
@@ -393,13 +484,13 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
   await mkdir(join(archiveDir, "routes"), { recursive: true });
   for (const route of routeRegistry.routes) {
     const routePath = routeFilePath(archiveDir, route.route_key);
-    await writeFile(routePath, routeNote(route, routeHistoryActivities), "utf8");
+    await writeAtomicFile(routePath, routeNote(route, routeHistoryActivities), "utf8");
     routePaths.push(relativePath(archiveDir, routePath));
   }
   const routeIndexPath = join(archiveDir, "routes", "index.md");
-  await writeFile(routeIndexPath, routeIndexNote(routeRegistry, routeHistoryActivities), "utf8");
+  await writeAtomicFile(routeIndexPath, routeIndexNote(routeRegistry, routeHistoryActivities), "utf8");
   routePaths.push(relativePath(archiveDir, routeIndexPath));
-  await writeFile(dailyPath, dailyNote({ targetDate, timezone, now, workout, coros, activities: activitiesForNote, errors }), "utf8");
+  await writeAtomicFile(dailyPath, dailyNote({ targetDate, timezone, now, workout, coros, activities: activitiesForNote, errors }), "utf8");
   return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...workoutPaths, ...activityPaths, ...routePaths], fit_bytes: fitBytes, workout_sessions: workoutRecords.length, route_assignments: routeAssignments };
 }
 
@@ -460,7 +551,11 @@ async function publishProjection(publish, projection, options) {
   let last = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const result = await publish(projection, { idempotency_key: idempotencyKey, attempt, max_attempts: maxAttempts });
+      const result = await publishWithTimeout(publish, projection, {
+        idempotency_key: idempotencyKey,
+        attempt,
+        max_attempts: maxAttempts,
+      }, publicationTimeout(options));
       const status = publicationStatus(result?.status ?? (projection.activities.length ? "complete" : "none"));
       const publishedCount = boundedCount(result?.published_count, status === "complete" ? projection.activities.length : 0, projection.activities.length);
       const error = result?.error ? safeError(result.error, "cloud", result.error.code ?? "projection_publish_failed") : (status === "partial" || status === "error" ? { code: status === "partial" ? "projection_partial" : "projection_publish_failed", message: "Cloud publication did not complete" } : null);
@@ -486,17 +581,43 @@ export async function projectionRequestIdempotencyKey(projection) {
 }
 
 function publicationAttempts(options) {
-  const requested = options.maxPublicationAttempts ?? 1;
+  const requested = options.maxPublicationAttempts ?? MAX_PUBLICATION_ATTEMPTS;
   const number = Number(requested);
   if (!Number.isFinite(number)) return 1;
   return Math.min(MAX_PUBLICATION_ATTEMPTS, Math.max(1, Math.floor(number)));
 }
 
-function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], routeAssignments = {}, routeRegistryPath, privacyEvidence, projection }) {
+function publicationTimeout(options) {
+  const requested = Number(options.cloudTimeoutMs ?? DEFAULT_CLOUD_TIMEOUT_MS);
+  if (!Number.isFinite(requested)) return DEFAULT_CLOUD_TIMEOUT_MS;
+  return Math.max(1, Math.min(120_000, Math.floor(requested)));
+}
+
+async function publishWithTimeout(publish, projection, context, timeoutMs) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  let timer;
+  const operation = Promise.resolve().then(() => publish(projection, { ...context, ...(controller ? { signal: controller.signal } : {}) }));
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller?.abort();
+      reject(Object.assign(new Error("Cloud publication timed out"), { code: "cloud_timeout", retryable: true }));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    clearTimeout(timer);
+    operation.catch(() => {});
+  }
+}
+
+function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], routeAssignments = {}, routeRegistryPath, privacyEvidence, projection, mode = "resume", snapshotId = null, phases = createSyncPhases() }) {
   return {
     schema_version: 1,
     sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
     publication_key: projection.publication_key,
+    mode,
+    snapshot_id: snapshotId,
     target_date: targetDate,
     timezone,
     captured_at: now.toISOString(),
@@ -515,6 +636,7 @@ function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, 
     records_written: { daily_hubs: localWrite.write_status === "complete" ? 1 : 0, workout_sessions: localWrite.write_status === "complete" ? (localWrite.workout_sessions ?? 0) : 0, activities: activitiesWritten },
     records_published: { activities: activitiesPublished },
     pending_artifacts: pendingArtifacts,
+    phases,
     route_assignments: routeAssignments,
     route_registry_path: routeRegistryPath ?? "config/routes.json",
     privacy_evidence: privacyEvidence ?? projectionPrivacyEvidence(projection, now),
@@ -568,6 +690,8 @@ async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezo
     sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
     publication_key: projection?.publication_key ?? priorReceipt.publication_key ?? `training-archive:${targetDate}`,
     retry_of: priorReceipt.sync_ref ?? null,
+    mode: "resume",
+    snapshot_id: priorReceipt.snapshot_id ?? null,
     target_date: targetDate,
     timezone,
     captured_at: now.toISOString(),
@@ -587,6 +711,10 @@ async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezo
     privacy_evidence: projection ? projectionPrivacyEvidence(projection, now) : (priorReceipt.privacy_evidence ?? null),
     ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
     pending_artifacts: remainingArtifacts,
+    phases: {
+      ...(priorReceipt.phases ?? createSyncPhases()),
+      cloud_publish: completedPhase(cloudPublication.status === "complete" || (cloudPublication.status === "none" && !projection?.activities?.length) ? "complete" : cloudPublication.status === "partial" ? "partial" : "error", { retried: true }),
+    },
     errors: [...priorErrors, ...retryErrors, ...(cloudPublication.errors ?? [])],
     receipt_path: receiptRelativePath(targetDate),
   };
@@ -607,16 +735,16 @@ async function writeRetriedFitArtifact(archiveDir, targetDate, activityRef, byte
   const relativeFitPath = `data/coros/${stem}.fit`;
   const fitPath = join(archiveDir, relativeFitPath);
   await mkdir(dirname(fitPath), { recursive: true });
-  await writeFile(fitPath, bytes);
+  await writeAtomicFile(fitPath, bytes);
 
   const jsonPath = join(archiveDir, "data", "coros", `${stem}.json`);
   const record = JSON.parse(await readFile(jsonPath, "utf8"));
   record.fit_file = { ...(record.fit_file ?? {}), relative_path: relativeFitPath, status: "complete", mime_type: "application/octet-stream", bytes: bytes.byteLength };
-  await writeFile(jsonPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeAtomicFile(jsonPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
 
   const notePath = join(archiveDir, "data", "coros", `${stem}.md`);
   try {
-    await writeFile(notePath, corosActivityNote(record), "utf8");
+    await writeAtomicFile(notePath, corosActivityNote(record), "utf8");
   } catch {
     // The JSON sidecar is the required record; an absent note is not a reason to duplicate source reads.
   }
@@ -641,6 +769,8 @@ async function retryPendingPublication({ options, priorReceipt, targetDate, time
     sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
     publication_key: projection.publication_key,
     retry_of: priorReceipt.sync_ref ?? null,
+    mode: "resume",
+    snapshot_id: priorReceipt.snapshot_id ?? null,
     target_date: targetDate,
     timezone,
     captured_at: now.toISOString(),
@@ -654,6 +784,10 @@ async function retryPendingPublication({ options, priorReceipt, targetDate, time
     records_published: { activities: cloudPublication.published_count },
     privacy_evidence: projectionPrivacyEvidence(projection, now),
     ignored_sport_types: priorReceipt.ignored_sport_types ?? [],
+    phases: {
+      ...(priorReceipt.phases ?? createSyncPhases()),
+      cloud_publish: completedPhase(cloudPublication.status === "complete" || (cloudPublication.status === "none" && !projection.activities.length) ? "complete" : cloudPublication.status === "partial" ? "partial" : "error", { retried: true }),
+    },
     errors: cloudPublication.errors ?? [],
     receipt_path: receiptRelativePath(targetDate),
   };
@@ -662,24 +796,71 @@ async function retryPendingPublication({ options, priorReceipt, targetDate, time
 }
 
 async function persistReceipt(archiveDir, receipt, projection, localActivities = projection.activities) {
-  const path = join(archiveDir, ...SYNC_RECEIPT_DIR, `${receipt.target_date}.json`);
   const persisted = {
     ...receipt,
     local_projection: { activities: localActivities.map(safeAerobicActivity) },
     pending_artifacts: receipt.pending_artifacts ?? [],
     pending_projection: receipt.cloud_publication.status === "complete" || (receipt.cloud_publication.status === "none" && projection.activities.length === 0) ? null : projection,
   };
-  const temporaryPath = `${path}.tmp-${Date.now()}`;
   try {
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(temporaryPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
-    await rename(temporaryPath, path);
+    await writeReceiptFile(archiveDir, receipt.target_date, persisted);
     receipt.receipt_persisted = true;
   } catch (error) {
     receipt.receipt_persisted = false;
     receipt.errors.push(safeError(error, "local", "sync_receipt_write_failed"));
     if (receipt.status === "complete") receipt.status = "partial";
   }
+}
+
+function createSyncPhases() {
+  return Object.fromEntries(SYNC_PHASES.map((name) => [name, { status: "pending" }]));
+}
+
+function runningPhase(details = {}) {
+  return { status: "running", ...details };
+}
+
+function completedPhase(status, details = {}) {
+  return { status, ...details };
+}
+
+function sourceReadPhaseStatus(workout, coros) {
+  const statuses = [workout.source_status, coros.source_status];
+  if (statuses.every((status) => status === "error")) return "error";
+  if (statuses.some((status) => status === "error" || status === "partial")) return "partial";
+  return "complete";
+}
+
+async function persistPhaseCheckpoint(archiveDir, { targetDate, timezone, now, mode, snapshotId, phases, sourceStatus, sourceDataAsOf = null, errors = [], pendingArtifacts = [] }) {
+  const checkpoint = {
+    schema_version: 1,
+    sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
+    publication_key: `training-archive:${targetDate}`,
+    mode,
+    snapshot_id: snapshotId,
+    target_date: targetDate,
+    timezone,
+    captured_at: now.toISOString(),
+    status: "running",
+    source_status: sourceStatus,
+    source_data_as_of: sourceDataAsOf,
+    phases,
+    local_archive: { status: phases.local_archive?.status ?? "pending", write_status: phases.local_archive?.status === "complete" ? "complete" : "pending", reused: false },
+    cloud_publication: { status: phases.cloud_publish?.status ?? "pending", published_count: 0, attempts: 0, retryable: true, errors: [] },
+    pending_artifacts: pendingArtifacts,
+    errors,
+    receipt_path: receiptRelativePath(targetDate),
+  };
+  try {
+    await writeReceiptFile(archiveDir, targetDate, checkpoint);
+  } catch {
+    // The actual local archive stage remains authoritative if the checkpoint path is unavailable.
+  }
+}
+
+async function writeReceiptFile(archiveDir, targetDate, value) {
+  const path = join(archiveDir, ...SYNC_RECEIPT_DIR, `${targetDate}.json`);
+  await writeAtomicFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 async function readSyncReceipt(archiveDir, targetDate) {
@@ -845,6 +1026,7 @@ export function corosActivityNote(activity) {
     ? [`route_key: ${yamlValue(activity.route_key)}`, `route_direction: ${yamlValue(activity.route_direction)}`, `route_match_status: ${yamlValue(activity.route_match_status ?? "matched")}`, `route: ${yamlValue(routeLink(activity.route_key))}`]
     : [`route_key: null`, `route_direction: null`, `route_match_status: ${yamlValue(activity.route_match_status ?? "unmatched")}`];
   const fitStatus = activity.fit_file?.status ?? null;
+  const fitDecodeStatus = activity.fit_file?.decode_status ?? null;
   const fitPath = activity.fit_file?.relative_path ?? null;
   const fitLink = fitStatus === "complete" && fitPath ? `[[${fitPath}]]` : null;
   const summary = activity.summary;
@@ -869,6 +1051,7 @@ export function corosActivityNote(activity) {
     `updated_at: ${yamlValue(activity.updated_at)}`,
     ...routeLines,
     `fit_status: ${yamlValue(fitStatus)}`,
+    `fit_decode_status: ${yamlValue(fitDecodeStatus)}`,
     `fit_path: ${yamlValue(fitPath)}`,
     `fit_file: ${yamlValue(fitLink)}`,
     "---",

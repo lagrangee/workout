@@ -175,6 +175,8 @@ function normalizeFitArtifact(raw, activityRef) {
   const value = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const status = value.status ?? value.fit_status ?? "partial";
   if (!["complete", "partial", "error"].includes(status)) throw new Error(`Unsupported FIT status for ${activityRef}: ${String(status)}`);
+  const decodeStatus = value.decode_status ?? value.fit_decode_status ?? null;
+  if (decodeStatus !== null && !["complete", "error", "skipped"].includes(decodeStatus)) throw new Error(`Unsupported FIT decode status for ${activityRef}: ${String(decodeStatus)}`);
   const hasCandidatePath = Object.hasOwn(value, "relative_path");
   const candidatePath = stringOrNull(value.relative_path);
   if (hasCandidatePath && (!candidatePath || candidatePath.startsWith("/") || candidatePath.includes("\\") || /(?:\.\.|\/Users\/|\/private\/|\/var\/)/i.test(candidatePath))) {
@@ -186,6 +188,7 @@ function normalizeFitArtifact(raw, activityRef) {
     status,
     mime_type: "application/octet-stream",
     bytes: numberOrNull(value.bytes),
+    ...(decodeStatus ? { decode_status: decodeStatus } : {}),
   };
 }
 

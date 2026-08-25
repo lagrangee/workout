@@ -389,6 +389,10 @@ test("browser seam: start shows pending, deduplicates taps, and consumes the mut
   await releaseStart();
   await settle();
   assert.match(browser.root.innerHTML, /高脚杯深蹲/);
+  assert.equal(browser.root.querySelector(".focus-execution-mode").textContent, "不分左右");
+  browser.root.querySelector('[data-action="next"]').click();
+  browser.root.querySelector('[data-action="next"]').click();
+  assert.equal(browser.root.querySelector(".focus-execution-mode").textContent, "左右分别完成");
   assert.equal(browser.calls.filter((request) => request.method === "GET" && request.path.startsWith("/api/private/sessions/")).length, 0);
 });
 

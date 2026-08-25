@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // @ts-nocheck
 
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -14,6 +13,8 @@ import { syncTrainingArchive } from "../src/training-archive-sync.js";
 import { emptyAthlete } from "../src/store.js";
 import { routeDetailModel, routeHistoryModel, routeListModel } from "../src/training-routes.js";
 import { loadAgentConfig } from "../mcp/launch.mjs";
+import { loadSourceSnapshot, removeSourceSnapshot, stageSourceSnapshot } from "../src/training-source-snapshot.js";
+import { writeAtomicFile } from "../src/atomic-file.js";
 
 /**
  * Execute the archive orchestrator from one already-collected source snapshot.
@@ -35,6 +36,9 @@ export async function runSnapshot(payload) {
 
   const now = new Date(payload.capturedAt ?? Date.now());
   if (!Number.isFinite(now.getTime())) throw new Error("capturedAt must be a valid instant");
+  const snapshotDates = [...new Set([...dates, ...(typeof payload.rerunDate === "string" ? [payload.rerunDate] : [])])];
+  const forceRefresh = payload.forceRefresh === true || payload.retryCloudOnly === false;
+  const sourceSnapshot = await resolveSourceSnapshot(payload, { archiveDir, timezone, dates: snapshotDates, capturedAt: now, forceRefresh });
   await seedConfirmedRoute(payload);
 
   const state = emptyAthlete({ email: "snapshot-sync@example.invalid", displayName: "Snapshot sync", timezone });
@@ -67,9 +71,11 @@ export async function runSnapshot(payload) {
     timezone,
     targetDate,
     now,
-    workoutSource: { read: async (date) => payload.workoutByDate?.[date] ?? { source_status: "none", data_as_of: null, sessions: [] } },
-    corosSource: { read: async (date) => payload.corosByDate?.[date] ?? { source_status: "none", data_as_of: null, activities: [] } },
+    workoutSource: { read: async (date) => sourceSnapshot.workoutByDate?.[date] ?? { source_status: "none", data_as_of: null, sessions: [] } },
+    corosSource: { read: async (date) => sourceSnapshot.corosByDate?.[date] ?? { source_status: "none", data_as_of: null, activities: [] } },
     retryCloudOnly: payload.retryCloudOnly,
+    syncMode: forceRefresh ? "refresh" : "resume",
+    snapshotId: sourceSnapshot.snapshot_id,
     publish: async (projection, context) => {
       publishAerobicProjection(state, projection, now);
       if (!cloudPublisher) return {
@@ -85,6 +91,10 @@ export async function runSnapshot(payload) {
   const receipts = [];
   for (const date of dates) receipts.push(await run(date));
   if (typeof payload.rerunDate === "string") receipts.push({ ...(await run(payload.rerunDate)), rerun: true });
+  const snapshotComplete = receipts.every((receipt) => receipt.local_archive?.write_status === "complete"
+    && (receipt.cloud_publication?.status === "complete" || receipt.cloud_publication?.status === "none")
+    && !["partial", "error"].includes(receipt.status));
+  if (snapshotComplete) await removeSourceSnapshot({ archiveDir, snapshotId: sourceSnapshot.snapshot_id });
   const routeRegistry = await readRouteRegistry(archiveDir);
   const workoutPageReadback = buildWorkoutPageReadback(state, dates, payload.routeKey, now);
   await writeWorkoutPageReadback(archiveDir, workoutPageReadback);
@@ -106,8 +116,13 @@ export async function runSnapshot(payload) {
       },
       route_assignments: receipt.route_assignments,
       errors: receipt.errors,
+      phases: receipt.phases,
+      mode: receipt.mode,
+      snapshot_id: receipt.snapshot_id,
       rerun: receipt.rerun === true,
     })),
+    snapshot_id: sourceSnapshot.snapshot_id,
+    snapshot_retained: !snapshotComplete,
     page_read_model: state.aerobic_activities.map((activity) => ({
       activity_ref: activity.activity_ref,
       local_date: activity.local_date,
@@ -126,6 +141,23 @@ export async function runSnapshot(payload) {
     })),
     route_history_rows: state.aerobic_activities.filter((activity) => activity.route_key === payload.routeKey).length,
   };
+}
+
+async function resolveSourceSnapshot(payload, { archiveDir, timezone, dates, capturedAt, forceRefresh }) {
+  const requestedSnapshotId = payload.snapshotId ?? payload.snapshot_id ?? null;
+  if (requestedSnapshotId) return loadSourceSnapshot({ archiveDir, snapshotId: requestedSnapshotId });
+  if (!forceRefresh && payload.reuseSnapshot !== false) {
+    const existing = await loadSourceSnapshot({ archiveDir });
+    if (existing && dates.every((date) => Object.hasOwn(existing.manifest.dates, date))) return existing;
+  }
+  return stageSourceSnapshot({
+    archiveDir,
+    timezone,
+    dates,
+    capturedAt,
+    workoutByDate: payload.workoutByDate,
+    corosByDate: payload.corosByDate,
+  });
 }
 
 async function resolveAgentConfig(payload) {
@@ -171,10 +203,8 @@ function buildWorkoutPageReadback(state, dates, routeKey, now) {
 }
 
 async function writeWorkoutPageReadback(archiveDir, value) {
-  const directory = join(archiveDir, ".sync", "training-archive");
-  const path = join(directory, "workout-records-readback.json");
-  await mkdir(directory, { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const path = join(archiveDir, ".sync", "training-archive", "workout-records-readback.json");
+  await writeAtomicFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 async function seedConfirmedRoute(payload) {

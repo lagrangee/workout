@@ -1,9 +1,10 @@
 // @ts-nocheck
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildRegistrationProposal, MATCHER_VERSION, matchActivity } from "../skills/workout/scripts/route-matcher.mjs";
 import { COROS_SPORT_TYPES, containsSensitiveText, normalizeSportType } from "./training-archive.js";
+import { writeAtomicFile } from "./atomic-file.js";
 
 export const ROUTE_REGISTRY_SCHEMA_VERSION = 1;
 export const ROUTE_REGISTRY_RELATIVE_PATH = "config/routes.json";
@@ -101,7 +102,7 @@ export async function writeRouteRegistry(archiveDir, registry) {
   const normalized = normalizeRouteRegistry(registry);
   const path = join(archiveDir, ROUTE_REGISTRY_RELATIVE_PATH);
   await mkdir(join(archiveDir, "config"), { recursive: true });
-  await writeFile(path, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+  await writeAtomicFile(path, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
   return path;
 }
 

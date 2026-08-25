@@ -21,5 +21,8 @@
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
     "wrangler": "^4.116.0"
+  },
+  "dependencies": {
+    "@garmin/fitsdk": "21.213.0"
   }
 }

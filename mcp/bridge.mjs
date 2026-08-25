@@ -320,8 +320,8 @@ export class WorkoutApiClient {
     return this.request(path, { method: "GET" });
   }
 
-  async post(path, body, headers = {}) {
-    return this.request(path, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+  async post(path, body, headers = {}, requestOptions = {}) {
+    return this.request(path, { ...requestOptions, method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
   }
 
   async request(path, options = {}) {
