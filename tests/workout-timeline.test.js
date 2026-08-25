@@ -46,7 +46,7 @@ test("Web Audio output schedules the action against the shared presentation cloc
     const timeline = createWorkoutTimeline({
       now: () => 1000,
       leadTimeMs: 50,
-      sources: { prepare: "/cue.wav", tempo: "/cue.wav", "tempo-final": "/cue.wav", complete: "/cue.wav" },
+      sources: { warmup: "/cue.wav", prepare: "/cue.wav", tempo: "/cue.wav", "tempo-final": "/cue.wav", complete: "/cue.wav" },
     });
     assert.deepEqual(await timeline.prepareAudio(), { ok: true });
     assert.deepEqual(await timeline.activateAudio(), { ok: true });
@@ -55,7 +55,7 @@ test("Web Audio output schedules the action against the shared presentation cloc
     assert.deepEqual(await scheduled.result, { ok: true });
 
     assert.equal(scheduled.phaseEndsAtMs, 6000);
-    assert.deepEqual(starts, [10.05, 15, 16, 17, 18, 19, 20]);
+    assert.deepEqual(starts, [10.05, 11.05, 12.05, 13.05, 14.05, 15, 16, 17, 18, 19, 20]);
   });
 });
 
@@ -103,7 +103,7 @@ test("cancel invalidates a Web Audio replacement that has not reached the render
     const timeline = createWorkoutTimeline({
       now: () => 1000,
       leadTimeMs: 50,
-      sources: { prepare: "/cue.wav", tempo: "/cue.wav", "tempo-final": "/cue.wav", complete: "/cue.wav" },
+      sources: { warmup: "/cue.wav", prepare: "/cue.wav", tempo: "/cue.wav", "tempo-final": "/cue.wav", complete: "/cue.wav" },
     });
     await timeline.prepareAudio();
     await timeline.activateAudio();

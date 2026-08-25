@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { assembleExerciseHistory } from "../src/canonical-assembler.js";
+import { assembleCanonicalSession, assembleExerciseHistory } from "../src/canonical-assembler.js";
 import { schemaResource } from "../src/coach.js";
 import { athleteExport } from "../src/export.js";
 import { planModel, validatePlanForState } from "../src/plan.js";
@@ -98,6 +98,38 @@ test("D1 canonical read boundary assembles independent rows, resolves current na
   } finally {
     db.close();
   }
+});
+
+test("canonical Session completion items keep plan exercise groups contiguous", () => {
+  const session = assembleCanonicalSession({
+    session: {
+      session_key: "sess-order",
+      athlete_key: "athlete-order",
+      scheduled_date: "2026-08-19",
+      timezone_at_session: "Asia/Shanghai",
+      title: "顺序测试",
+      status: "in_progress",
+      created_at: "2026-08-19T12:00:00.000Z",
+      updated_at: "2026-08-19T12:00:00.000Z",
+    },
+    exercises: [
+      { session_key: "sess-order", occurrence_key: "exercise-a", block_ordinal: 1, block_title: "主训练", exercise_ordinal: 1, exercise_id: "dead_bug", name_snapshot: "动作一", definition_version: 1, execution_mode: "none" },
+      { session_key: "sess-order", occurrence_key: "exercise-b", block_ordinal: 1, block_title: "主训练", exercise_ordinal: 2, exercise_id: "glute_bridge", name_snapshot: "动作二", definition_version: 1, execution_mode: "none" },
+    ],
+    completionItems: [
+      { session_key: "sess-order", completion_item_key: "b-set-2", occurrence_key: "exercise-b", set_id: "b-2", set_ordinal: 2, side: "none", target_metric: "reps", target_value: 8, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 30 },
+      { session_key: "sess-order", completion_item_key: "a-set-1", occurrence_key: "exercise-a", set_id: "a-1", set_ordinal: 1, side: "none", target_metric: "reps", target_value: 8, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 30 },
+      { session_key: "sess-order", completion_item_key: "b-set-1", occurrence_key: "exercise-b", set_id: "b-1", set_ordinal: 1, side: "none", target_metric: "reps", target_value: 8, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 30 },
+      { session_key: "sess-order", completion_item_key: "a-set-2", occurrence_key: "exercise-a", set_id: "a-2", set_ordinal: 2, side: "none", target_metric: "reps", target_value: 8, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 30 },
+    ],
+  });
+
+  assert.deepEqual(session.snapshot.completion_items.map((item) => [item.exercise_occurrence_key, item.set_ordinal]), [
+    ["exercise-a", 1],
+    ["exercise-a", 2],
+    ["exercise-b", 1],
+    ["exercise-b", 2],
+  ]);
 });
 
 test("canonical Exercise history groups stable IDs across snapshot name changes and preserves side series", () => {

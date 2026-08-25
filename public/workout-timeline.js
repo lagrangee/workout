@@ -176,7 +176,10 @@ export function createWorkoutTimeline({ audioOutput = null, now = () => performa
     /** @type {CueEvent[]} */
     const events = [];
     if (phase === "preparing") {
-      events.push({ kind: "prepare", value: Math.max(1, Math.ceil(effectiveRemainingMs / 1000)), atMs: startAtMs });
+      const preparationSeconds = Math.max(1, Math.ceil(effectiveRemainingMs / 1000));
+      for (let value = preparationSeconds; value >= 1; value -= 1) {
+        events.push({ kind: "warmup", value, atMs: startAtMs + (preparationSeconds - value) * 1000 });
+      }
       const actionEndsAtMs = phaseEndsAtMs + targetSec * 1000;
       for (let value = targetSec; value >= 1; value -= 1) {
         events.push({ kind: value <= 3 ? "tempo-final" : "tempo", value, atMs: actionEndsAtMs - value * 1000 });

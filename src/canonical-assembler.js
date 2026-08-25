@@ -105,6 +105,7 @@ function assemblePlanSet(value) {
  */
 export function assembleCanonicalSession(rows) {
   const exerciseRows = (rows.exercises ?? []).filter((exercise) => exercise.session_key === rows.session.session_key).sort((left, right) => left.block_ordinal - right.block_ordinal || left.exercise_ordinal - right.exercise_ordinal);
+  const exerciseOrder = new Map(exerciseRows.map((exercise, index) => [exercise.occurrence_key, index]));
   const itemRows = (rows.completionItems ?? []).filter((item) => item.session_key === rows.session.session_key);
   const itemsByOccurrence = groupBy(itemRows, (item) => item.occurrence_key);
   const exercises = exerciseRows.map((exercise) => {
@@ -143,7 +144,7 @@ export function assembleCanonicalSession(rows) {
     }
     block.exercises.push(exercises.find((exercise) => exercise.exercise_occurrence_key === exerciseRow.occurrence_key));
   }
-  const snapshotItems = itemRows.slice().sort(compareCompletionItems).map((item) => ({
+  const snapshotItems = itemRows.slice().sort((left, right) => compareSessionCompletionItems(left, right, exerciseOrder)).map((item) => ({
     completion_item_key: item.completion_item_key,
     exercise_occurrence_key: item.occurrence_key,
     occurrence_key: item.occurrence_key,
@@ -309,4 +310,9 @@ function groupBy(values, key) {
 /** @param {any} left @param {any} right */
 function compareCompletionItems(left, right) {
   return Number(left.set_ordinal ?? 0) - Number(right.set_ordinal ?? 0) || String(left.set_id).localeCompare(String(right.set_id)) || (SIDE_ORDER[left.side] ?? 99) - (SIDE_ORDER[right.side] ?? 99) || String(left.completion_item_key).localeCompare(String(right.completion_item_key));
+}
+
+/** @param {any} left @param {any} right @param {Map<string, number>} exerciseOrder */
+function compareSessionCompletionItems(left, right, exerciseOrder) {
+  return (exerciseOrder.get(left.occurrence_key) ?? Number.MAX_SAFE_INTEGER) - (exerciseOrder.get(right.occurrence_key) ?? Number.MAX_SAFE_INTEGER) || compareCompletionItems(left, right);
 }

@@ -309,7 +309,7 @@ async function seedPartialSession(handler) {
   return started.body.session_key;
 }
 
-async function seedCanonicalPallofPlan(fixture) {
+async function seedCanonicalPallofPlan(fixture, resistanceKg = null) {
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
   state.plan_revisions.at(-1).week[weekdayKey(today)] = {
     kind: "workout",
@@ -329,7 +329,7 @@ async function seedCanonicalPallofPlan(fixture) {
           ordinal: 1,
           target: { metric: "reps", value: 10 },
           resistance_mode: "external_load",
-          resistance_kg: null,
+          resistance_kg: resistanceKg,
           tempo: "0-0-0-1",
           rest_after_sec: 30,
         }],
@@ -337,6 +337,28 @@ async function seedCanonicalPallofPlan(fixture) {
     }],
   };
   await fixture.store.save(state);
+}
+
+async function seedCanonicalPartialSession(fixture) {
+  await seedCanonicalPallofPlan(fixture, 10);
+  const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "seed-canonical-partial-start"));
+  const detail = await call(fixture.handler, `/api/private/sessions/${started.body.session_key}`);
+  const item = detail.body.snapshot.completion_items[0];
+  const completedAt = new Date().toISOString();
+  const record = {
+    record_schema_version: 2,
+    set_results: [{ completion_item_key: item.completion_item_key, status: "completed", actual: { metric: item.target.metric, value: item.target.value }, resistance: { mode: "external_load", value: 10, unit: "kg" }, rir: null, note: null, completed_at: completedAt }],
+    training_intervals: detail.body.training_intervals,
+    session_rpe: null,
+    note: null,
+    exercise_feedback: [],
+    skip_reason: null,
+  };
+  await call(fixture.handler, `/api/private/sessions/${started.body.session_key}/record`, json({ method: "PUT" }, record));
+  const endedAt = new Date(Date.now() + 5000).toISOString();
+  const endedRecord = { ...record, training_intervals: record.training_intervals.map((interval) => ({ ...interval, ended_at: endedAt })) };
+  await call(fixture.handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record: endedRecord, ended_at: endedAt }, "seed-canonical-partial-end"));
+  return started.body.session_key;
 }
 
 async function seedExpiredCalendarSession(store) {
@@ -368,6 +390,61 @@ test("browser seam: start shows pending, deduplicates taps, and consumes the mut
   await settle();
   assert.match(browser.root.innerHTML, /高脚杯深蹲/);
   assert.equal(browser.calls.filter((request) => request.method === "GET" && request.path.startsWith("/api/private/sessions/")).length, 0);
+});
+
+test("browser seam: focus shows the prescribed tempo", async () => {
+  const fixture = appFixture();
+  const state = await fixture.store.getByEmail("athlete-a@example.invalid");
+  state.plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].tempo = "0-1-3-1";
+  await fixture.store.save(state);
+  const browser = await openBrowser(fixture.handler, async () => null);
+
+  browser.root.querySelector('[data-action="start"]').click();
+  await settle();
+
+  assert.match(browser.root.innerHTML, /节奏 0-1-3-1/);
+});
+
+test("browser seam: terminal correction can change legacy actual weight", async () => {
+  const fixture = appFixture();
+  const sessionKey = await seedPartialSession(fixture.handler);
+  const detail = await call(fixture.handler, `/api/private/sessions/${sessionKey}`);
+  const itemKey = detail.body.snapshot.completion_items[0].completion_item_key;
+  const browser = await openBrowser(fixture.handler, async () => null);
+
+  browser.root.querySelector('[data-action="edit-session"]').click();
+  const weight = browser.root.querySelector(`#correction-weight-${itemKey}`);
+  assert.ok(weight);
+  assert.equal(weight.value, "12");
+  weight.value = "15";
+  browser.root.querySelector('[data-action="save-correction"]').click();
+  await settle();
+
+  const recordRequest = browser.calls.find((request) => request.path.endsWith("/record"));
+  assert.ok(recordRequest);
+  const body = JSON.parse(recordRequest.options.body);
+  assert.equal(body.completion_results[0].resistance.load_kg, 15);
+});
+
+test("browser seam: terminal correction can change canonical actual weight", async () => {
+  const fixture = appFixture();
+  const sessionKey = await seedCanonicalPartialSession(fixture);
+  const detail = await call(fixture.handler, `/api/private/sessions/${sessionKey}`);
+  const itemKey = detail.body.snapshot.completion_items[0].completion_item_key;
+  const browser = await openBrowser(fixture.handler, async () => null);
+
+  browser.root.querySelector('[data-action="edit-session"]').click();
+  const weight = browser.root.querySelector(`#correction-weight-${itemKey}`);
+  assert.ok(weight);
+  assert.equal(weight.value, "10");
+  weight.value = "15";
+  browser.root.querySelector('[data-action="save-correction"]').click();
+  await settle();
+
+  const recordRequest = browser.calls.find((request) => request.path.endsWith("/record"));
+  assert.ok(recordRequest);
+  const body = JSON.parse(recordRequest.options.body);
+  assert.deepEqual(body.set_results[0].resistance, { mode: "external_load", value: 15, unit: "kg" });
 });
 
 test("browser seam: continue and restart share pending behavior and avoid a follow-up Session read", async () => {
@@ -664,7 +741,7 @@ test("browser seam: visibility loss pauses timed execution and foreground recove
   clock.advance(2000);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, remainingBeforeHidden);
   assert.equal(browser.root.querySelector("[data-session-elapsed]").textContent, sessionElapsedBeforeHidden);
-  assert.equal(audioEvents.filter((event) => event.type === "cue").length, 2);
+  assert.equal(audioEvents.filter((event) => event.type === "cue").length, 6);
 
   browser.context.document.hidden = false;
   browser.context.document.dispatchEvent({ type: "visibilitychange" });
@@ -828,19 +905,19 @@ test("browser seam: fixed duration runs preparation and tempo cues, pauses with 
   startAction.click();
   await settle();
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
-  assert.deepEqual(audioEvents.map(({ type, kind, value }) => ({ type, ...(kind ? { kind, value } : {}) })), [{ type: "activate" }, { type: "cue", kind: "prepare", value: 5 }]);
+  assert.deepEqual(audioEvents.map(({ type, kind, value }) => ({ type, ...(kind ? { kind, value } : {}) })), [{ type: "activate" }, { type: "cue", kind: "warmup", value: 5 }]);
 
   clock.advance(5000);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
   assert.equal(audioEvents.at(-1).kind, "tempo");
-  assert.equal(audioEvents.filter((event) => event.type === "cue").length, 2);
+  assert.deepEqual(audioEvents.filter((event) => event.type === "cue").map((event) => [event.kind, event.value]), [["warmup", 5], ["warmup", 4], ["warmup", 3], ["warmup", 2], ["warmup", 1], ["tempo", 5]]);
 
   const sessionElapsedAtPause = browser.root.querySelector("[data-session-elapsed]").textContent;
   browser.root.querySelector('[data-action="toggle-timer"]').click();
   clock.advance(2000);
   assert.equal(browser.root.querySelector('[data-action-remaining]').textContent, "05");
   assert.equal(browser.root.querySelector("[data-session-elapsed]").textContent, sessionElapsedAtPause);
-  assert.equal(audioEvents.filter((event) => event.type === "cue").length, 2);
+  assert.equal(audioEvents.filter((event) => event.type === "cue").length, 6);
 
   await settle();
   browser.root.querySelector('[data-action="toggle-timer"]').click();
@@ -976,7 +1053,11 @@ test("browser seam: action cues are pre-scheduled on the countdown timeline", as
   assert.equal(schedules.length, 1);
   const events = schedules[0];
   assert.deepEqual(Array.from(events, (event) => [event.kind, event.value]), [
-    ["prepare", 5],
+    ["warmup", 5],
+    ["warmup", 4],
+    ["warmup", 3],
+    ["warmup", 2],
+    ["warmup", 1],
     ["tempo", 5],
     ["tempo", 4],
     ["tempo-final", 3],
@@ -984,7 +1065,7 @@ test("browser seam: action cues are pre-scheduled on the countdown timeline", as
     ["tempo-final", 1],
     ["complete", 0],
   ]);
-  assert.deepEqual(Array.from(events).slice(1).map((event, index) => event.atMs - events[index].atMs), [5000, 1000, 1000, 1000, 1000, 1000]);
+  assert.deepEqual(Array.from(events).slice(1).map((event, index) => event.atMs - events[index].atMs), [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000]);
 
   const completeAt = events.at(-1).atMs;
   clock.advance(completeAt - clock.now());
@@ -1068,7 +1149,7 @@ test("browser seam: preparation countdown starts immediately while audio activat
   await settle();
 
   assert.equal(schedules.length, 1);
-  assert.equal(schedules[0][0].kind, "prepare");
+  assert.equal(schedules[0][0].kind, "warmup");
   assert.equal(schedules[0].at(-1).atMs, startedAt + 10000);
 });
 
