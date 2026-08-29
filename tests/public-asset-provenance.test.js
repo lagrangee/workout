@@ -17,8 +17,9 @@ test("all installed dependencies expose an explicitly reviewed SPDX license", ()
   assert.match(result.stdout, /dependency licenses reviewed/);
 });
 
-test("third-party notices explain the FIT codec, synthetic fixture, icons, and audio provenance", async () => {
+test("third-party notices explain Vue, the FIT codec, synthetic fixture, icons, and audio provenance", async () => {
   const notices = await readFile(new URL("../THIRD_PARTY_NOTICES.md", import.meta.url), "utf8");
+  assert.match(notices, /vue.*3\.5\.42.*MIT/is);
   assert.match(notices, /fit-file-parser.*5\.0\.2.*MIT/is);
   assert.match(notices, /synthetic FIT.*deterministic/is);
   assert.match(notices, /PNG icons.*generated/is);

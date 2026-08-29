@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatActivityDateTime, formatDistanceKm } from "../public/ui-formatters.js";
+// Supported Node releases strip erasable TypeScript syntax, so test:interfaces
+// exercises the same source module as Vitest instead of a generated or legacy copy.
+import { formatActivityDateTime, formatDistanceKm } from "../web/src/lib/ui-formatters.ts";
 
 test("distance display rounds aerobic and route totals to whole kilometres", () => {
   assert.equal(formatDistanceKm(24.38), "24 km");

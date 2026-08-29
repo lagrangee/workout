@@ -89,7 +89,7 @@ export type WorkoutTestSeams = {
   now?: () => number;
   requestAnimationFrame?: (callback: FrameRequestCallback) => number;
   cancelAnimationFrame?: (handle: number) => void;
-  audio?: import("../public/workout-timeline.js").AudioOutput;
+  audio?: import("../web/src/lib/workout-timeline.js").AudioOutput;
 };
 
 export type TodayResponse = {

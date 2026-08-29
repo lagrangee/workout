@@ -8,7 +8,6 @@
     "src/agent-api.js",
     "src/agent-archive-api.js",
     "mcp/**/*.mjs",
-    "public/**/*.js",
     "types/**/*.d.ts",
     "types/**/*.type-test.js"
   ]

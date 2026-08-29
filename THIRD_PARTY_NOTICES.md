@@ -4,7 +4,13 @@ Workout Tracker source code is distributed under the repository's MIT License.
 The entries below record material that is installed, generated, or redistributed
 with the public source tree.
 
-## Runtime dependency
+## Runtime dependencies
+
+- `vue` 3.5.42 and its `@vue/runtime-dom`, `@vue/runtime-core`,
+  `@vue/reactivity`, and `@vue/shared` runtime modules — MIT License.
+  Copyright (c) 2018-present Yuxi (Evan) You and Vue contributors. Source:
+  <https://github.com/vuejs/core>. Vite bundles the production runtime into the
+  browser assets; the installed packages include their license notices.
 
 - `fit-file-parser` 5.0.2 — MIT License. Copyright (c) 2015 Pierre
   Jacquier; maintained by Dimitrios Kanellopoulos and contributors. Source:

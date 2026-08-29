@@ -1,0 +1,94 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workout-production-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Worker and assets
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install Chromium for browser smoke
+        run: npm run test:browser:install -- --with-deps
+
+      - name: Run credential-free release gate
+        run: npm run release-check
+
+      - name: Review runtime dependency advisories
+        run: npm run audit:runtime
+
+      - name: Review development dependency advisories
+        run: npm run audit:development
+
+      - name: Verify current main revision
+        env:
+          EXPECTED_GITHUB_SHA: ${{ github.sha }}
+        run: node scripts/preflight-production-deploy.mjs --verify-main
+
+      - name: Verify forward-only D1 migration history
+        env:
+          EXPECTED_GITHUB_SHA: ${{ github.sha }}
+          MIGRATION_BASE_SHA: ${{ github.event.before }}
+        run: node scripts/preflight-production-deploy.mjs --verify-migrations
+
+      - name: Prepare ignored production configuration
+        env:
+          WORKOUT_COACH_RATE_LIMIT_NAMESPACE_ID: ${{ secrets.WORKOUT_COACH_RATE_LIMIT_NAMESPACE_ID }}
+          WORKOUT_D1_DATABASE_ID: ${{ secrets.WORKOUT_D1_DATABASE_ID }}
+          WORKOUT_PUBLIC_ORIGIN: ${{ secrets.WORKOUT_PUBLIC_ORIGIN }}
+          WORKOUT_RELEASE_REVISION: ${{ github.sha }}
+        run: npm run prepare:production-config
+
+      - name: Preflight production bindings
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run preflight:production
+
+      - name: Deploy current main Worker and built assets
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          EXPECTED_GITHUB_SHA: ${{ github.sha }}
+        run: node scripts/preflight-production-deploy.mjs --verify-main && npm run deploy:production -- --message "GitHub ${GITHUB_SHA}"
+
+      - name: Clean up generated production configuration
+        if: always()
+        run: npm run cleanup:production-config
+
+      - name: Verify credential-free production boundary
+        env:
+          EXPECTED_GITHUB_SHA: ${{ github.sha }}
+          WORKOUT_PUBLIC_ORIGIN: ${{ secrets.WORKOUT_PUBLIC_ORIGIN }}
+        run: node scripts/operator-acceptance.mjs

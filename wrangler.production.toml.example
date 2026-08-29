@@ -11,9 +11,10 @@ enabled = true
 head_sampling_rate = 1
 
 [assets]
-directory = "./public"
+directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/", "/api/*", "/coach/*", "/healthz", "/app"]
 
 [[d1_databases]]
 binding = "DB"
@@ -21,8 +22,29 @@ database_name = "workout-tracker"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
+[[ratelimits]]
+name = "COACH_RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 120
+  period = 60
+
+[secrets]
+required = [
+  "AGENT_TOKEN_SECRET",
+  "ATHLETE_A_EMAIL",
+  "ATHLETE_B_EMAIL",
+  "AUTH_A_PASSWORD",
+  "AUTH_B_PASSWORD",
+  "AUTH_SESSION_SECRET",
+  "COACH_ENCRYPTION_SECRET",
+  "COACH_LOOKUP_SECRET",
+]
+
 [vars]
 ENVIRONMENT = "production"
+RELEASE_REVISION = "replace-with-deployed-git-sha"
 DEFAULT_TIMEZONE = "UTC"
 PRODUCTION_HOST = "workout.example.com"
 PUBLIC_ORIGIN = "https://workout.example.com"

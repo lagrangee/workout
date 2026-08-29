@@ -1,116 +1,120 @@
-# Self-hosting on Cloudflare
+# Self-hosting Workout Tracker
 
-Workout Tracker runs as a Cloudflare Worker with Static Assets and one D1
-database. A new checkout contains no production identity and does not require
-the original maintainer's account.
+Workout Tracker deploys one Cloudflare Worker, Vite-built static assets, and one
+D1 database. Keep the live origin, Cloudflare identifiers, credentials, and
+deployment receipts outside the repository. Examples below use reserved
+synthetic values only.
 
-## 1. Validate the source
+## Prepare private production configuration
 
-Install Node.js 22, then run:
+Start from `wrangler.production.toml.example`, copy it to the ignored
+`wrangler.production.toml`, and replace every operator-specific value:
+
+- choose the Worker name and a custom HTTPS hostname you control;
+- replace the all-zero D1 `database_id` with the UUID of the named production
+  database;
+- set `RELEASE_REVISION` to the exact lowercase 40-character SHA of the
+  checkout being deployed; the example sentinel is intentionally invalid and
+  makes production `/healthz` fail closed until replaced;
+- set `PRODUCTION_HOST` and `PUBLIC_ORIGIN` from the same canonical HTTPS
+  origin, with no credentials, port, path, query, fragment, or trailing slash;
+- choose the production `DEFAULT_TIMEZONE` (the upstream deployment uses
+  `Asia/Shanghai`); and
+- replace the synthetic `COACH_RATE_LIMITER` namespace `1001` with your own
+  positive integer namespace identifier that is unique within the Cloudflare
+  account. Do not reuse another limiter's namespace unless shared counters are
+  intentional. Keep its contract at 120 requests per 60 seconds.
+
+The exact Worker-first route list is `/`, `/api/*`, `/coach/*`, `/healthz`, and
+`/app`. This keeps the authenticated shell, dynamic APIs, Coach capability, and
+health response behind the Worker while Vite hashed modules remain
+asset-first. `public/_headers` supplies the security headers for other static
+SPA fallbacks without changing Cloudflare's asset cache policy.
+
+The production example declares these required Worker secret names, but never
+contains their values:
+
+- `ATHLETE_A_EMAIL`
+- `ATHLETE_B_EMAIL`
+- `AUTH_A_PASSWORD`
+- `AUTH_B_PASSWORD`
+- `AUTH_SESSION_SECRET`
+- `AGENT_TOKEN_SECRET`
+- `COACH_LOOKUP_SECRET`
+- `COACH_ENCRYPTION_SECRET`
+
+Create or rotate them with `wrangler secret put` against your private config.
+Do not put secret values in shell history, issue text, logs, or committed files.
+
+## Bootstrap Cloudflare state
+
+Create the D1 database and custom domain as explicit operator transactions
+before using the repository's automatic workflow. That workflow deliberately
+requires the named `workout-tracker` database and the Worker custom-domain
+inventory to match its private configuration before upload; it does not create
+or migrate those resources as a side effect of a push.
+
+D1 migrations are a separate transaction from Worker deployment. Review the
+SQL, apply it explicitly with Wrangler against the intended remote database,
+and verify the ledger and schema before deploying code that requires it. The
+automatic main workflow never runs `d1 migrations apply`.
+
+Wrangler's D1 migration ledger records filenames, not a historical digest of
+each applied SQL file. An exact filename match proves the reviewed sequence was
+recorded, but not that the bytes currently in a same-named local file are the
+bytes historically executed.
+
+## Validate and deploy
+
+From the exact checkout to be deployed:
 
 ```bash
 npm ci
+npm run test:browser:install
 npm run release-check
+npm run audit:runtime
+npm run audit:development
+npx wrangler deploy --strict --config wrangler.production.toml --message "GitHub <exact-40-character-checkout-sha>"
 ```
 
-This source gate is local and credential-free. It does not inspect a deployed
-Worker or claim production acceptance.
+`release-check` creates `dist/`. Do not rebuild or replace it between the final
+gate and deploy. `--strict` rejects the remote configuration conflicts Wrangler
+supports for Dashboard or Script API changes; it is not a complete inventory
+comparison. Treat the private Wrangler file as deployment truth: metadata and
+bindings absent from it may be replaced or removed.
 
-## 2. Create private configuration
-
-Create a D1 database and copy the example to the ignored operator file:
+After deployment, use the same origin and SHA that were written to the private
+configuration:
 
 ```bash
-npx wrangler d1 create workout-tracker
-cp wrangler.production.toml.example wrangler.production.toml
+WORKOUT_PUBLIC_ORIGIN="https://workout.example.invalid" \
+EXPECTED_GITHUB_SHA="0123456789abcdef0123456789abcdef01234567" \
+node scripts/operator-acceptance.mjs
 ```
 
-In `wrangler.production.toml`, replace all example values with your D1
-`database_id`, custom hostname, HTTPS `PUBLIC_ORIGIN`, IANA
-`DEFAULT_TIMEZONE`, and a unique Worker name if needed. Keep
-`ENVIRONMENT="production"`, `workers_dev=false`, and `preview_urls=false` for
-the private-data deployment boundary. `AUTH_LOGIN_LIMIT` defaults to `5`,
-`AUTH_LOGIN_CLIENT_LIMIT` defaults to `20`, and
-`AUTH_LOGIN_WINDOW_SECONDS` defaults to `600`. Accepted values are 1–100
-failed attempts per candidate identity, 1–1000 failed attempts per client, and
-60–86400 seconds. Successful credentials neither consume nor reset either
-failed-login budget.
+Replace both synthetic values. Acceptance reads public, credential-free
+boundaries: exact revision health, the Vite shell and unique hashed JavaScript
+module, the schema catalog, and the unauthenticated private-API error envelope.
+It does not test authenticated Athlete data or expose the origin in its receipt.
 
-The example enables Workers observability with full head sampling so the
-privacy-safe structured authentication, conflict, and archive-rejection events
-are queryable by the operator. Review retention and sampling against your own
-account policy before deployment; do not add raw request bodies or credentials
-to application logs.
+## Rate limiting and evidence boundaries
 
-The production file is ignored. Do not commit it.
+`COACH_RATE_LIMITER` is a required production binding because the public Coach
+API contract is 120 requests per 60 seconds. The upstream configuration does
+not create distributed authentication rate-limit bindings: authentication uses
+its documented per-isolate fallback. Its 600-second fallback window must not be
+described as equivalent to Cloudflare's simple rate-limit periods.
 
-## 3. Configure secrets
+Keep the generated config and raw Wrangler output private, and remove temporary
+production configs after the deploy/preflight transaction. A green local gate
+does not establish a Cloudflare upload, migration, custom-domain state, secret
+values, recovery readiness, or human acceptance. A green operator check adds
+public runtime evidence only for the exact revision and boundaries it reads.
 
-Set each secret interactively; never put a value in a command argument, shell
-history, issue, or log:
+Official references:
 
-```bash
-npx wrangler secret put ATHLETE_A_EMAIL --config wrangler.production.toml
-npx wrangler secret put ATHLETE_B_EMAIL --config wrangler.production.toml
-npx wrangler secret put AUTH_A_PASSWORD --config wrangler.production.toml
-npx wrangler secret put AUTH_B_PASSWORD --config wrangler.production.toml
-npx wrangler secret put AUTH_SESSION_SECRET --config wrangler.production.toml
-npx wrangler secret put AGENT_TOKEN_SECRET --config wrangler.production.toml
-npx wrangler secret put COACH_LOOKUP_SECRET --config wrangler.production.toml
-npx wrangler secret put COACH_ENCRYPTION_SECRET --config wrangler.production.toml
-```
-
-Use two distinct normalized emails, two distinct passwords, and independently
-generated random values for every signing, lookup, or encryption secret.
-
-Authentication has two per-Worker fixed-window fallback budgets. The identity
-budget uses an HMAC of the normalized candidate email and therefore follows one
-identity across changing source IPs. The client budget uses an HMAC of
-`CF-Connecting-IP` and therefore follows one client across changing candidate
-emails. Operators who need shared limits across Worker isolates should bind
-Cloudflare rate limiters as `AUTH_LOGIN_RATE_LIMITER` and
-`AUTH_LOGIN_CLIENT_RATE_LIMITER`, configured respectively with
-`AUTH_LOGIN_LIMIT` and `AUTH_LOGIN_CLIENT_LIMIT` over the same
-`AUTH_LOGIN_WINDOW_SECONDS`. Verify both bindings in private operator tests.
-Rate-limit keys and structured security events contain hashes/reasons, never
-raw email, IP, password, or token values.
-
-## 4. Apply migrations and deploy
-
-Apply migrations before a Worker version that reads new schema:
-
-```bash
-npx wrangler d1 migrations apply workout-tracker --remote --config wrangler.production.toml
-npx wrangler deploy --config wrangler.production.toml
-```
-
-For an existing legacy database, also follow the explicit canonical cutover
-runbook. Never use startup-time repair as a substitute for reviewed migration
-and recovery evidence.
-
-## 5. Verify production privately
-
-Run the credential-free public-boundary smoke against the deployed origin:
-
-```bash
-WORKOUT_PUBLIC_ORIGIN="https://workout.example.com" \
-  node scripts/operator-acceptance.mjs
-```
-
-Then verify the account-specific boundary without printing values:
-
-1. The production file names the intended Worker, D1 database, custom hostname,
-   and matching HTTPS `PUBLIC_ORIGIN`; `workers.dev` and preview URLs remain
-   disabled.
-2. All eight secret names are present. If distributed login limiting is used,
-   verify both identity and client rate-limiter bindings independently.
-3. Every migration is applied in order and canonical foreign keys are valid.
-4. Both configured Athletes can authenticate and remain isolated; Agent and
-   Coach capabilities rotate, revoke, and fail closed as documented.
-5. Plan and Schedule readback match the intended deployment, and a recovery
-   rehearsal succeeds using synthetic data.
-
-Keep deployment receipts, exports, D1 bookmarks, account identifiers, and
-command output outside the repository. A successful source gate does not prove
-deployment, custom-domain activation, secret presence, authenticated reads, or
-recovery.
+- [Cloudflare: Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/)
+- [Cloudflare: D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/)
+- [Cloudflare: Custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+- [Cloudflare: Rate Limiting bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+- [Cloudflare: Static Assets headers](https://developers.cloudflare.com/workers/static-assets/headers/)

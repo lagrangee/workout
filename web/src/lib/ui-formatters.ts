@@ -1,20 +1,15 @@
-// @ts-check
-
-/** @param {unknown} value @returns {number|null} */
-function numericValue(value) {
+function numericValue(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
-/** @param {unknown} value */
-export function formatDistanceKm(value) {
+export function formatDistanceKm(value: unknown): string {
   const number = numericValue(value);
   return number === null ? "—" : `${Math.round(number)} km`;
 }
 
-/** @param {unknown} value @param {unknown} timezone */
-export function formatActivityDateTime(value, timezone) {
+export function formatActivityDateTime(value: unknown, timezone: unknown): string {
   if (typeof value !== "string" || !value || typeof timezone !== "string" || !timezone) return "—";
   const instant = new Date(value);
   if (Number.isNaN(instant.getTime())) return "—";
