@@ -210,9 +210,12 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
   const recoveryClone = join(rehearsalRoot, report.backup.recovery_clone);
 
   assert.equal(report.status, "passed");
+  assert.equal(report.schema_version, 2);
   assert.equal(report.source.exact_commit, sourceCommit);
+  assert.equal(report.source.ref_inventory_scope, "local_for_each_ref_snapshot_only");
+  assert.equal(report.source.live_remote_inventory_verified, false);
   assert.equal(report.backup.exact_source_commit_recoverable, true);
-  assert.equal(report.backup.complete_source_ref_set_verified, true);
+  assert.equal(report.backup.complete_local_source_ref_snapshot_verified, true);
   for (const sourceRef of report.source.refs) {
     assert.ok(report.backup.heads.some(
       ({ name, object }) => name === sourceRef.name && object === sourceRef.object,
@@ -230,19 +233,21 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
     ({ name, object }) => name === "refs/codex/private-snapshot" && object === firstPrivateCommit,
   ));
   assert.equal(
-    report.candidate.source_ref_dispositions.length,
+    report.candidate.local_source_ref_dispositions.length,
     report.source.refs.length,
   );
   assert.deepEqual(
-    report.candidate.source_ref_dispositions.map(({ source_ref: ref }) => ref).sort(),
+    report.candidate.local_source_ref_dispositions.map(({ source_ref: ref }) => ref).sort(),
     report.source.refs.map(({ name }) => name).sort(),
   );
-  assert.ok(report.candidate.source_ref_dispositions.every(({ status }) => [
+  assert.equal(report.candidate.local_ref_disposition_scope, "local_source_snapshot_only_not_live_remote");
+  assert.equal(report.candidate.live_remote_inventory_verified, false);
+  assert.ok(report.candidate.local_source_ref_dispositions.every(({ status }) => [
     "rewritten",
     "overwritten_by_candidate",
     "delete_before_visibility",
   ].includes(status)));
-  const rewrittenDisposition = report.candidate.source_ref_dispositions.find(
+  const rewrittenDisposition = report.candidate.local_source_ref_dispositions.find(
     ({ status }) => status === "rewritten",
   );
   assert.equal(rewrittenDisposition.source_ref, "refs/heads/candidate-work");
@@ -250,14 +255,16 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
   assert.equal(rewrittenDisposition.new_object, report.candidate.audited_tip);
   assert.equal(rewrittenDisposition.proof.rewritten_tip_ancestor_of_audited_tip, true);
   assert.equal(rewrittenDisposition.proof.exact_source_tree_restored, true);
-  const overwrittenDisposition = report.candidate.source_ref_dispositions.find(
+  const overwrittenDisposition = report.candidate.local_source_ref_dispositions.find(
     ({ status }) => status === "overwritten_by_candidate",
   );
   assert.equal(overwrittenDisposition.source_ref, "refs/heads/main");
   assert.equal(overwrittenDisposition.old_object, publicationTargetCommit);
   assert.equal(overwrittenDisposition.new_object, report.candidate.audited_tip);
   assert.equal(overwrittenDisposition.proof.candidate_absence_verified, true);
-  const deleteDispositions = report.candidate.source_ref_dispositions.filter(
+  assert.equal(overwrittenDisposition.proof.local_target_snapshot_object, publicationTargetCommit);
+  assert.equal(overwrittenDisposition.proof.live_remote_lease_verified, false);
+  const deleteDispositions = report.candidate.local_source_ref_dispositions.filter(
     ({ status }) => status === "delete_before_visibility",
   );
   assert.ok(deleteDispositions.length > 0);
@@ -298,6 +305,7 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
   assert.deepEqual(report.fresh_clone.gate_command, [process.execPath, "gate.mjs"]);
   assert.deepEqual(report.external_actions, {
     force_push: false,
+    remote_ref_deletion: false,
     visibility_change: false,
     tag_or_release: false,
     deployment: false,
@@ -323,21 +331,37 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
     git(recoveryClone, "show", `${prunedCommit}:${privateScratchPath}`),
     /synthetic-private-host\.example/u,
   );
-  assert.equal(report.operation_preview.repository.origin_url, sourceRemoteUrl);
-  assert.equal(report.operation_preview.force_with_lease.status, "not_authorized");
+  assert.equal(
+    report.operation_preview.repository.configured_origin_url_sha256,
+    createHash("sha256").update(sourceRemoteUrl).digest("hex"),
+  );
+  assert.equal(
+    report.operation_preview.repository.configured_origin_identity_scope,
+    "local_git_config_snapshot_only",
+  );
+  assert.equal(report.operation_preview.live_remote_inventory.status, "not_run");
+  assert.equal(
+    report.operation_preview.force_with_lease.status,
+    "blocked_pending_live_remote_inventory_and_separate_authorization",
+  );
   assert.equal(report.operation_preview.force_with_lease.source_ref, "refs/heads/candidate-work");
   assert.equal(report.operation_preview.force_with_lease.target_ref, "refs/heads/main");
-  assert.equal(report.operation_preview.force_with_lease.expected_old_object, publicationTargetCommit);
+  assert.equal(report.operation_preview.force_with_lease.expected_old_object, null);
+  assert.equal(report.operation_preview.force_with_lease.local_target_snapshot_object, publicationTargetCommit);
+  assert.equal(report.operation_preview.force_with_lease.live_remote_lease_verified, false);
+  assert.equal(report.operation_preview.force_with_lease.argv, null);
   assert.notEqual(report.operation_preview.force_with_lease.source_object, publicationTargetCommit);
   assert.equal(
+    report.operation_preview.delete_refs.status,
+    "blocked_pending_live_remote_inventory_and_separate_authorization",
+  );
+  assert.equal(
     report.operation_preview.visibility.status,
-    "blocked_pending_excluded_ref_disposition",
+    "blocked_pending_live_remote_inventory_confirmed_ref_operations_and_separate_authorization",
   );
   assert.equal(report.operation_preview.visibility.authorization_status, "not_authorized");
-  assert.equal(
-    report.operation_preview.visibility.pending_ref_disposition_count,
-    report.candidate.source_ref_dispositions.length,
-  );
+  assert.equal(report.operation_preview.visibility.pending_live_ref_disposition_count, null);
+  assert.equal(report.operation_preview.visibility.local_snapshot_ref_count, report.source.refs.length);
   assert.equal(report.operation_preview.tag_release.expected_tag, "v0.1.0");
   assert.equal(report.operation_preview.deploy.status, "blocked_missing_operator_input");
   assert.equal(git(repository, "remote", "get-url", "origin"), sourceRemoteUrl);

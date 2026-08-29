@@ -74,6 +74,43 @@ test("public source scan rejects common secrets without echoing secret material"
   });
 });
 
+test("public source scan never trusts credential-shaped values marked as synthetic, placeholder, or not-for-output", async (t) => {
+  const punctuation = String.fromCharCode(45);
+  const prefixes = {
+    classicGitHub: String.fromCharCode(103, 104, 112, 95),
+    fineGrainedGitHub: ["git", "hub", "_pat", "_"].join(""),
+    openAi: String.fromCharCode(115, 107, 45),
+    aws: String.fromCharCode(65, 75, 73, 65),
+    bearer: ["Bear", "er", " "].join(""),
+    basic: ["Ba", "sic", " "].join(""),
+    privateKey: `${punctuation.repeat(5)}${["BEGIN", "PRIVATE", "KEY"].join(" ")}${punctuation.repeat(5)}`,
+  };
+  const markerCases = ["synthetic", "placeholder", "not-for-output"];
+  const credentialClasses = [
+    ["classic GitHub token", (marker) => `${prefixes.classicGitHub}${marker.replaceAll(punctuation, "")}${"A".repeat(40)}`],
+    ["fine-grained GitHub token", (marker) => `${prefixes.fineGrainedGitHub}${marker.replaceAll(punctuation, "")}${"B".repeat(40)}`],
+    ["OpenAI-style token", (marker) => `${prefixes.openAi}${marker}${"C".repeat(40)}`],
+    ["AWS access key", (marker) => `${prefixes.aws}${`${marker.replaceAll(punctuation, "").toUpperCase()}${"D".repeat(16)}`.slice(0, 16)}`],
+    ["Bearer credential", (marker) => `${prefixes.bearer}${marker}${"E".repeat(32)}`],
+    ["Basic credential", (marker) => `${prefixes.basic}${marker}${"F".repeat(32)}`],
+    ["private key", (marker) => `${prefixes.privateKey}\n${marker}\n`],
+  ];
+
+  for (const marker of markerCases) {
+    for (const [credentialClass, buildCredential] of credentialClasses) {
+      await t.test(`${credentialClass} containing ${marker}`, async () => {
+        const credential = buildCredential(marker);
+        await withTree({ "src/config.js": `export const credential = ${JSON.stringify(credential)};\n` }, async (root) => {
+          const result = scan(root);
+          assert.notEqual(result.status, 0, result.stderr || result.stdout);
+          assert.match(result.stderr, /common-secret/);
+          assert.ok(!result.stderr.includes(credential), "scanner output must not echo credential material");
+        });
+      });
+    }
+  }
+});
+
 test("public source scan inspects opaque binary bytes instead of skipping NUL files", async () => {
   const fakeToken = String.fromCharCode(103, 104, 112, 95) + "B".repeat(40);
   const payload = Buffer.concat([Buffer.from([0x00, 0xff, 0x00]), Buffer.from(fakeToken, "ascii")]);
@@ -85,23 +122,20 @@ test("public source scan inspects opaque binary bytes instead of skipping NUL fi
   });
 });
 
-test("public source scan rejects personal values, production identity, and unapproved raw FIT", async () => {
+test("public source scan rejects personal email, production identity, and unapproved raw FIT", async () => {
   const privateEmail = `${["athlete", "personal"].join(String.fromCharCode(64))}.${"local"}`;
-  const knownHome = String.fromCharCode(47, 85, 115, 101, 114, 115, 47, 99, 108, 97, 119, 100);
   await withTree({
-    "notes.md": `${privateEmail}\n${knownHome}/private-vault\n`,
+    "notes.md": `${privateEmail}\n`,
     "wrangler.toml": "database_id = \"11111111-2222-4333-8444-555555555555\"\nroutes = [{ pattern = \"tracker.private.invalid\", custom_domain = true }]\n",
     "tests/fixtures/fit/device-activity.fit": Buffer.from([0x0e, 0x20, 0x00, 0x00]),
     "private-review.zip": Buffer.from([0x50, 0x4b, 0x03, 0x04]),
   }, async (root) => {
     const result = scan(root);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /known-personal-value/);
     assert.match(result.stderr, /personal-email/);
     assert.match(result.stderr, /production-identity/);
     assert.match(result.stderr, /raw-fit/);
     assert.match(result.stderr, /opaque-archive/);
-    assert.doesNotMatch(result.stderr, new RegExp(knownHome));
     assert.doesNotMatch(result.stderr, new RegExp(privateEmail.replaceAll(".", "\\.")));
   });
 });

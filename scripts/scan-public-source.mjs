@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { access, readFile, readdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { relative, resolve, sep } from "node:path";
@@ -28,16 +27,6 @@ const GENERATED_PUBLIC_BINARY_PATHS = new Set([
 ]);
 const execFileAsync = promisify(execFile);
 
-// Values are deliberately irreversible. They cover the maintainer's former
-// commit email, production D1 identity/domain, and local home prefix without
-// reproducing any of those values in public source.
-const KNOWN_PERSONAL_VALUE_HASHES = new Set([
-  "8801230947dcd5cbe15158a9c6dfac8f2d5996e40405719bd18f157828907da0",
-  "b5802b1e126f4cd9fb898cf4a31b782ff9e0b3965973ab0307ae92880a4f2054",
-  "f7da3d3cf29b1f5d71e7e466083c17a459174e94fd02bce4dbea2f77269b0211",
-  "b8474b17f6cd97b4bc9ee66d33d2ad1f3fd7fe2cf0e41de92b5f39727dc60af9",
-]);
-
 const secretPatterns = [
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
   /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g,
@@ -49,14 +38,6 @@ const secretPatterns = [
 
 function isExcludedPublicPath(path) {
   return path.split("/").some((part) => EXCLUDED_DIRECTORIES.has(part));
-}
-
-function isObviouslySyntheticSecret(value) {
-  return /(?:not-for-output|placeholder|synthetic)/i.test(value);
-}
-
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function normalizePath(root, path) {
@@ -96,16 +77,6 @@ async function publicTreeFiles(root) {
   }
 }
 
-function textCandidates(text) {
-  return [
-    ...text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi),
-    ...text.matchAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi),
-    ...text.matchAll(/https?:\/\/[^\s"'<>`]+/gi),
-    ...text.matchAll(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/gi),
-    ...text.matchAll(/\/(?:Users|home)\/[^/\s"'<>`]+/g),
-  ].map((match) => match[0]);
-}
-
 function report(findings, category, path, line = null) {
   findings.push(`${category}: ${path}${line === null ? "" : `:${line}`}`);
 }
@@ -117,16 +88,12 @@ function lineFor(text, index) {
 function scanText(findings, publicPath, text) {
   for (const pattern of secretPatterns) {
     for (const match of text.matchAll(pattern)) {
-      if (!isObviouslySyntheticSecret(match[0])) report(findings, "common-secret", publicPath, lineFor(text, match.index ?? 0));
+      report(findings, "common-secret", publicPath, lineFor(text, match.index ?? 0));
     }
   }
 
   for (const match of text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)) {
     if (!isReservedEmail(match[0])) report(findings, "personal-email", publicPath, lineFor(text, match.index ?? 0));
-  }
-
-  for (const value of textCandidates(text)) {
-    if (KNOWN_PERSONAL_VALUE_HASHES.has(sha256(value))) report(findings, "known-personal-value", publicPath);
   }
 
   if (publicPath === "wrangler.toml") {

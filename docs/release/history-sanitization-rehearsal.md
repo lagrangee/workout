@@ -34,8 +34,9 @@ node scripts/rehearse-public-history.mjs \
 
 The tool creates a mode-`0700` disposable directory. It then:
 
-1. resolves the source ref to one exact commit and records every `refs/**`
-   namespace entry, ancestry, and reachable-object counts;
+1. resolves the source ref to one exact commit and records the checkout's local
+   `git for-each-ref` snapshot, ancestry, and reachable-object counts; this
+   snapshot may include stale remote-tracking refs and may omit live remote refs;
 2. exports the exact safe source tip to a repository-external audited tree;
 3. creates and verifies a private `git bundle`, uses `git bundle list-heads` to
    prove that every source ref and object is present, then proves recovery in a
@@ -57,30 +58,90 @@ The tool creates a mode-`0700` disposable directory. It then:
    temporary HOME, repeats history and metadata scans, and writes both argv
    arrays into an exact machine-readable report.
 
-`--source-ref` selects the exact ancestry to sanitize;
-`--publication-target-ref` independently identifies the later remote branch and
-its current lease object. The force-with-lease preview must never infer the
-publication target from the feature/candidate source ref.
+`--source-ref` selects the exact ancestry to sanitize.
+`--publication-target-ref` independently identifies the proposed later remote
+branch, but the matching local head is only a local snapshot object. It is not
+a current lease and cannot authorize or populate a force-with-lease command.
+The rehearsal must never infer either the publication target or a live lease
+from the feature/candidate source ref.
 
 The publication candidate intentionally contains one temporary local ref. The
-report has one exhaustive `source_ref_dispositions` row for every source head,
-tag, remote-tracking ref, or custom ref. A row is exactly `rewritten` (the
-selected ancestry mapped to the publication target and audited object),
-`overwritten_by_candidate` (the current publication target plus its lease
-object), or `delete_before_visibility` (with proof that the candidate does not
-contain that ref). The final public remote policy retains only the publication
-target ref. Every other remote ref must be deleted or explicitly rewritten
-before visibility changes. This rehearsal neither performs nor authorizes those
-operations.
+report has one exhaustive `local_source_ref_dispositions` row for every ref in
+that local snapshot. A row is exactly `rewritten` (the selected local ancestry
+mapped to the proposed publication target and audited object),
+`overwritten_by_candidate` (the local publication-target snapshot), or
+`delete_before_visibility` (with proof that the local candidate does not contain
+that ref). The field is explicitly scoped as
+`local_source_snapshot_only_not_live_remote`; it is not an inventory or a
+disposition table for the live remote. The proposed final policy retains only
+the publication target ref, but that policy must be checked independently
+against every live head and tag immediately before cutover.
 
-The private report also contains later-operation previews bound to the exact
-origin identity, target ref and old object, candidate ref and audited tip, and
-the expected `v0.1.0` tag. Force-with-lease and tag/release remain
-`not_authorized`. Visibility is both unauthorized and
-`blocked_pending_excluded_ref_disposition`; the report lists one required
-rewrite or deletion confirmation for every source-ref disposition. Deployment remains
-`blocked_missing_operator_input` until an operator supplies the exact
-deployment identity; the rehearsal never invents one.
+The private report records only a hash of the checkout's configured origin URL
+and labels it as local Git configuration. It deliberately leaves the live
+target object and force-with-lease argv unset. Force update, ref deletion, and
+visibility all remain blocked pending a fresh live inventory and their own
+separate exact authorizations. Tag/release remains `not_authorized` and
+deployment remains `blocked_missing_operator_input`; the rehearsal never
+invents an external identity or claims external state.
+
+## Cutover-time live remote inventory
+
+Immediately before any force update, remote-ref deletion, or visibility change,
+create a repository-external JSON document with one disposition for every live
+head and tag. The target branch must use `force_update_to_candidate`; every
+other live head or tag must use `delete_before_visibility`. Each row includes
+the exact object observed and reviewed by the operator:
+
+```json
+{
+  "schema_version": 1,
+  "live_ref_dispositions": [
+    {
+      "ref": "refs/heads/main",
+      "expected_object": "<exact-live-object>",
+      "operation": "force_update_to_candidate"
+    },
+    {
+      "ref": "refs/tags/old-private-tag",
+      "expected_object": "<exact-live-object>",
+      "operation": "delete_before_visibility"
+    }
+  ]
+}
+```
+
+Then run the independent read-only verifier from a repository with the exact
+configured remote. The candidate repository may be the disposable rewrite,
+which proves that the audited candidate object is a commit. Supply the SHA-256
+of the exact configured remote URL rather than placing a credential-bearing URL
+in a transcript:
+
+```sh
+node scripts/verify-live-remote-inventory.mjs \
+  --repository /absolute/path/to/remote-configured-checkout \
+  --candidate-repository /absolute/private/disposable-rewrite \
+  --remote origin \
+  --expected-remote-url-sha256 "$EXPECTED_REMOTE_URL_SHA256" \
+  --publication-target-ref refs/heads/main \
+  --expected-target-object "$EXPECTED_LIVE_MAIN_OBJECT" \
+  --candidate-object "$AUDITED_CANDIDATE_OBJECT" \
+  --dispositions-file /absolute/private/live-ref-dispositions.json
+```
+
+The verifier uses `git ls-remote --heads --tags --refs`, checks the configured
+fetch identity before and after the query, requires the effective push URL to
+be the same single identity and remain stable, binds the target to its exact
+live object, verifies the candidate commit, and fails if any live ref is missing,
+stale, unexpected, duplicated, or assigned the wrong operation. A passing
+result proves only `live_remote_inventory_verified_read_only`: it does not push,
+delete refs, change visibility, tag, release, or deploy. If any time passes or
+the remote could have changed, run it again and discard the older inventory.
+The result contains an exact, unexecuted force-with-lease argv for the target
+and one exact, unexecuted lease-bound deletion argv for every other live ref.
+Each preview remains `not_authorized` and `executed: false`. Every subsequent
+mutation and the visibility change still requires its own explicit confirmation;
+the verifier never invokes a previewed argv.
 
 The approved sanitization policy currently identifies nine independently
 sensitive scratch paths. The count is an explicit fail-closed input: a future
@@ -89,5 +150,5 @@ the publication policy. Harmless scratch history is retained.
 
 Keep the generated bundle, report, pattern file, and rehearsal directory in
 private storage. A passing report establishes only `local_history_rehearsal`.
-It is not evidence of a force push, public visibility, a tag, a GitHub release,
-or a deployment.
+It is not evidence of a live remote inventory, force push, ref deletion, public
+visibility, tag, GitHub release, or deployment.

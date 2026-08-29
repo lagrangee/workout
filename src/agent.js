@@ -4,10 +4,11 @@ import { base64UrlEncode, constantTimeEqual } from "./util.js";
 
 /** @typedef {import("../types/interfaces.js").AgentState} AgentState */
 /** @typedef {import("../types/interfaces.js").AgentStore} AgentStore */
+/** @typedef {import("./types.js").WorkerEnv} WorkerEnv */
 
 const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,60}$/;
 
-/** @param {Record<string, any>} env */
+/** @param {WorkerEnv} env */
 async function deriveHmacKeyBytes(env) {
   const value = env.AGENT_TOKEN_SECRET;
   if (!value) throw new Error("Missing required secret AGENT_TOKEN_SECRET");
@@ -15,7 +16,7 @@ async function deriveHmacKeyBytes(env) {
   return new Uint8Array(digest);
 }
 
-/** @param {string} token @param {Record<string, any>} env */
+/** @param {string} token @param {WorkerEnv} env */
 export async function agentTokenDigest(token, env) {
   const key = await deriveHmacKeyBytes(env);
   const cryptoKey = await globalThis.crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -29,7 +30,7 @@ export function generateAgentToken() {
   return base64UrlEncode(bytes);
 }
 
-/** @param {AgentState} state @param {Record<string, any>} env @param {Date} now */
+/** @param {AgentState} state @param {WorkerEnv} env @param {Date} now */
 export async function createAgentAccess(state, env, now) {
   const token = generateAgentToken();
   const previous = state.agent_access;
@@ -61,7 +62,7 @@ export function agentAccessStatus(state) {
   };
 }
 
-/** @param {AgentStore} store @param {string} token @param {Record<string, any>} env */
+/** @param {AgentStore} store @param {string} token @param {WorkerEnv} env */
 export async function findAgentInStore(store, token, env) {
   if (typeof token !== "string" || !AGENT_TOKEN_PATTERN.test(token)) return null;
   const digest = await agentTokenDigest(token, env);

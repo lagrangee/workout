@@ -563,18 +563,21 @@ async function main() {
     { mode: 0o600 },
   );
 
+  // This is intentionally only a local refs snapshot. A checkout may have
+  // stale or incomplete remote-tracking refs, so none of these values is
+  // evidence about the current live remote inventory or a usable lease.
   const sourceRefs = await refs(source);
-  const publicationTarget = sourceRefs.find(
+  const localPublicationTarget = sourceRefs.find(
     ({ name }) => name === options.publicationTargetRef,
   );
-  if (!publicationTarget) {
-    throw new Error("publication target ref is absent from the complete source ref snapshot");
+  if (!localPublicationTarget) {
+    throw new Error("publication target ref is absent from the local source ref snapshot");
   }
   const selectedSourceRef = sourceRefs.find(
     ({ name, object }) => name === options.sourceRef && object === sourceCommit,
   );
   if (!selectedSourceRef) {
-    throw new Error("selected source ref is absent or mismatched in the complete source ref snapshot");
+    throw new Error("selected source ref is absent or mismatched in the local source ref snapshot");
   }
   if (options.sourceRef === options.publicationTargetRef) {
     throw new Error("selected source ancestry ref and publication target ref must be distinct");
@@ -637,7 +640,7 @@ async function main() {
   );
   if (missingOrMismatchedBackupRefs.length > 0) {
     throw new Error(
-      `private backup does not contain the complete source ref set (${missingOrMismatchedBackupRefs.length} missing or mismatched)`,
+      `private backup does not contain the complete local source ref snapshot (${missingOrMismatchedBackupRefs.length} missing or mismatched)`,
     );
   }
   const sourceRefMap = new Map(sourceRefs.map(({ name, object }) => [name, object]));
@@ -859,7 +862,7 @@ async function main() {
     throw new Error("selected source tip is absent from verified filter-branch state");
   }
   const candidateRefNames = new Set(candidateRefList.map(({ name }) => name));
-  const sourceRefDispositions = sourceRefs.map(({ name, object }) => {
+  const localSourceRefDispositions = sourceRefs.map(({ name, object }) => {
     if (name === options.sourceRef && object === sourceCommit) {
       return {
         source_ref: name,
@@ -879,7 +882,7 @@ async function main() {
         },
       };
     }
-    if (name === options.publicationTargetRef && object === publicationTarget.object) {
+    if (name === options.publicationTargetRef && object === localPublicationTarget.object) {
       return {
         source_ref: name,
         old_object: object,
@@ -889,7 +892,8 @@ async function main() {
         proof: {
           candidate_source_ref: options.sourceRef,
           candidate_source_object: sourceCommit,
-          force_with_lease_expected_old_object: publicationTarget.object,
+          local_target_snapshot_object: localPublicationTarget.object,
+          live_remote_lease_verified: false,
           candidate_absence_verified: !candidateRefNames.has(name),
           candidate_ancestry_verified: true,
         },
@@ -912,26 +916,28 @@ async function main() {
     "delete_before_visibility",
   ]);
   if (
-    sourceRefDispositions.length !== sourceRefs.length
-    || new Set(sourceRefDispositions.map(({ source_ref: name }) => name)).size !== sourceRefs.length
-    || sourceRefDispositions.some(({ status }) => !dispositionStatuses.has(status))
-    || sourceRefDispositions.filter(({ status }) => status === "rewritten").length !== 1
-    || sourceRefDispositions.filter(({ status }) => status === "overwritten_by_candidate").length !== 1
-    || sourceRefDispositions.some(
+    localSourceRefDispositions.length !== sourceRefs.length
+    || new Set(localSourceRefDispositions.map(({ source_ref: name }) => name)).size !== sourceRefs.length
+    || localSourceRefDispositions.some(({ status }) => !dispositionStatuses.has(status))
+    || localSourceRefDispositions.filter(({ status }) => status === "rewritten").length !== 1
+    || localSourceRefDispositions.filter(({ status }) => status === "overwritten_by_candidate").length !== 1
+    || localSourceRefDispositions.some(
       ({ status, proof }) => status === "delete_before_visibility" && !proof.candidate_absence_verified,
     )
   ) {
-    throw new Error("source ref disposition table is incomplete or lacks mechanical proof");
+    throw new Error("local source ref disposition table is incomplete or lacks mechanical proof");
   }
 
   const report = {
-    schema_version: 1,
+    schema_version: 2,
     status: "passed",
     claim: "local_history_rehearsal_only",
     source: {
       repository_basename: basename(source),
       requested_ref: options.sourceRef,
       exact_commit: sourceCommit,
+      ref_inventory_scope: "local_for_each_ref_snapshot_only",
+      live_remote_inventory_verified: false,
       refs: sourceRefs,
       ancestry_commit_count: sourceAncestryCount,
       reachable_object_count: sourceObjectLines.length,
@@ -940,7 +946,7 @@ async function main() {
       bundle: basename(backupBundle),
       verified: true,
       heads: backupHeads,
-      complete_source_ref_set_verified: true,
+      complete_local_source_ref_snapshot_verified: true,
       recovery_clone: basename(recovery),
       exact_source_commit_recoverable: true,
     },
@@ -959,8 +965,10 @@ async function main() {
     candidate: {
       branch: candidateBranch,
       publication_ref_policy: "single_selected_candidate_ref_only",
-      final_public_remote_ref_policy: "retain_only_publication_target_ref",
-      source_ref_dispositions: sourceRefDispositions,
+      proposed_final_public_remote_ref_policy: "retain_only_publication_target_ref",
+      local_ref_disposition_scope: "local_source_snapshot_only_not_live_remote",
+      local_source_ref_dispositions: localSourceRefDispositions,
+      live_remote_inventory_verified: false,
       rewritten_tip: rewrittenTip,
       audited_tip: auditedTip,
       refs: candidateRefList,
@@ -1002,39 +1010,52 @@ async function main() {
       repository: {
         basename: basename(source),
         origin_remote: "origin",
-        origin_url: sourceRemoteUrl,
-        origin_url_sha256: sha256(sourceRemoteUrl),
+        configured_origin_url_sha256: sha256(sourceRemoteUrl),
+        configured_origin_identity_scope: "local_git_config_snapshot_only",
+      },
+      live_remote_inventory: {
+        status: "not_run",
+        required_before_any_remote_mutation_or_visibility_change: true,
+        verifier: "scripts/verify-live-remote-inventory.mjs",
+        required_method: "git ls-remote --heads --tags --refs",
+        required_bindings: [
+          "exact_remote_url_sha256",
+          "single_equal_fetch_and_push_identity",
+          "publication_target_ref",
+          "expected_live_target_object",
+          "candidate_object",
+          "every_live_head_and_tag_disposition",
+        ],
       },
       force_with_lease: {
-        status: "not_authorized",
+        status: "blocked_pending_live_remote_inventory_and_separate_authorization",
         source_ref: options.sourceRef,
         source_object: sourceCommit,
         target_ref: options.publicationTargetRef,
-        expected_old_object: publicationTarget.object,
+        expected_old_object: null,
+        local_target_snapshot_object: localPublicationTarget.object,
+        live_remote_lease_verified: false,
         candidate_ref: `refs/heads/${candidateBranch}`,
         candidate_object: auditedTip,
-        argv: [
-          "git",
-          "push",
-          `--force-with-lease=${options.publicationTargetRef}:${publicationTarget.object}`,
-          "origin",
-          `${auditedTip}:${options.publicationTargetRef}`,
-        ],
-        required_confirmation: "confirm_exact_force_with_lease_operation",
+        argv: null,
+        required_precondition: "fresh_live_remote_inventory_with_exact_target_lease",
+        required_confirmation: "confirm_exact_force_with_lease_operation_separately",
+      },
+      delete_refs: {
+        status: "blocked_pending_live_remote_inventory_and_separate_authorization",
+        refs: null,
+        required_precondition: "every_live_non_target_head_and_tag_has_exact_disposition",
+        required_confirmation: "confirm_exact_remote_ref_deletions_separately",
       },
       visibility: {
-        status: "blocked_pending_excluded_ref_disposition",
+        status: "blocked_pending_live_remote_inventory_confirmed_ref_operations_and_separate_authorization",
         authorization_status: "not_authorized",
         target_visibility: "public",
         repository_origin_url_sha256: sha256(sourceRemoteUrl),
-        pending_ref_disposition_count: sourceRefDispositions.length,
-        required_precondition: "publication_target_rewritten_and_every_other_remote_ref_deleted_before_visibility",
-        required_separate_confirmations: sourceRefDispositions.map(({ source_ref: ref, old_object: object, status }) => ({
-          ref,
-          expected_old_object: object,
-          operation: status,
-        })),
-        required_confirmation: "confirm_visibility_only_after_excluded_ref_disposition",
+        pending_live_ref_disposition_count: null,
+        local_snapshot_ref_count: localSourceRefDispositions.length,
+        required_precondition: "live_inventory_verified_then_target_rewritten_and_every_other_live_remote_ref_deleted",
+        required_confirmation: "confirm_visibility_change_separately_after_live_ref_operations",
       },
       tag_release: {
         status: "not_authorized",
@@ -1051,6 +1072,7 @@ async function main() {
     },
     external_actions: {
       force_push: false,
+      remote_ref_deletion: false,
       visibility_change: false,
       tag_or_release: false,
       deployment: false,
