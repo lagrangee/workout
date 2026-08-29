@@ -7,7 +7,7 @@ const archivePath = resolve("docs/contracts/training-archive-v1.md");
 const wirePath = resolve("docs/contracts/training-archive-wire-catalog-v1.md");
 const corosFieldCatalogPath = resolve("docs/contracts/coros-field-catalog-v2.md");
 const calendarPath = resolve("docs/contracts/calendar-read-v1.md");
-const contextPath = resolve("CONTEXT.md");
+const contextPath = resolve("docs/domain-model.md");
 
 test("Training Archive v1 documents local-first routing and explicit sync scope", async () => {
   const archive = await readFile(archivePath, "utf8");

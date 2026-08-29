@@ -337,7 +337,7 @@ share-management requests to the unsupported-operation path. The integration
 ## Canonical references
 
 Load the canonical domain vocabulary when a term is unclear:
-[`CONTEXT.md`](../../CONTEXT.md).
+[`docs/domain-model.md`](../../docs/domain-model.md).
 
 Load [`agent-api-v1.md`](../../docs/contracts/agent-api-v1.md) when a resource,
 error, freshness, pagination, confirmation, or readback rule is unclear. Load

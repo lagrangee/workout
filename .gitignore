@@ -13,6 +13,10 @@ wrangler.production.toml
 .DS_Store
 .scratch/
 .omo/
+.bearing/
+.impeccable/
+AGENTS.md
+docs/agents/
 
 # Local exports and test artifacts
 exports/

@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const execFileAsync = promisify(execFile);
 const rootDocuments = new Set([
   "README.md",
   "CONTRIBUTING.md",
@@ -12,18 +15,7 @@ const rootDocuments = new Set([
   "SUPPORT.md",
   "CODE_OF_CONDUCT.md",
   "THIRD_PARTY_NOTICES.md",
-  "CONTEXT.md",
 ]);
-
-async function markdownFiles(path) {
-  const files = [];
-  for (const entry of await readdir(path, { withFileTypes: true })) {
-    const child = resolve(path, entry.name);
-    if (entry.isDirectory()) files.push(...await markdownFiles(child));
-    else if (entry.isFile() && extname(entry.name) === ".md") files.push(child);
-  }
-  return files;
-}
 
 function localTargets(markdown) {
   return [...markdown.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)]
@@ -32,12 +24,18 @@ function localTargets(markdown) {
     .map((target) => target.split("#", 1)[0].split("?", 1)[0]);
 }
 
-const files = [
-  ...(await readdir(root, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && rootDocuments.has(entry.name))
-    .map((entry) => resolve(root, entry.name)),
-  ...await markdownFiles(resolve(root, "docs")),
-];
+const { stdout } = await execFileAsync(
+  "git",
+  ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+  { encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
+);
+const files = stdout
+  .toString("utf8")
+  .split("\0")
+  .filter(Boolean)
+  .filter((path) => extname(path) === ".md")
+  .filter((path) => rootDocuments.has(path) || path.startsWith("docs/"))
+  .map((path) => resolve(root, path));
 const findings = [];
 for (const file of files) {
   const markdown = await readFile(file, "utf8");

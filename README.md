@@ -22,8 +22,9 @@ training record, not a medical service, coaching marketplace, or hosted SaaS.
   identity, credentials, live receipts, and recovery artifacts are private
   operator state and are not part of the source gate.
 
-See [Architecture](docs/architecture.md), [domain language](CONTEXT.md), and
-the versioned [contracts](docs/contracts/) for the complete boundaries.
+See the [documentation index](docs/README.md), [architecture](docs/architecture.md),
+[domain model](docs/domain-model.md), and versioned [contracts](docs/contracts/)
+for the complete boundaries.
 
 ## Requirements
 
@@ -51,9 +52,9 @@ npm run release-check
 ```
 
 `release-check` is deliberately source-only: it must pass in a clean checkout
-without network access, deployment credentials, or a production receipt. The
-separate operator procedure is documented in
-[Production acceptance](docs/release/production-acceptance.md).
+without network access, deployment credentials, or a production receipt. See
+[Source validation](docs/validation.md) for its evidence boundary; deployment
+checks are part of the [self-hosting guide](docs/deployment/self-hosting.md).
 
 ## Self-hosting
 

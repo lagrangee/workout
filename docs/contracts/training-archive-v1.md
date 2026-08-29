@@ -355,4 +355,4 @@ catalog.
 - [COROS Field Catalog v2](coros-field-catalog-v2.md)
 - [Athlete Export v1](athlete-export-v1.md)
 - [Athlete Export Wire Catalog v1](athlete-export-wire-catalog-v1.md)
-- [Workout domain context](../../CONTEXT.md)
+- [Workout domain model](../domain-model.md)

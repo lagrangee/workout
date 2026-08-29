@@ -14,3 +14,7 @@ core, and foot/ankle work and adapts it to the accepted MVP contract:
 
 Import this file through the normal Plan JSON validate → preview → apply flow.
 It is not a database dump and must not be inserted directly into D1.
+
+Run `npm run seed:verify` to validate, preview, apply, and read back the fixture
+against isolated synthetic Athletes. The verifier does not connect to D1 or a
+production deployment.
