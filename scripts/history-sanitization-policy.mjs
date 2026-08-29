@@ -95,6 +95,15 @@ export function matchesAnyPrivatePattern(buffer, patterns) {
   return patterns.some((pattern) => buffer.includes(Buffer.from(pattern, "utf8")));
 }
 
+function strictText(buffer) {
+  if (buffer.includes(0)) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return null;
+  }
+}
+
 function isReservedEmail(email) {
   const domain = email.toLowerCase().split("@").at(-1) ?? "";
   return domain === "example.com"
@@ -112,7 +121,12 @@ export function historyMaterialCategories(path, buffer) {
     categories.add("unapproved-fit");
   }
 
-  const text = buffer.toString("utf8");
+  // Credential-shaped ASCII must remain visible even inside opaque binary
+  // material. Generic email matching is intentionally narrower: binary C2PA
+  // and certificate payloads can contain non-personal issuer addresses, while
+  // exact private values are scanned byte-for-byte by the rehearsal.
+  const byteText = buffer.toString("latin1");
+  const text = strictText(buffer);
   const secretPatterns = [
     /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/gu,
     /\bgh[pousr]_[A-Za-z0-9]{30,}\b/gu,
@@ -121,18 +135,21 @@ export function historyMaterialCategories(path, buffer) {
     /\bAKIA[0-9A-Z]{16}\b/gu,
     /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+\/-]{24,}=*\b/gu,
   ];
-  if (secretPatterns.some((pattern) => pattern.test(text))) categories.add("common-secret");
-  for (const match of text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu)) {
-    if (!isReservedEmail(match[0])) categories.add("personal-email");
+  if (secretPatterns.some((pattern) => pattern.test(byteText))) categories.add("common-secret");
+  if (text !== null) {
+    for (const match of text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu)) {
+      if (!isReservedEmail(match[0])) categories.add("personal-email");
+    }
   }
   if (path === "wrangler.toml") {
-    if (/database_id\s*=\s*"(?!00000000-0000-0000-0000-000000000000")[^"]+"/u.test(text)) {
+    const configurationText = text ?? byteText;
+    if (/database_id\s*=\s*"(?!00000000-0000-0000-0000-000000000000")[^"]+"/u.test(configurationText)) {
       categories.add("production-identity");
     }
-    if (/^\s*routes\s*=/mu.test(text) || /custom_domain\s*=\s*true/u.test(text)) {
+    if (/^\s*routes\s*=/mu.test(configurationText) || /custom_domain\s*=\s*true/u.test(configurationText)) {
       categories.add("production-identity");
     }
-    for (const match of text.matchAll(/PUBLIC_ORIGIN\s*=\s*"([^"]+)"/gu)) {
+    for (const match of configurationText.matchAll(/PUBLIC_ORIGIN\s*=\s*"([^"]+)"/gu)) {
       if (!/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(match[1])) {
         categories.add("production-identity");
       }

@@ -592,8 +592,16 @@ async function main() {
     await commitEmails(source, sourceCommit),
     options.privateEmailSha256,
   );
+  // The digest selects the metadata identity to rewrite. Scan that exact value
+  // byte-for-byte as well, so it cannot survive inside a binary blob merely
+  // because generic email discovery is restricted to strict text.
+  const exactSensitivePatterns = [...new Set([...patterns, privateEmail])];
 
-  const sourcePatternMatches = await scanPrivatePatterns(source, sourceCommit, patterns);
+  const sourcePatternMatches = await scanPrivatePatterns(
+    source,
+    sourceCommit,
+    exactSensitivePatterns,
+  );
   const sourcePolicyMatches = await scanHighConfidenceHistoryMaterial(source, sourceCommit);
   const sourceHistoryPathSet = await historyPaths(source, sourceCommit);
   const discoveredSensitivePaths = [...new Set(
@@ -624,7 +632,7 @@ async function main() {
   await run("tar", ["-xf", auditedArchive, "-C", auditedTree]);
   // The exact source tip must already be safe. History cleanup is not allowed to
   // conceal unsafe maintained source by restoring it after the rewrite.
-  for (const pattern of patterns) {
+  for (const pattern of exactSensitivePatterns) {
     if (matchesAnyPrivatePattern(await readFile(auditedArchive), [pattern])) {
       throw new Error("the audited source-tip archive still contains a private pattern");
     }
@@ -804,7 +812,11 @@ async function main() {
   if (lostScratchPaths.length > 0) {
     throw new Error(`non-sensitive scratch history was lost (${lostScratchPaths.length} paths)`);
   }
-  const remainingPrivate = await scanPrivatePatterns(rewrite, auditedTip, patterns);
+  const remainingPrivate = await scanPrivatePatterns(
+    rewrite,
+    auditedTip,
+    exactSensitivePatterns,
+  );
   if (remainingPrivate.length > 0) throw new Error("private material remains in candidate history");
   const remainingPolicyMaterial = await scanHighConfidenceHistoryMaterial(rewrite, auditedTip);
   if (remainingPolicyMaterial.length > 0) {
@@ -838,7 +850,7 @@ async function main() {
   });
   const freshTip = (await git(freshClone, ["rev-parse", "HEAD"])).trim();
   if (freshTip !== auditedTip) throw new Error("fresh clone did not resolve the audited candidate tip");
-  if ((await scanPrivatePatterns(freshClone, "HEAD", patterns)).length > 0) {
+  if ((await scanPrivatePatterns(freshClone, "HEAD", exactSensitivePatterns)).length > 0) {
     throw new Error("fresh clone history scan found private material");
   }
   if ((await scanHighConfidenceHistoryMaterial(freshClone, "HEAD")).length > 0) {

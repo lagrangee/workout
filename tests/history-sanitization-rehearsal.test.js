@@ -16,6 +16,7 @@ import {
   SENSITIVE_SCRATCH_HISTORY_PATHS,
   assertRewrittenMetadata,
   historyMaterialCategories,
+  matchesAnyPrivatePattern,
 } from "../scripts/history-sanitization-policy.mjs";
 
 const rehearsalScript = new URL(
@@ -75,6 +76,7 @@ function createSyntheticSource(root) {
   git(repository, "config", "user.email", "synthetic.maintainer@example.invalid");
 
   const privateValue = "synthetic-private-host.example";
+  const vendorCertificateEmail = ["signing", "vendor.example.org"].join("@");
   const privateScratchPath = SENSITIVE_SCRATCH_HISTORY_PATHS[0];
   write(repository, "tests/fixtures/fit/coros-2026-08-23.fit", "synthetic-real-device-bytes");
   write(repository, "docs/deployment/cloudflare-production-checklist.md", privateValue);
@@ -86,6 +88,24 @@ function createSyntheticSource(root) {
     );
   }
   write(repository, ".scratch/harmless/spec.md", "harmless product reasoning\n");
+  write(
+    repository,
+    ".scratch/harmless/vendor-certificate.bin",
+    Buffer.concat([
+      Buffer.from([0]),
+      Buffer.from(vendorCertificateEmail),
+      Buffer.from([0]),
+    ]),
+  );
+  write(
+    repository,
+    "docs/private-email.bin",
+    Buffer.concat([
+      Buffer.from([0]),
+      Buffer.from("synthetic.maintainer@example.invalid"),
+      Buffer.from([0]),
+    ]),
+  );
   write(repository, "kept-ignored.txt", "tracked before it was ignored\n");
   write(repository, "wrangler.toml", `route = \"${privateValue}\"\n`);
   const firstPrivateCommit = commit(
@@ -105,6 +125,7 @@ function createSyntheticSource(root) {
   );
 
   rmSync(join(repository, "tests/fixtures/fit/coros-2026-08-23.fit"));
+  rmSync(join(repository, "docs/private-email.bin"));
   for (const path of SENSITIVE_SCRATCH_HISTORY_PATHS) rmSync(join(repository, path));
   write(repository, "docs/deployment/cloudflare-production-checklist.md", "generic operator checklist\n");
   write(repository, "wrangler.toml", "name = \"example-worker\"\n");
@@ -317,6 +338,11 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
     assert.equal(git(freshClone, "log", "--format=%H", "--", path), "");
   }
   assert.equal(existsSync(join(freshClone, ".scratch/harmless/spec.md")), true);
+  assert.equal(
+    existsSync(join(freshClone, ".scratch/harmless/vendor-certificate.bin")),
+    true,
+  );
+  assert.equal(git(freshClone, "log", "--format=%H", "--", "docs/private-email.bin"), "");
   assert.equal(existsSync(join(freshClone, "kept-ignored.txt")), true);
   assert.equal(
     git(freshClone, "log", "--format=%ae%n%ce").includes(privateEmail),
@@ -489,7 +515,7 @@ test("rewritten metadata verification rejects author-name and date drift", () =>
   );
 });
 
-test("history material scan has no NUL bypass or FIT path-only trust", () => {
+test("history scan keeps binary secrets visible without treating certificate email bytes as personal", () => {
   const syntheticSecret = Buffer.from(
     `${String.fromCharCode(103, 104, 112, 95)}${"A".repeat(40)}`,
   );
@@ -502,5 +528,25 @@ test("history material scan has no NUL bypass or FIT path-only trust", () => {
       "tests/fixtures/fit/synthetic-workout.fit",
       Buffer.from("unverified bytes"),
     ).includes("unapproved-fit"),
+  );
+  const vendorCertificateEmail = ["signing", "vendor.example.org"].join("@");
+  const binaryCertificate = Buffer.concat([
+    Buffer.from([0]),
+    Buffer.from(vendorCertificateEmail),
+    Buffer.from([0]),
+  ]);
+  assert.equal(
+    historyMaterialCategories("concept.png", binaryCertificate).includes("personal-email"),
+    false,
+  );
+  assert.equal(
+    matchesAnyPrivatePattern(binaryCertificate, [vendorCertificateEmail]),
+    true,
+  );
+  assert.ok(
+    historyMaterialCategories(
+      "notes.md",
+      Buffer.from(`contact=${["maintainer", "project.example.org"].join("@")}\n`),
+    ).includes("personal-email"),
   );
 });

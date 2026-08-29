@@ -155,7 +155,11 @@ explicit confirmation; the verifier never invokes a previewed argv.
 The approved sanitization policy currently identifies nine independently
 sensitive scratch paths. The count is an explicit fail-closed input: a future
 discovery of eight or ten paths aborts for review instead of silently changing
-the publication policy. Harmless scratch history is retained.
+the publication policy. Harmless scratch history is retained. Common secret
+shapes and the confirmed private values are scanned byte-for-byte even inside
+binary blobs; generic email discovery is limited to strict text so a vendor
+certificate address embedded in signed binary provenance is not mislabeled as
+the maintainer's personal identity.
 
 Keep the generated bundle, report, pattern file, and rehearsal directory in
 private storage. A passing report establishes only `local_history_rehearsal`.
