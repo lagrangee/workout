@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-import { appFixture, call, json, post, today } from "./helpers.js";
+import { appFixture, call, json, post, TEST_NOW, testInstant, today } from "./helpers.js";
 import { addDays, weekdayKey } from "../src/util.js";
 import { createSession } from "../src/session.js";
 
@@ -135,7 +135,7 @@ function responseError(message, status = 503) {
 }
 
 function deterministicClock() {
-  let current = Date.now();
+  let current = Date.parse(TEST_NOW);
   let nextIntervalId = 0;
   let nextFrameId = 0;
   const intervals = new Map();
@@ -227,7 +227,7 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
   };
   const localStorage = { getItem: () => null };
   const navigator = { clipboard: { writeText: async () => {} }, ...(options.wakeLock ? { wakeLock: options.wakeLock } : {}) };
-  const clock = options.clock ?? null;
+  const clock = options.clock ?? deterministicClock();
   const audioEvents = options.audioEvents ?? [];
   let scheduledAudioEvents = [];
   const flushScheduledAudio = () => {
@@ -254,6 +254,10 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
     cancelAnimationFrame: clock.cancelAnimationFrame,
     audio: options.audio ?? defaultAudio,
   } : null;
+  class BrowserDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [clock.now()])); }
+    static now() { return clock.now(); }
+  }
   let intervalId = 0;
   let frameId = 0;
   const context = {
@@ -274,6 +278,7 @@ async function openBrowser(handler, intercept = async () => null, options = {}) 
     Response,
     Headers,
     FormData,
+    Date: BrowserDate,
   };
   vm.createContext(context);
   new vm.Script(appSource, { filename: "public/app.js" }).runInContext(context);
@@ -292,7 +297,7 @@ async function seedPartialSession(handler) {
   const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "seed-partial-start"));
   const detail = await call(handler, `/api/private/sessions/${started.body.session_key}`);
   const item = detail.body.snapshot.completion_items[0];
-  const completedAt = new Date().toISOString();
+  const completedAt = TEST_NOW;
   const record = {
     record_schema_version: 1,
     completion_results: [{ completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: item.target.min }, resistance: item.resistance, rir: null, completed_at: completedAt }],
@@ -303,7 +308,7 @@ async function seedPartialSession(handler) {
     skip_reason: null,
   };
   await call(handler, `/api/private/sessions/${started.body.session_key}/record`, json({ method: "PUT" }, record));
-  const endedAt = new Date(Date.now() + 5000).toISOString();
+  const endedAt = testInstant(5000);
   const endedRecord = { ...record, training_intervals: record.training_intervals.map((interval) => ({ ...interval, ended_at: endedAt })) };
   await call(handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record: endedRecord, ended_at: endedAt }, "seed-partial-end"));
   return started.body.session_key;
@@ -344,7 +349,7 @@ async function seedCanonicalPartialSession(fixture) {
   const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "seed-canonical-partial-start"));
   const detail = await call(fixture.handler, `/api/private/sessions/${started.body.session_key}`);
   const item = detail.body.snapshot.completion_items[0];
-  const completedAt = new Date().toISOString();
+  const completedAt = TEST_NOW;
   const record = {
     record_schema_version: 2,
     set_results: [{ completion_item_key: item.completion_item_key, status: "completed", actual: { metric: item.target.metric, value: item.target.value }, resistance: { mode: "external_load", value: 10, unit: "kg" }, rir: null, note: null, completed_at: completedAt }],
@@ -355,7 +360,7 @@ async function seedCanonicalPartialSession(fixture) {
     skip_reason: null,
   };
   await call(fixture.handler, `/api/private/sessions/${started.body.session_key}/record`, json({ method: "PUT" }, record));
-  const endedAt = new Date(Date.now() + 5000).toISOString();
+  const endedAt = testInstant(5000);
   const endedRecord = { ...record, training_intervals: record.training_intervals.map((interval) => ({ ...interval, ended_at: endedAt })) };
   await call(fixture.handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record: endedRecord, ended_at: endedAt }, "seed-canonical-partial-end"));
   return started.body.session_key;
@@ -569,9 +574,9 @@ test("browser seam: failed start restores a retryable Today control", async () =
 });
 
 test("browser seam: manual completion enters restrained rest, announces its end, and advances focus", async () => {
-  const fixture = appFixture();
-  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 6;
   const clock = deterministicClock();
+  const fixture = appFixture({ clock: () => new Date(clock.now()) });
+  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 6;
   const audioEvents = [];
   const browser = await openBrowser(fixture.handler, async () => null, { clock, audioEvents });
 
@@ -606,8 +611,8 @@ test("browser seam: manual completion enters restrained rest, announces its end,
 });
 
 test("browser seam: leaving execution closes the active interval and resume excludes hidden time", async () => {
-  const fixture = appFixture();
   const clock = deterministicClock();
+  const fixture = appFixture({ clock: () => new Date(clock.now()) });
   const browser = await openBrowser(fixture.handler, async () => null, { clock });
 
   browser.root.querySelector('[data-action="start"]').click();
@@ -616,6 +621,7 @@ test("browser seam: leaving execution closes the active interval and resume excl
   const sessionKey = started.sessions[0].session_key;
   const elapsedBeforeExit = browser.root.querySelector("[data-session-elapsed]").textContent;
 
+  clock.advance(1);
   browser.context.document.hidden = true;
   browser.context.document.dispatchEvent({ type: "pagehide" });
   await settle();
@@ -650,13 +656,15 @@ test("browser seam: leaving execution closes the active interval and resume excl
 });
 
 test("browser seam: returning to Today pauses the server interval before navigation completes", async () => {
-  const fixture = appFixture();
-  const browser = await openBrowser(fixture.handler, async () => null);
+  const clock = deterministicClock();
+  const fixture = appFixture({ clock: () => new Date(clock.now()) });
+  const browser = await openBrowser(fixture.handler, async () => null, { clock });
 
   browser.root.querySelector('[data-action="start"]').click();
   await settle();
   const started = await fixture.store.getByEmail("athlete-a@example.invalid");
   const sessionKey = started.sessions[0].session_key;
+  clock.advance(1);
   browser.root.querySelector('[data-action="minimize"]').click();
   await settle();
 
@@ -668,9 +676,9 @@ test("browser seam: returning to Today pauses the server interval before navigat
 });
 
 test("browser seam: rest can be skipped to the next focus item", async () => {
-  const fixture = appFixture();
-  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 60;
   const clock = deterministicClock();
+  const fixture = appFixture({ clock: () => new Date(clock.now()) });
+  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 60;
   const browser = await openBrowser(fixture.handler, async () => null, { clock });
 
   browser.root.querySelector('[data-action="start"]').click();
@@ -686,9 +694,9 @@ test("browser seam: rest can be skipped to the next focus item", async () => {
 });
 
 test("browser seam: mute suppresses action and rest cues without changing the saved actual value", async () => {
-  const fixture = timedAppFixture();
-  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 3;
   const clock = deterministicClock();
+  const fixture = timedAppFixture(clock);
+  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 3;
   const audioEvents = [];
   const browser = await openBrowser(fixture.handler, async () => null, { clock, audioEvents });
 
@@ -722,8 +730,8 @@ test("browser seam: mute suppresses action and rest cues without changing the sa
 });
 
 test("browser seam: visibility loss pauses timed execution and foreground recovery waits for manual continue", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const audioEvents = [];
   const wakeLock = wakeLockHarness();
   const browser = await openBrowser(handler, async () => null, { clock, audioEvents, wakeLock: wakeLock.wakeLock });
@@ -760,8 +768,8 @@ test("browser seam: visibility loss pauses timed execution and foreground recove
 });
 
 test("browser seam: visibility loss during resume keeps client and server paused", async () => {
-  const fixture = timedAppFixture();
   const clock = deterministicClock();
+  const fixture = timedAppFixture(clock);
   const schedules = [];
   let releaseResume;
   const browser = await openBrowser(fixture.handler, async ({ path, server }) => {
@@ -780,6 +788,7 @@ test("browser seam: visibility loss during resume keeps client and server paused
   await settle();
   browser.root.querySelector('[data-action="start-timed"]').click();
   await settle();
+  clock.advance(1);
   browser.root.querySelector('[data-action="toggle-timer"]').click();
   await settle();
   schedules.length = 0;
@@ -799,8 +808,8 @@ test("browser seam: visibility loss during resume keeps client and server paused
 });
 
 test("browser seam: delayed resume audio cannot restart a hidden session", async () => {
-  const fixture = timedAppFixture();
   const clock = deterministicClock();
+  const fixture = timedAppFixture(clock);
   const schedules = [];
   let activationCount = 0;
   let resolveResumeAudio;
@@ -821,6 +830,7 @@ test("browser seam: delayed resume audio cannot restart a hidden session", async
   await settle();
   browser.root.querySelector('[data-action="start-timed"]').click();
   await settle();
+  clock.advance(1);
   browser.root.querySelector('[data-action="toggle-timer"]').click();
   await settle();
   schedules.length = 0;
@@ -840,8 +850,8 @@ test("browser seam: delayed resume audio cannot restart a hidden session", async
 });
 
 test("browser seam: Wake Lock release pauses active execution and manual continue can recover", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const wakeLock = wakeLockHarness();
   const browser = await openBrowser(handler, async () => null, { clock, wakeLock: wakeLock.wakeLock });
 
@@ -864,16 +874,16 @@ test("browser seam: Wake Lock release pauses active execution and manual continu
 });
 
 test("browser seam: unsupported or denied Wake Lock shows fallback without blocking Start Action", async () => {
-  const unsupported = timedAppFixture();
   const unsupportedClock = deterministicClock();
+  const unsupported = timedAppFixture(unsupportedClock);
   const unsupportedBrowser = await openBrowser(unsupported.handler, async () => null, { clock: unsupportedClock });
   unsupportedBrowser.root.querySelector('[data-action="start"]').click();
   await settle();
   assert.match(unsupportedBrowser.root.innerHTML, /无法保持屏幕常亮/);
   assert.equal(unsupportedBrowser.root.querySelector('[data-action="start-timed"]').disabled, false);
 
-  const denied = timedAppFixture();
   const deniedClock = deterministicClock();
+  const denied = timedAppFixture(deniedClock);
   const deniedWakeLock = wakeLockHarness({ reject: true });
   const deniedBrowser = await openBrowser(denied.handler, async () => null, { clock: deniedClock, wakeLock: deniedWakeLock.wakeLock });
   deniedBrowser.root.querySelector('[data-action="start"]').click();
@@ -883,16 +893,16 @@ test("browser seam: unsupported or denied Wake Lock shows fallback without block
   assert.equal(deniedBrowser.root.querySelector('[data-action="start-timed"]').disabled, false);
 });
 
-function timedAppFixture() {
-  const value = appFixture();
+function timedAppFixture(clock = null) {
+  const value = appFixture(clock ? { clock: () => new Date(clock.now()) } : undefined);
   const todaySlot = value.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)];
   todaySlot.blocks[0].exercises[0].sets[0].target = { metric: "duration_sec", min: 3, max: 5 };
   return value;
 }
 
 test("browser seam: fixed duration runs preparation and tempo cues, pauses with the Session timer, and only saves after explicit completion", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const audioEvents = [];
   const browser = await openBrowser(handler, async () => null, { clock, audioEvents });
 
@@ -988,8 +998,8 @@ test("browser seam: expired calendar Sessions show 未完成 and expose one-clic
 });
 
 test("browser seam: audio initialization failure is visible while visual timing remains usable", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const browser = await openBrowser(handler, async () => null, {
     clock,
     audio: {
@@ -1008,8 +1018,8 @@ test("browser seam: audio initialization failure is visible while visual timing 
 });
 
 test("browser seam: unmuting retries audio activation and clears a stale playback error", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   let activationAttempts = 0;
   const browser = await openBrowser(handler, async () => null, {
     clock,
@@ -1037,8 +1047,8 @@ test("browser seam: unmuting retries audio activation and clears a stale playbac
 });
 
 test("browser seam: action cues are pre-scheduled on the countdown timeline", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const schedules = [];
   const browser = await openBrowser(handler, async () => null, {
     clock,
@@ -1077,8 +1087,8 @@ test("browser seam: action cues are pre-scheduled on the countdown timeline", as
 });
 
 test("browser seam: delayed UI callbacks never catch-up play missed cues", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const schedules = [];
   const browser = await openBrowser(handler, async () => null, {
     clock,
@@ -1101,8 +1111,8 @@ test("browser seam: delayed UI callbacks never catch-up play missed cues", async
 });
 
 test("browser seam: pausing while audio activation is pending cannot re-arm cancelled cues", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const schedules = [];
   let resolveActivation;
   const browser = await openBrowser(handler, async () => null, {
@@ -1117,6 +1127,7 @@ test("browser seam: pausing while audio activation is pending cannot re-arm canc
   browser.root.querySelector('[data-action="start"]').click();
   await settle();
   browser.root.querySelector('[data-action="start-timed"]').click();
+  clock.advance(1);
   browser.context.document.hidden = true;
   browser.context.document.dispatchEvent({ type: "visibilitychange" });
   await settle();
@@ -1129,8 +1140,8 @@ test("browser seam: pausing while audio activation is pending cannot re-arm canc
 });
 
 test("browser seam: preparation countdown starts immediately while audio activation is pending", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const schedules = [];
   let resolveActivation;
   const browser = await openBrowser(handler, async () => null, {
@@ -1158,8 +1169,8 @@ test("browser seam: preparation countdown starts immediately while audio activat
 });
 
 test("browser seam: muting again invalidates an in-flight unmute activation", async () => {
-  const { handler } = timedAppFixture();
   const clock = deterministicClock();
+  const { handler } = timedAppFixture(clock);
   const schedules = [];
   let activationCount = 0;
   let resolveUnmute;
@@ -1193,9 +1204,9 @@ test("browser seam: muting again invalidates an in-flight unmute activation", as
 });
 
 test("browser seam: natural rest completion does not cancel the completion sound tail", async () => {
-  const fixture = appFixture();
-  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 1;
   const clock = deterministicClock();
+  const fixture = appFixture({ clock: () => new Date(clock.now()) });
+  fixture.store.athletes.get("athlete-a@example.invalid").plan_revisions.at(-1).week[weekdayKey(today)].blocks[0].exercises[0].sets[0].rest_after_sec = 1;
   let cancelCount = 0;
   const browser = await openBrowser(fixture.handler, async () => null, {
     clock,

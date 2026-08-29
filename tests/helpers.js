@@ -2,8 +2,21 @@ import { addDays, localDate, opaqueKey, weekdayKey, WEEKDAYS } from "../src/util
 import { emptyAthlete, MemoryStore } from "../src/store.js";
 import { createHandler } from "../src/http.js";
 
-export const today = localDate(new Date(), "Asia/Shanghai");
+export const TEST_NOW = "2026-08-29T04:00:00.000Z";
+export const TEST_TODAY = localDate(new Date(TEST_NOW), "Asia/Shanghai");
+export const today = TEST_TODAY;
 export const testAgentSecret = "test-only-agent-token-secret";
+let requestKeySequence = 0;
+
+/** @param {number} [offsetMs] @returns {string} */
+export function testInstant(offsetMs = 0) {
+  return new Date(Date.parse(TEST_NOW) + offsetMs).toISOString();
+}
+
+/** @param {string} date @returns {Date} */
+function fixtureInstant(date) {
+  return date === TEST_TODAY ? new Date(TEST_NOW) : new Date(`${date}T04:00:00.000Z`);
+}
 
 /** @returns {any} */
 export function workout(title = "下肢力量") {
@@ -17,21 +30,32 @@ export function week(slot = workout()) { return { monday: slot, tuesday: { kind:
 /** @returns {string} */
 export function packageText(effectiveFrom = addDays(today, 1), slot = workout("未来训练")) { return JSON.stringify({ schema_version: 1, effective_from: effectiveFrom, week: week(slot) }); }
 
-/** @returns {any} */
-export function fixture() {
+/** @param {{ today?: string }} [options] @returns {any} */
+export function fixture(options = {}) {
+  const fixtureDate = options.today ?? today;
   const athleteA = emptyAthlete({ email: "athlete-a@example.invalid", displayName: "Athlete A", timezone: "Asia/Shanghai" });
   const athleteB = emptyAthlete({ email: "athlete-b@example.invalid", displayName: "Athlete B", timezone: "Asia/Shanghai" });
-  const oldDate = addDays(today, -7);
+  const oldDate = addDays(fixtureDate, -7);
   /** @type {Record<string, any>} */
   const template = Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
-  template[weekdayKey(today)] = workout();
-  template[WEEKDAYS[(WEEKDAYS.indexOf(weekdayKey(today)) + 1) % 7]] = { kind: "rest" };
-  athleteA.plan_revisions.push({ revision_key: opaqueKey("rev"), revision_sequence: 1, created_at: new Date().toISOString(), effective_from: oldDate, week: template });
+  template[weekdayKey(fixtureDate)] = workout();
+  template[WEEKDAYS[(WEEKDAYS.indexOf(weekdayKey(fixtureDate)) + 1) % 7]] = { kind: "rest" };
+  athleteA.plan_revisions.push({ revision_key: opaqueKey("rev"), revision_sequence: 1, created_at: fixtureInstant(fixtureDate).toISOString(), effective_from: oldDate, week: template });
   return { athleteA, athleteB, store: new MemoryStore([athleteA, athleteB]) };
 }
 
-/** @returns {any} */
-export function appFixture() { const value = fixture(); return { ...value, handler: createHandler({ STORE: value.store, LOCAL_AUTH: "true", DEFAULT_TIMEZONE: "Asia/Shanghai", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret }) }; }
+/** @param {{ clock?: () => Date, today?: string }} [options] @returns {any} */
+export function appFixture(options = {}) {
+  const fixtureDate = options.today ?? TEST_TODAY;
+  const value = fixture({ today: fixtureDate });
+  return {
+    ...value,
+    handler: createHandler(
+      { STORE: value.store, LOCAL_AUTH: "true", DEFAULT_TIMEZONE: "Asia/Shanghai", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret },
+      { clock: options.clock ?? (() => fixtureInstant(fixtureDate)) },
+    ),
+  };
+}
 
 /** @param {any} handler @param {string} path @param {any} options @param {string} email @returns {Promise<any>} */
 export async function call(handler, path, options = {}, email = "athlete-a@example.invalid") {
@@ -69,4 +93,4 @@ export async function createAgentToken(handler, email = "athlete-a@example.inval
 /** @param {any} options @param {any} body @returns {any} */
 export function json(options = {}, body = {}) { return { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) }, body: JSON.stringify(body) }; }
 /** @param {any} body @param {string} id @returns {any} */
-export const post = (body, id = `${Date.now()}-${Math.random()}`) => json({ method: "POST", headers: { "Idempotency-Key": id } }, body);
+export const post = (body, id = `test-request-${++requestKeySequence}`) => json({ method: "POST", headers: { "Idempotency-Key": id } }, body);

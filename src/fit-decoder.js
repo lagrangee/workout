@@ -1,8 +1,7 @@
-// @ts-nocheck
+// @ts-check
 
-import { Decoder, Stream } from "@garmin/fitsdk";
+import FitParser from "fit-file-parser";
 
-const SEMICIRCLE_TO_DEGREES = 180 / 0x80000000;
 const FIT_DECODE_STATUSES = new Set(["complete", "error", "skipped"]);
 
 /**
@@ -31,25 +30,11 @@ export function decodeFitActivity(value) {
   if (!bytes || bytes.byteLength === 0) throw new FitDecodeError("fit_empty", "FIT artifact is empty");
 
   try {
-    const decoder = new Decoder(Stream.fromByteArray(Array.from(bytes)));
-    if (!decoder.isFIT()) throw new FitDecodeError("fit_invalid_signature", "FIT artifact has an invalid signature");
-    if (!decoder.checkIntegrity()) throw new FitDecodeError("fit_integrity_failed", "FIT artifact failed header or CRC validation");
-
-    const decoded = decoder.read({
-      applyScaleAndOffset: true,
-      convertDateTimesToDates: true,
-      includeUnknownData: true,
-      mergeHeartRates: true,
-    });
-    const decoderErrors = (decoded.errors ?? []).map((error) => String(error?.message ?? error)).filter(Boolean);
-    if (decoderErrors.length) {
-      throw new FitDecodeError("fit_decode_failed", "FIT decoder returned errors", { errors: decoderErrors.slice(0, 8) });
-    }
-
-    const records = Array.isArray(decoded.messages?.recordMesgs) ? decoded.messages.recordMesgs : [];
-    const points = records.flatMap((record) => {
-      const lat = semicircleToDegrees(record?.positionLat ?? record?.position_lat, 90);
-      const lon = semicircleToDegrees(record?.positionLong ?? record?.position_long, 180);
+    const decoded = parseFit(bytes);
+    const records = Array.isArray(decoded.records) ? decoded.records : [];
+    const points = records.flatMap((/** @type {Record<string, any>} */ record) => {
+      const lat = coordinate(record?.position_lat ?? record?.positionLat, 90);
+      const lon = coordinate(record?.position_long ?? record?.positionLong, 180);
       if (lat === null || lon === null) return [];
       return [{
         lat,
@@ -58,23 +43,24 @@ export function decodeFitActivity(value) {
         timestamp: isoOrNull(record?.timestamp),
       }];
     });
-    const session = Array.isArray(decoded.messages?.sessionMesgs) ? decoded.messages.sessionMesgs.at(-1) : null;
+    const session = Array.isArray(decoded.sessions) ? decoded.sessions.at(-1) : null;
     const firstRecord = records[0] ?? null;
     const lastRecord = records.at(-1) ?? null;
-    const developerFieldRecordCount = records.filter((record) => record?.developerFields && Object.keys(record.developerFields).length > 0).length;
+    const developerFieldNames = new Set((decoded.field_descriptions ?? []).map((/** @type {Record<string, any>} */ field) => field?.field_name).filter((/** @type {unknown} */ name) => typeof name === "string" && name.length > 0));
+    const developerFieldRecordCount = records.filter((/** @type {Record<string, any>} */ record) => [...developerFieldNames].some((name) => Object.hasOwn(record, name))).length;
 
     return {
       status: "complete",
       integrity: true,
       points,
       metrics: {
-        distance_m: finiteNonNegative(session?.totalDistance ?? lastRecord?.distance),
-        duration_sec: finiteNonNegative(session?.totalTimerTime ?? session?.totalElapsedTime),
-        start_at: isoOrNull(session?.startTime ?? firstRecord?.timestamp),
+        distance_m: finiteNonNegative(session?.total_distance ?? session?.totalDistance ?? lastRecord?.distance),
+        duration_sec: finiteNonNegative(session?.total_timer_time ?? session?.total_elapsed_time ?? session?.totalTimerTime ?? session?.totalElapsedTime),
+        start_at: isoOrNull(session?.start_time ?? session?.startTime ?? firstRecord?.timestamp),
         end_at: isoOrNull(session?.timestamp ?? lastRecord?.timestamp),
       },
       diagnostics: {
-        decoder: "@garmin/fitsdk",
+        decoder: "fit-file-parser",
         record_count: records.length,
         gps_point_count: points.length,
         developer_field_record_count: developerFieldRecordCount,
@@ -87,6 +73,30 @@ export function decodeFitActivity(value) {
   }
 }
 
+/** @param {Uint8Array} bytes */
+function parseFit(bytes) {
+  const parser = new FitParser({ force: false, mode: "list", lengthUnit: "m" });
+  const input = /** @type {ArrayBuffer} */ (bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  /** @type {any} */
+  let decoded;
+  /** @type {unknown} */
+  let parseError;
+  parser.parse(input, (error, data) => {
+    parseError = error;
+    decoded = data;
+  });
+  if (!parseError && decoded) return decoded;
+
+  const message = String(parseError ?? "FIT decoder did not return data");
+  if (/CRC mismatch|CRC missing|data exceeds input/i.test(message)) {
+    throw new FitDecodeError("fit_integrity_failed", "FIT artifact failed header or CRC validation");
+  }
+  if (/small|header size|missing '\.FIT'/i.test(message)) {
+    throw new FitDecodeError("fit_invalid_signature", "FIT artifact has an invalid signature");
+  }
+  throw new FitDecodeError("fit_decode_failed", "FIT decoder returned errors", { errors: [message].slice(0, 8) });
+}
+
 /** @param {unknown} value @returns {Uint8Array|null} */
 export function toFitBytes(value) {
   if (value === null || value === undefined) return null;
@@ -95,19 +105,17 @@ export function toFitBytes(value) {
   if (typeof ArrayBuffer !== "undefined" && value instanceof ArrayBuffer) return new Uint8Array(value);
   if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   if (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) return Uint8Array.from(value);
-  if (value && typeof value === "object" && Array.isArray(value.data)) return toFitBytes(value.data);
+  if (value && typeof value === "object" && Array.isArray(/** @type {{ data?: unknown }} */ (value).data)) return toFitBytes(/** @type {{ data: unknown }} */ (value).data);
   if (typeof value === "string" && value.startsWith("base64:")) {
     try { return new Uint8Array(Buffer.from(value.slice("base64:".length), "base64")); } catch { return null; }
   }
   return null;
 }
 
-/** @param {unknown} value @returns {number|null} */
-function semicircleToDegrees(value, limit) {
+/** @param {unknown} value @param {number} limit @returns {number|null} */
+function coordinate(value, limit) {
   const number = finiteNumber(value);
-  if (number === null || number === 0x7fffffff || number === -0x80000000) return null;
-  const degrees = number * SEMICIRCLE_TO_DEGREES;
-  return degrees >= -limit && degrees <= limit ? degrees : null;
+  return number !== null && number >= -limit && number <= limit ? number : null;
 }
 
 /** @param {unknown} value @returns {number|null} */

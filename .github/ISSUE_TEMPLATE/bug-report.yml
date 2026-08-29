@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a reproducible Workout Tracker defect using synthetic data
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not include credentials, bearer URLs, Athlete data, FIT files,
+        production IDs, or private receipts. Report security issues privately
+        using SECURITY.md.
+  - type: input
+    id: revision
+    attributes:
+      label: Tested revision
+      description: Commit SHA or released version where the defect occurs.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Exact steps and synthetic fixture needed to reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract and domain impact
+      description: Relevant domain terms, API contract, migration, or compatibility impact.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification evidence
+      description: Commands, exit status, browser scenario, and sanitized output.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and security impact
+      description: State whether identity, training data, capabilities, or isolation are affected.
+    validations:
+      required: true
+  - type: textarea
+    id: ui
+    attributes:
+      label: UI evidence
+      description: For visible defects, attach synthetic-data screenshots or a recording.

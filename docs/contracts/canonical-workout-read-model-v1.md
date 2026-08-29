@@ -10,9 +10,10 @@ Obsidian adapters.
 
 Plan rows assemble into an Athlete-owned `plan_id`, immutable Plan Revisions,
 weekday slots, Exercise Prescriptions, and ordered Prescribed Sets. The stored
-`name_snapshot` remains part of a revision, while a Current Plan projection
-resolves the registry's current formal `name` from stable `exercise_id`.
-Historical Session snapshots never use that current-name lookup.
+`name_snapshot` and Exercise Category remain part of a revision, while a
+Current Plan projection resolves the registry's current formal `name` from
+stable `exercise_id`. Historical Session snapshots never use that current-name
+lookup and retain the category selected by their Plan Revision.
 
 A workout slot may carry one versioned `recording_intent` with COROS sport and
 route matching criteria. D1 stores those criteria on the Plan Slot. The
@@ -29,10 +30,10 @@ mode/load, tempo, rest, and `side` (`none`, `both`, `left`, or `right`). Set
 Results carry `status`, actual metric/value or explicit null, canonical kg
 load, RIR, note, and completion timing.
 
-The Session snapshot uses the historical `name` and `definition_version`
-stored at creation. An alternating occurrence is displayed as one counter by
-the page but remains two side-specific Completion Items in the assembled
-object.
+The Session snapshot uses the historical `name`, `definition_version`, and
+Exercise Category stored at creation. An alternating occurrence is displayed
+as one counter by the page but remains two side-specific Completion Items in
+the assembled object.
 
 ## Exercise history
 

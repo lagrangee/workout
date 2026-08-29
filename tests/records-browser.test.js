@@ -299,7 +299,11 @@ test("ticket 03 browser seam: Records opens the source-separated overview", asyn
 
 test("ticket 03 browser seam: Calendar shows a compact aerobic summary and links into the date-filtered Records list", async () => {
   const targetDate = today;
-  const browser = await seededBrowser({ activities: [indoorActivity({ local_date: targetDate })] });
+  const browser = await seededBrowser({ activities: [indoorActivity({
+    local_date: targetDate,
+    started_at: `${targetDate}T02:00:00.000Z`,
+    ended_at: `${targetDate}T02:35:00.000Z`,
+  })] });
   browser.root.querySelector('[data-view="calendar"]').click();
   await settle();
   const day = browser.root.querySelector(`[data-action="calendar-select"][data-date="${targetDate}"]`);
@@ -329,6 +333,8 @@ test("COROS route plan keeps one compact status row and removes duplicate route 
     activity_ref: "coros-chicken-line",
     source_ref: "coros:activity:coros-chicken-line",
     local_date: today,
+    started_at: `${today}T01:00:00.000Z`,
+    ended_at: `${today}T03:00:00.000Z`,
     sport_type: 102,
     sport_name: "trail_run",
     route_key: "香山鸡腿线",

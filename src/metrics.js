@@ -1,11 +1,14 @@
-// @ts-nocheck
+// @ts-check
 
 import { addDays, dateRange, dateSpan, isValidLocalDate, localDate, mondayOf, roundHalfUp } from "./util.js";
 import { completionFraction, scheduleEntry, sessionSummary } from "./plan.js";
 import { assembleExerciseHistory } from "./canonical-assembler.js";
 import { resolveExercise } from "./exercise-registry.js";
 
-/** @param {any} state @param {string} from @param {string} to @param {Date} now */
+/** @typedef {{ sessions: any[], plan_revisions: any[], timezone: string }} MetricState */
+/** @typedef {{ from: string, to: string }} MetricPeriod */
+
+/** @param {MetricState} state @param {string} from @param {string} to @param {Date} now */
 export function metricSet(state, from, to, now = new Date()) {
   const dates = dateRange(from, to);
   const entries = dates.map((date) => scheduleEntry(state, date, now));
@@ -25,12 +28,16 @@ export function metricSet(state, from, to, now = new Date()) {
     return sum + (session ? completionFraction(session) : 0);
   }, 0);
   const sessionRefs = trainingSessions.map((session) => `session:${session.scheduled_date}:${session.session_key}`);
-  const duration = Math.round(trainingSessions.reduce((sum, session) => sum + session.training_intervals.reduce((total, interval) => interval.ended_at ? total + (Date.parse(interval.ended_at) - Date.parse(interval.started_at)) / 1000 : total, 0), 0));
+  const duration = Math.round(trainingSessions.reduce((sum, session) => sum + /** @type {any[]} */ (session.training_intervals).reduce((total, interval) => interval.ended_at ? total + (Date.parse(interval.ended_at) - Date.parse(interval.started_at)) / 1000 : total, 0), 0));
   const strengthDates = new Set();
   for (const session of trainingSessions) {
-    const strengthOccurrences = new Set(session.snapshot.blocks.flatMap((block) => block.exercises.filter((exercise) => exercise.category === "strength" || exercise.exercise_id).map((exercise) => exercise.exercise_occurrence_key)));
-    const strengthItems = new Set(session.snapshot.completion_items.filter((item) => strengthOccurrences.has(item.exercise_occurrence_key)).map((item) => item.completion_item_key));
-    if (session.completion_results.some((result) => strengthItems.has(result.completion_item_key))) strengthDates.add(session.scheduled_date);
+    const strengthOccurrences = new Set(/** @type {any[]} */ (session.snapshot.blocks).flatMap((block) => /** @type {any[]} */ (block.exercises).filter((exercise) => exercise.category === "strength").map((exercise) => exercise.exercise_occurrence_key ?? exercise.occurrence_key)));
+    const strengthItems = new Set(/** @type {any[]} */ (session.snapshot.completion_items).filter((item) => strengthOccurrences.has(item.exercise_occurrence_key)).map((item) => item.completion_item_key));
+    const hasCompletedStrengthItem = /** @type {any[]} */ (session.completion_results).some((result) => {
+      const completed = session.snapshot.schema_version === 2 ? result.status === "completed" : result.completed === true;
+      return completed && strengthItems.has(result.completion_item_key);
+    });
+    if (hasCompletedStrengthItem) strengthDates.add(session.scheduled_date);
   }
   const rpes = trainingSessions.map((session) => session.session_rpe).filter((rpe) => rpe !== null);
   return {
@@ -44,7 +51,7 @@ export function metricSet(state, from, to, now = new Date()) {
   };
 }
 
-/** @param {any} state @param {string} today */
+/** @param {MetricState} state @param {string} today */
 export function streakMetric(state, today) {
   let cursor = today;
   let value = 0;
@@ -61,7 +68,7 @@ export function streakMetric(state, today) {
   return { value, first_qualifying_date: first, last_qualifying_date: last };
 }
 
-/** @param {any} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string|undefined} range */
+/** @param {MetricState} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string|undefined} range */
 export function resolvePeriod(state, now, from, to, preset, range) {
   const today = localDate(now, state.timezone);
   if (preset !== undefined && range !== undefined) return { error: { code: "invalid_period", field: "range", message: "range and preset are mutually exclusive" } };
@@ -76,7 +83,7 @@ export function resolvePeriod(state, now, from, to, preset, range) {
     if (!isValidLocalDate(from)) return { error: { code: "invalid_period", field: "from", message: "from must be a valid local date" } };
     if (!isValidLocalDate(to)) return { error: { code: "invalid_period", field: "to", message: "to must be a valid local date" } };
     if (from > to) return { error: { code: "invalid_period", field: "from", message: "from must not be after to" } };
-    if (dateSpan(from, to) > 3660) return { error: { code: "invalid_period", field: "to", message: "The selected period cannot exceed 3660 days" } };
+    if ((dateSpan(from, to) ?? Infinity) > 3660) return { error: { code: "invalid_period", field: "to", message: "The selected period cannot exceed 3660 days" } };
     return { from, to };
   }
   if (selector === "7d") return { from: addDays(today, -6), to: today };
@@ -89,7 +96,7 @@ export function resolvePeriod(state, now, from, to, preset, range) {
   return { error: { code: "invalid_period", field: selectorField, message: "unsupported period preset or range" } };
 }
 
-/** @param {any} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string} bucket @param {string|undefined} range */
+/** @param {MetricState} state @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string} bucket @param {string} [range] */
 export function progressModel(state, now, from, to, preset, bucket = "week", range) {
   const period = resolvePeriod(state, now, from, to, preset, range);
   if (period.error) return period;
@@ -97,13 +104,14 @@ export function progressModel(state, now, from, to, preset, bucket = "week", ran
     "day", "week", "month",
   ].includes(bucket)) return { error: { code: "invalid_request", field: "bucket", message: "bucket must be day, week, or month" } };
   const today = localDate(now, state.timezone);
+  /** @param {string} start @param {string} end */
   const makeMetric = (start, end) => metricSet(state, start, end, now);
   const metrics = makeMetric(period.from, period.to);
   const buckets = progressBuckets(period, bucket, makeMetric);
   const weekBuckets = progressBuckets(period, "week", makeMetric).map(({ from, to, is_partial, week_start, week_end, included_from, included_to, metrics: bucketMetrics }) => ({ week_start, week_end, included_from, included_to, is_partial, metrics: bucketMetrics }));
-  const canonical = state.sessions.some((session) => session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_id)));
+  const canonical = state.sessions.some((session) => /** @type {any[]} */ (session.snapshot.blocks).some((block) => /** @type {any[]} */ (block.exercises).some((exercise) => exercise.exercise_id)));
   const exercises = exerciseKeys(state).map((exerciseKey) => {
-    const performedSessionCount = state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to && session.snapshot.blocks.some((block) => block.exercises.some((exercise) => (exercise.exercise_id ?? exercise.exercise_key) === exerciseKey && session.completion_results.some((result) => session.snapshot.completion_items.some((item) => item.completion_item_key === result.completion_item_key && item.exercise_occurrence_key === (exercise.exercise_occurrence_key ?? exercise.occurrence_key)))))).length;
+    const performedSessionCount = state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to && /** @type {any[]} */ (session.snapshot.blocks).some((block) => /** @type {any[]} */ (block.exercises).some((exercise) => (exercise.exercise_id ?? exercise.exercise_key) === exerciseKey && /** @type {any[]} */ (session.completion_results).some((result) => /** @type {any[]} */ (session.snapshot.completion_items).some((item) => item.completion_item_key === result.completion_item_key && item.exercise_occurrence_key === (exercise.exercise_occurrence_key ?? exercise.occurrence_key)))))).length;
     return canonical ? { exercise_id: exerciseKey, exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: performedSessionCount, detail_ref: `exercise:${exerciseKey}` } : { exercise_key: exerciseKey, current_name: latestExerciseName(state, exerciseKey), performed_session_count: performedSessionCount, detail_ref: `exercise:${exerciseKey}` };
   });
   return {
@@ -121,12 +129,15 @@ export function progressModel(state, now, from, to, preset, bucket = "week", ran
   };
 }
 
+/** @param {MetricPeriod} period @param {string} timezone @param {string} today */
 function periodContext(period, timezone, today) {
   const includesCurrentDate = period.from <= today && today <= period.to;
   return { ...period, timezone, includes_from: true, includes_to: true, includes_current_date: includesCurrentDate, current_date_may_be_incomplete: includesCurrentDate };
 }
 
+/** @param {MetricPeriod} period @param {string} bucket @param {(from: string, to: string) => any} makeMetric */
 function progressBuckets(period, bucket, makeMetric) {
+  /** @type {any[]} */
   const result = [];
   let cursor = bucketStart(period.from, bucket);
   while (cursor <= period.to) {
@@ -142,54 +153,61 @@ function progressBuckets(period, bucket, makeMetric) {
   return result;
 }
 
+/** @param {string} date @param {string} bucket */
 function bucketStart(date, bucket) {
   if (bucket === "day") return date;
   if (bucket === "week") return mondayOf(date);
   return `${date.slice(0, 7)}-01`;
 }
+/** @param {string} date @param {string} bucket */
 function bucketEnd(date, bucket) {
   if (bucket === "day") return date;
   if (bucket === "week") return addDays(date, 6);
   return addDays(nextMonthStart(date), -1);
 }
+/** @param {string} date @param {string} bucket */
 function nextBucketStart(date, bucket) {
   if (bucket === "day") return addDays(date, 1);
   if (bucket === "week") return addDays(date, 7);
   return nextMonthStart(date);
 }
+/** @param {string} date */
 function nextMonthStart(date) {
   const [year, month] = date.slice(0, 7).split("-").map(Number);
   const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
   return `${String(next.year).padStart(4, "0")}-${String(next.month).padStart(2, "0")}-01`;
 }
 
-/** @param {any} state */
+/** @param {MetricState} state */
 function exerciseKeys(state) {
-  return [...new Set(state.sessions.flatMap((session) => session.snapshot.blocks.flatMap((block) => block.exercises.map((exercise) => exercise.exercise_id ?? exercise.exercise_key).filter(Boolean))))].sort();
+  return [...new Set(state.sessions.flatMap((session) => /** @type {any[]} */ (session.snapshot.blocks).flatMap((block) => /** @type {any[]} */ (block.exercises).map((exercise) => exercise.exercise_id ?? exercise.exercise_key).filter(Boolean))))].sort();
 }
-/** @param {any} state @param {string} key */
+/** @param {MetricState} state @param {string} key */
 function latestExerciseName(state, key) {
   if (resolveExercise(key)) return resolveExercise(key).name;
-  const occurrence = state.sessions.slice().sort((left, right) => right.scheduled_date.localeCompare(left.scheduled_date) || right.updated_at.localeCompare(left.updated_at)).flatMap((session) => session.snapshot.blocks.flatMap((block) => block.exercises)).find((exercise) => exercise.exercise_key === key);
+  const occurrence = state.sessions.slice().sort((left, right) => right.scheduled_date.localeCompare(left.scheduled_date) || right.updated_at.localeCompare(left.updated_at)).flatMap((session) => /** @type {any[]} */ (session.snapshot.blocks).flatMap((block) => /** @type {any[]} */ (block.exercises))).find((exercise) => exercise.exercise_key === key);
   return occurrence?.name ?? key;
 }
 
-/** @param {any} state @param {string} exerciseKey @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string|undefined} range */
+/** @param {MetricState} state @param {string} exerciseKey @param {Date} now @param {string|undefined} from @param {string|undefined} to @param {string|undefined} preset @param {string|undefined} range */
 export function exerciseDetail(state, exerciseKey, now, from, to, preset, range) {
   const period = resolvePeriod(state, now, from, to, preset ?? (range === undefined && from === undefined && to === undefined ? "12w" : undefined), range);
   if (period.error) return period;
-  if (state.sessions.some((session) => session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_id === exerciseKey)))) return canonicalExerciseDetail(state, exerciseKey, now, period);
+  if (state.sessions.some((session) => /** @type {any[]} */ (session.snapshot.blocks).some((block) => /** @type {any[]} */ (block.exercises).some((exercise) => exercise.exercise_id === exerciseKey)))) return canonicalExerciseDetail(state, exerciseKey, now, period);
   const matching = state.sessions.filter((session) => (session.status === "completed" || session.status === "partial") && session.scheduled_date >= period.from && session.scheduled_date <= period.to);
+  /** @type {any[]} */
   const observations = [];
+  /** @type {Record<string, any[]>} */
   const series = { none: [], left: [], right: [] };
-  let exists = state.sessions.some((session) => session.snapshot.blocks.some((block) => block.exercises.some((exercise) => exercise.exercise_key === exerciseKey)));
+  let exists = state.sessions.some((session) => /** @type {any[]} */ (session.snapshot.blocks).some((block) => /** @type {any[]} */ (block.exercises).some((exercise) => exercise.exercise_key === exerciseKey)));
   for (const session of matching) {
-    const occurrences = session.snapshot.blocks.flatMap((block) => block.exercises).filter((exercise) => exercise.exercise_key === exerciseKey);
+    const occurrences = /** @type {any[]} */ (session.snapshot.blocks).flatMap((block) => /** @type {any[]} */ (block.exercises)).filter((exercise) => exercise.exercise_key === exerciseKey);
     if (!occurrences.length) continue;
+    /** @type {any[]} */
     const sets = [];
     for (const occurrence of occurrences) {
       for (const result of session.completion_results) {
-        const item = session.snapshot.completion_items.find((candidate) => candidate.completion_item_key === result.completion_item_key && candidate.exercise_occurrence_key === occurrence.exercise_occurrence_key);
+        const item = /** @type {any[]} */ (session.snapshot.completion_items).find((candidate) => candidate.completion_item_key === result.completion_item_key && candidate.exercise_occurrence_key === occurrence.exercise_occurrence_key);
         if (!item) continue;
         const observation = { completion_item_key: result.completion_item_key, set_key: item.set_key, side: item.side, actual: result.actual, resistance: result.resistance, total_external_kg: result.resistance?.mode === "external_weight" ? (result.resistance.load_kg === null ? null : result.resistance.load_kg * result.resistance.quantity) : null, assistance_kg: result.resistance?.mode === "assisted_weight" ? result.resistance.load_kg : null, rir: result.rir };
         sets.push(observation);
@@ -204,17 +222,18 @@ export function exerciseDetail(state, exerciseKey, now, from, to, preset, range)
   return { period: periodContext(period, state.timezone, localDate(now, state.timezone)), exercise_key: exerciseKey, display_name_history: exerciseNameHistory(state, exerciseKey), performed_session_count: observations.length, observations, series };
 }
 
-/** @param {any} state @param {string} exerciseId @param {Date} now @param {any} period */
+/** @param {MetricState} state @param {string} exerciseId @param {Date} now @param {MetricPeriod} period */
 function canonicalExerciseDetail(state, exerciseId, now, period) {
   const history = assembleExerciseHistory(state.sessions, exerciseId, { from: period.from, to: period.to });
   if (!history.display_name_history.length) return { error: { code: "not_found", message: "Exercise not found" } };
   const observations = history.observations.map((observation) => ({
     ...observation,
-    sets: observation.sets.map((set) => ({ ...set, set_key: set.set_id, total_external_kg: set.total_external_kg })),
+    sets: /** @type {any[]} */ (observation.sets).map((set) => ({ ...set, set_key: set.set_id, total_external_kg: set.total_external_kg })),
   }));
   return { period: periodContext(period, state.timezone, localDate(now, state.timezone)), exercise_id: exerciseId, exercise_key: exerciseId, current_name: history.current_name, display_name_history: history.display_name_history, performed_session_count: history.performed_session_count, observations, series: history.series };
 }
 
+/** @param {MetricState} state @param {string} exerciseKey */
 function exerciseNameHistory(state, exerciseKey) {
   const entries = new Map();
   for (const session of state.sessions) for (const block of session.snapshot.blocks) for (const exercise of block.exercises) if (exercise.exercise_key === exerciseKey) {
@@ -226,7 +245,11 @@ function exerciseNameHistory(state, exerciseKey) {
   return [...entries.values()].sort((left, right) => left.first_date.localeCompare(right.first_date));
 }
 
+/** @param {any[]} sets @param {string} metric */
 function sumMetric(sets, metric) { const values = sets.filter((set) => set.actual.metric === metric).map((set) => set.actual.value); return values.length ? values.reduce((sum, value) => sum + value, 0) : null; }
+/** @param {any[]} values @param {(value: any) => number|null} getter */
 function maxValue(values, getter) { const numbers = values.map(getter).filter((value) => value !== null); return numbers.length ? Math.max(...numbers) : null; }
+/** @param {any[]} values @param {(value: any) => number|null} getter */
 function minValue(values, getter) { const numbers = values.map(getter).filter((value) => value !== null); return numbers.length ? Math.min(...numbers) : null; }
+/** @param {any} a @param {any} b */
 function sortObservation(a, b) { return a.scheduled_date.localeCompare(b.scheduled_date) || a.session_key.localeCompare(b.session_key) || a.completion_item_key.localeCompare(b.completion_item_key); }

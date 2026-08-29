@@ -56,3 +56,8 @@ Alternating occurrences expand to independent left and right Completion Items.
 The page may present one alternating counter, but the record keeps one result
 per side. The server derives terminal Session status from completed results;
 clients do not submit status.
+
+Each canonical snapshot Exercise also retains the Registry `category` selected
+by its Plan Revision: `strength`, `endurance`, `mobility`, or `recovery`.
+Category is not writable through Session Record v2. A later Registry category
+change therefore cannot rewrite the historical meaning of this Session.

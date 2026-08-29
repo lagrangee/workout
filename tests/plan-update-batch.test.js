@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, mondayOf } from "../src/util.js";
-import { agentRequest, appFixture, call, createAgentToken, json, today } from "./helpers.js";
+import { agentRequest, appFixture, call, createAgentToken, json, TEST_NOW, today } from "./helpers.js";
 
 const firstMonday = addDays(mondayOf(today), 7);
 
@@ -120,7 +120,7 @@ test("Agent batch requires exact preview evidence and rejects stale or cross-Ath
   assert.equal(crossAthlete.body.error.code, "stale_plan");
 
   const stateA = await store.getByEmail("athlete-a@example.invalid");
-  stateA.plan_revisions.push({ revision_key: "rev_concurrent_batch", revision_sequence: 99, created_at: new Date().toISOString(), effective_from: firstMonday, week: week(9) });
+  stateA.plan_revisions.push({ revision_key: "rev_concurrent_batch", revision_sequence: 99, created_at: TEST_NOW, effective_from: firstMonday, week: week(9) });
   await store.save(stateA);
   const stale = await agentPost(handler, tokenA, "/api/agent/v1/plan-update-batches/apply", applyBody, "batch-stale");
   assert.equal(stale.response.status, 409);

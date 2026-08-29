@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a focused change within the Workout domain boundary
+title: "proposal: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the observable Athlete or operator problem, not only a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should become possible and how can it be verified?
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Domain and contract boundary
+      description: Identify affected terms, owners, public contracts, and compatibility expectations.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy, security, and data lifecycle
+      description: Explain new data, authority, retention, and cross-Athlete implications.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Proposed verification
+      description: Behavioral scenarios, migrations, and UI evidence that should gate completion.
+    validations:
+      required: true

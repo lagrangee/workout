@@ -154,14 +154,16 @@ Every page contains:
 }
 ```
 
-The cursor binds its filters, limit, last immutable sort tuple, and issue time,
-and expires after 15 minutes. `data_as_of` identifies when that page was read;
+The opaque, versioned, HMAC-protected cursor binds the Athlete, Coach Share,
+resource, filters, limit, last immutable sort tuple, issue time, and
+`training_version`, and expires after 15 minutes. It must be returned
+byte-for-byte; malformed, tampered, old-format, cross-share, or cross-resource
+values return `400 invalid_cursor`. `data_as_of` identifies when that page was read;
 it is not a historical snapshot. Every committed training mutation increments
 the Athlete-scoped integer `training_version` in the same transaction.
 Corrections and new Sessions may become visible between pages. If the version
-changes during a traversal, the Agent restarts from page one rather than
-assuming exactly-once membership. A malformed, expired, unusable, or
-filter-mismatched cursor returns `400`.
+changes during a traversal, the API returns `409 training_version_changed` and
+the Agent restarts from page one rather than assuming exactly-once membership.
 
 ### Session detail
 

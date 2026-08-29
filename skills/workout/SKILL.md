@@ -167,8 +167,8 @@ visible note warning and must not be guessed, silently normalized, or treated
 as a table column. Full lap detail belongs in the JSON sidecar; Markdown is a
 readable local projection.
 
-After the FIT sidecar is available, `src/fit-decoder.js` uses the pinned
-Garmin `@garmin/fitsdk` package and exposes only a narrow normalized contract:
+After the FIT sidecar is available, `src/fit-decoder.js` uses the pinned MIT
+`fit-file-parser` package and exposes only a narrow normalized contract:
 integrity, record/GPS counts, timestamps, cumulative distance, and normalized
 points.
 Developer-field values remain local decoder evidence and never enter the cloud

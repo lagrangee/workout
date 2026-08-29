@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { WEEKDAYS, weekdayKey } from "../src/util.js";
-import { agentRequest, appFixture, call, createAgentToken, today } from "./helpers.js";
+import { agentRequest, appFixture, call, createAgentToken, TEST_NOW, testInstant, today } from "./helpers.js";
 
 async function seedAlternatingSession() {
-  const fixture = appFixture();
+  let current = Date.parse(TEST_NOW);
+  const fixture = appFixture({ clock: () => new Date(current) });
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
   const slot = {
     kind: "workout",
@@ -23,17 +24,18 @@ async function seedAlternatingSession() {
       }],
     }],
   };
-  state.plan_revisions = [{ revision_key: "rev-alternating", revision_sequence: 1, created_at: new Date().toISOString(), effective_from: "2026-01-01", week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
+  state.plan_revisions = [{ revision_key: "rev-alternating", revision_sequence: 1, created_at: TEST_NOW, effective_from: "2026-01-01", week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
   await fixture.store.save(state);
-  const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": `alternating-start-${Math.random()}` }, body: "{}" });
+  const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": "alternating-start" }, body: "{}" });
   assert.equal(started.response.status, 201);
   const detail = await call(fixture.handler, `/api/private/sessions/${started.body.session_key}`);
   assert.equal(detail.response.status, 200);
-  return { ...fixture, sessionKey: started.body.session_key, detail: detail.body };
+  return { ...fixture, sessionKey: started.body.session_key, detail: detail.body, advanceTo: (offsetMs) => { current = Date.parse(TEST_NOW) + offsetMs; } };
 }
 
 async function seedExternalLoadSession() {
-  const fixture = appFixture();
+  let current = Date.parse(TEST_NOW);
+  const fixture = appFixture({ clock: () => new Date(current) });
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
   const slot = {
     kind: "workout",
@@ -52,13 +54,13 @@ async function seedExternalLoadSession() {
       }],
     }],
   };
-  state.plan_revisions = [{ revision_key: "rev-external", revision_sequence: 1, created_at: new Date().toISOString(), effective_from: "2026-01-01", week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
+  state.plan_revisions = [{ revision_key: "rev-external", revision_sequence: 1, created_at: TEST_NOW, effective_from: "2026-01-01", week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
   await fixture.store.save(state);
-  const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": `external-start-${Math.random()}` }, body: "{}" });
+  const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": "external-start" }, body: "{}" });
   assert.equal(started.response.status, 201);
   const detail = await call(fixture.handler, `/api/private/sessions/${started.body.session_key}`);
   assert.equal(detail.response.status, 200);
-  return { ...fixture, sessionKey: started.body.session_key, detail: detail.body };
+  return { ...fixture, sessionKey: started.body.session_key, detail: detail.body, advanceTo: (offsetMs) => { current = Date.parse(TEST_NOW) + offsetMs; } };
 }
 
 test("canonical Sessions reject the legacy Session Record shape at the write boundary", async () => {
@@ -79,8 +81,8 @@ function closedIntervals(detail, endedAt) {
 
 test("alternating results keep left/right facts while accepting partial status and unit-normalized actual resistance", async () => {
   const fixture = await seedAlternatingSession();
-  const now = new Date().toISOString();
-  const endedAt = new Date(Date.now() + 1000).toISOString();
+  const now = TEST_NOW;
+  const endedAt = testInstant(1000);
   const [left, right] = fixture.detail.snapshot.completion_items;
   const record = {
     record_schema_version: 2,
@@ -94,6 +96,7 @@ test("alternating results keep left/right facts while accepting partial status a
     exercise_feedback: [{ exercise_occurrence_key: "dead_bug_main", text: "左右控制不同" }],
     skip_reason: null,
   };
+  fixture.advanceTo(1000);
   const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "alternating-end" }, body: JSON.stringify({ record, ended_at: endedAt }) });
   assert.equal(ended.response.status, 200);
   assert.equal(ended.body.status, "partial");
@@ -118,10 +121,11 @@ test("alternating results keep left/right facts while accepting partial status a
 test("canonical Set Results can be corrected once without mutating the frozen snapshot", async () => {
   const fixture = await seedAlternatingSession();
   const beforeSnapshot = structuredClone(fixture.detail.snapshot);
-  const now = new Date().toISOString();
-  const endedAt = new Date(Date.now() + 1000).toISOString();
+  const now = TEST_NOW;
+  const endedAt = testInstant(1000);
   const results = fixture.detail.snapshot.completion_items.map(/** @param {any} item */ (item) => ({ completion_item_key: item.completion_item_key, status: "completed", actual: { metric: item.target.metric, value: item.target.value }, resistance: { mode: "bodyweight" }, rir: 1, note: null, completed_at: now }));
   const body = { record_schema_version: 2, set_results: results, training_intervals: closedIntervals(fixture.detail, endedAt), session_rpe: null, note: null, exercise_feedback: [], skip_reason: null };
+  fixture.advanceTo(1000);
   const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "alternating-correction-end" }, body: JSON.stringify({ record: body, ended_at: endedAt }) });
   assert.equal(ended.response.status, 200);
   const correctedResults = results.map(/** @param {any} result */ (result) => result.completion_item_key === results[1].completion_item_key ? { ...result, actual: { metric: "reps", value: 4 }, note: "修正右侧" } : result);
@@ -135,7 +139,7 @@ test("canonical Set Results can be corrected once without mutating the frozen sn
 
 test("canonical result validation preserves explicit skipped absence and rejects duplicate Completion Items", async () => {
   const fixture = await seedAlternatingSession();
-  const now = new Date().toISOString();
+  const now = TEST_NOW;
   const [left] = fixture.detail.snapshot.completion_items;
   const base = { record_schema_version: 2, set_results: [{ completion_item_key: left.completion_item_key, status: "skipped", actual: null, resistance: null, rir: null, note: null, completed_at: null }], training_intervals: fixture.detail.training_intervals, session_rpe: null, note: null, exercise_feedback: [], skip_reason: null };
   const skipped = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify(base) });
@@ -155,8 +159,8 @@ test("canonical actual external load accepts lb input and stores canonical kg", 
   const fixture = await seedExternalLoadSession();
   const item = fixture.detail.snapshot.completion_items[0];
   const startedAt = fixture.detail.training_intervals[0].started_at;
-  const completedAt = new Date().toISOString();
-  const endedAt = new Date(Date.now() + 1000).toISOString();
+  const completedAt = TEST_NOW;
+  const endedAt = testInstant(1000);
   const record = {
     record_schema_version: 2,
     set_results: [{ completion_item_key: item.completion_item_key, status: "completed", actual: { metric: "reps", value: 8 }, resistance: { mode: "external_load", value: 22, unit: "lb" }, rir: 2, note: null, completed_at: completedAt }],
@@ -166,6 +170,7 @@ test("canonical actual external load accepts lb input and stores canonical kg", 
     exercise_feedback: [],
     skip_reason: null,
   };
+  fixture.advanceTo(1000);
   const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "external-end" }, body: JSON.stringify({ record, ended_at: endedAt }) });
   assert.equal(ended.response.status, 200);
   assert.equal(ended.body.set_results[0].resistance_mode, "external_load");

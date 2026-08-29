@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -7,6 +7,9 @@ import { dirname } from "node:path";
  * Replace one generated local artifact without exposing a partially written
  * file to a concurrent reader. The temporary file is removed when either the
  * write or the rename fails.
+ * @param {string} path
+ * @param {string | Uint8Array} value
+ * @param {BufferEncoding} [encoding]
  */
 export async function writeAtomicFile(path, value, encoding) {
   const temporaryPath = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;

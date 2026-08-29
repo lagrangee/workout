@@ -80,6 +80,7 @@ test("canonical Plan Update validates registry references and returns fixed pres
     execution_mode: "alternating",
     name: "死虫",
     definition_version: 1,
+    category: "strength",
     sets: [{ set_id: "dead_bug_set_1", ordinal: 1, target: { metric: "reps", value: 5 }, resistance_mode: "bodyweight", resistance_kg: null, tempo: "3-1-1-0", rest_after_sec: 45 }],
   });
   const bridge = result.body.preview.week.monday.blocks[0].exercises[1];

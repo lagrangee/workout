@@ -185,9 +185,14 @@ test("authenticated publisher logs in once and forwards only the session cookie 
   await publisher(projection(), { idempotency_key: "training-archive:2026-08-15:request-key" });
   await publisher(projection(), { idempotency_key: "training-archive:2026-08-15:request-key-2" });
   assert.equal(requests.filter((request) => request.url.endsWith("/api/auth/login")).length, 1);
+  const loginRequest = requests.find((request) => request.url.endsWith("/api/auth/login"));
+  assert.equal(loginRequest.headers.origin, "https://workout.example");
+  assert.equal(loginRequest.headers["content-type"], "application/json");
   const syncRequests = requests.filter((request) => request.url.endsWith("/api/private/records/aerobic/sync"));
   assert.equal(syncRequests.length, 2);
   assert.equal(syncRequests[0].headers.cookie, "workout_session=session-value");
+  assert.equal(syncRequests[0].headers.origin, "https://workout.example");
+  assert.equal(syncRequests[0].headers["content-type"], "application/json");
   assert.equal(syncRequests[0].headers.authorization, undefined);
   assert.doesNotMatch(JSON.stringify(syncRequests), /not-for-output/);
 });

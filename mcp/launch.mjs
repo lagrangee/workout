@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -20,7 +20,7 @@ export async function loadAgentConfig(configPath = process.env.WORKOUT_AGENT_CON
   let metadata;
   try {
     metadata = await stat(configPath);
-  } catch (error) {
+  } catch (/** @type {any} */ error) {
     if (error?.code === "ENOENT") throw new Error(`Workout MCP configuration file is missing: ${configPath}`);
     throw new Error("Workout MCP configuration file cannot be inspected");
   }
@@ -33,6 +33,7 @@ export async function loadAgentConfig(configPath = process.env.WORKOUT_AGENT_CON
   } catch {
     throw new Error("Workout MCP configuration file cannot be read");
   }
+  /** @type {Record<string, string>} */
   const values = {};
   for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
     const line = rawLine.trim();

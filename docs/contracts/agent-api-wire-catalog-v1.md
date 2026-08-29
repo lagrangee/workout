@@ -47,6 +47,7 @@ AgentManifest = {
   schema_catalog_url: string,
   updated_at: { plan: Instant|null, training: Instant|null },
   training_version: integer,
+  archive_version: integer,
   query_rules: object,
   links: { overview: string, plan: string, schedule: string, sessions: string,
            progress: string, exercise: string, plan_update_validate: string,
@@ -117,7 +118,9 @@ aerobic_sync: {
 `aerobic_sync` returns the same safe publication receipt as the private
 application-session sync boundary. It is the preferred write transport for the
 local runner; the private endpoint remains the browser/compatibility adapter.
-Both paths call the same domain projection validator and D1 mutation.
+Both paths call the same domain projection validator and D1 mutation. A
+successful response includes the resulting `archive_version`; the mutation
+increments that version once and leaves `training_version` unchanged.
 
 ## Read resources
 
@@ -385,6 +388,7 @@ CanonicalExercise = {
   exercise_id: string,
   name: string,
   definition_version: integer,
+  category: "strength"|"endurance"|"mobility"|"recovery",
   execution_mode: "none"|"bilateral"|"per_side"|"alternating",
   sets: CanonicalSet[]
 }
@@ -438,6 +442,7 @@ Period = {
 
 AgentAerobicActivityIndex = {
   schema_version: 1,
+  archive_version: integer,
   generated_at: Instant,
   data_as_of: Instant|null,
   source_status: SourceStatus,
@@ -477,6 +482,7 @@ handle. It does not include `fit_file`, GPS, or provider export URLs.
 
 AgentDailyContext = {
   schema_version: 1,
+  archive_version: integer,
   generated_at: Instant,
   data_as_of: Instant|null,
   source_status: { workout: SourceStatus, coros: SourceStatus },
@@ -490,6 +496,7 @@ AgentDailyContext = {
 
 AgentRouteIndex = {
   schema_version: 1,
+  archive_version: integer,
   generated_at: Instant,
   data_as_of: Instant|null,
   source_status: SourceStatus,
@@ -502,6 +509,7 @@ AgentRouteIndex = {
 
 AgentRouteDetail = {
   schema_version: 1,
+  archive_version: integer,
   generated_at: Instant,
   data_as_of: Instant|null,
   source_status: SourceStatus,
@@ -526,13 +534,25 @@ not contain `revision_key`, `scheduled_workout_key`, Athlete identifiers, or
 database identities. A schedule response may leave `prescriptions` empty when
 `expand` is absent; entries still carry their safe stable reference.
 
-Session index cursors are opaque and must be sent back byte-for-byte. They are
-bound to `from`, `to`, `status`, `exercise_id`, and `limit`, expire after 15
-minutes, and include `training_version`. If that version changes, traversal
+Session index cursors are opaque, versioned, HMAC-SHA-256-protected, and must
+be sent back byte-for-byte. They are bound to the Athlete, Agent Session
+resource, `from`, `to`, `status`, `exercise_id`, `limit`, immutable sort
+position, issue time, and `training_version`, and expire after 15 minutes. A
+malformed, tampered, old-format, cross-resource, expired, or mismatched value
+returns `invalid_cursor` with HTTP 400. If the signed training version changes, traversal
 must stop and restart from page one; the API returns
 `training_version_changed` with HTTP 409. The index has stable newest-first
 ordering by `(scheduled_date, session_key)` and does not promise a
 cross-page snapshot.
+
+Archive index and route-history cursors are likewise opaque, versioned,
+HMAC-SHA-256-protected values and must be sent back byte-for-byte. They bind
+the Athlete, resource, every Archive selector, `limit`, traversal position,
+and `archive_version`, and expire after 15 minutes. Malformed, tampered,
+old-version, expired, or mismatched values—including a cursor issued before an
+Archive publication—return `invalid_cursor` with HTTP 400 and require a restart
+from page one. Workout-only `training_version` changes do not invalidate
+Archive traversal.
 
 Progress evidence keeps empty denominators explicit (`value: null` where a
 rate has no due workouts), and period responses mark a window containing the
@@ -544,7 +564,12 @@ retain the per-set actual metric, canonical resistance, RIR, side, and safe
 Plan Update validation and application reuse [Plan Update Package v2](plan-update-package-v2.md)
 as their canonical package contract. The MCP tools accept a structured
 `package` object and serialize it to the Agent request's exact `package_text`
-field; the Worker then runs the strict text validator. The response digest is
+field. MCP and Worker reuse one portable structural definition, so exact
+members, required values, nullable resistance, and decimal four-phase tempo
+have identical acceptance at both interfaces. Athlete-local dates, Registry
+membership, Exercise capabilities, ordered/unique identities, and trimming
+remain Worker-owned semantic decisions. The Worker then runs the strict text
+validator. The response digest is
 over the canonical package value and the base-plan digest is over the public
 effective base evidence selected for the package's future date. This is the
 template the preview compares against, including an already-effective future

@@ -116,6 +116,7 @@ function expandCanonicalForSession(slot) {
         exercise_id: exercise.exercise_id,
         name: exercise.name,
         definition_version: exercise.definition_version,
+        category: exercise.category,
         execution_mode: exercise.execution_mode,
         sets: /** @type {any[]} */ ([]),
       };

@@ -33,4 +33,4 @@
 
 ## Separate Product Decision
 
-- Ad-hoc Sessions are not adopted implicitly. See [Decide whether the MVP records ad-hoc Sessions](../../.scratch/workout-tracker-mvp/issues/15-decide-whether-mvp-records-ad-hoc-sessions.md).
+- Ad-hoc Sessions are not adopted implicitly; they remain a separate product decision outside the current public contracts.

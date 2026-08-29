@@ -1,6 +1,6 @@
-// @ts-nocheck
+// @ts-check
 
-import { isRecord, isValidLocalDate, isValidUtcInstant } from "./util.js";
+import { isRecord, isValidLocalDate, isValidUtcInstant, localDate } from "./util.js";
 import {
   COROS_SPORT_TYPES,
   SOURCE_STATUSES,
@@ -79,17 +79,20 @@ const MAX_ACTIVITIES = 200;
 const MAX_ROUTES = 200;
 const MAX_REFERENCE_LENGTH = 200;
 
+/** @param {string} message @returns {Error & { code: string }} */
 function projectionError(message) {
-  const error = new Error(message);
+  const error = /** @type {Error & { code: string }} */ (new Error(message));
   error.code = "invalid_projection";
   return error;
 }
 
+/** @param {unknown} value @param {string} label @returns {Record<string, any>} */
 function assertRecord(value, label) {
   if (!isRecord(value)) throw projectionError(`${label} must be an object`);
   return value;
 }
 
+/** @param {Record<string, any>} value @param {Iterable<string>} allowed @param {string} label */
 function assertExactKeys(value, allowed, label) {
   const actual = Object.keys(value).sort();
   const expected = [...allowed].sort();
@@ -98,10 +101,12 @@ function assertExactKeys(value, allowed, label) {
   }
 }
 
+/** @param {unknown} value @param {string} label */
 function assertSchemaVersion(value, label) {
   if (value !== 1) throw projectionError(`${label}.schema_version must be 1`);
 }
 
+/** @param {unknown} value @param {string} label @param {{ required?: boolean }} [options] @returns {string|null} */
 function safeReference(value, label, { required = true } = {}) {
   if (value === null && !required) return null;
   if (typeof value !== "string" || !value.trim() || value.length > MAX_REFERENCE_LENGTH || containsSensitiveText(value)) {
@@ -115,6 +120,7 @@ function safeReference(value, label, { required = true } = {}) {
   return reference;
 }
 
+/** @param {unknown} value @param {string} label @param {{ required?: boolean, max?: number }} [options] @returns {string|null} */
 function safeText(value, label, { required = true, max = MAX_REFERENCE_LENGTH } = {}) {
   if (value === null && !required) return null;
   if (typeof value !== "string" || !value.trim() || value.length > max || containsSensitiveText(value)) throw projectionError(`${label} must be safe text`);
@@ -122,40 +128,46 @@ function safeText(value, label, { required = true, max = MAX_REFERENCE_LENGTH } 
   return value.trim();
 }
 
+/** @param {unknown} value @param {string} label @returns {string} */
 function safePathSegment(value, label) {
   const segment = safeReference(value, label);
-  if (/[\\/<>:"|?*#\[\]\u0000-\u001f]/.test(segment)) throw projectionError(`${label} must be a safe path segment`);
+  if (segment === null || /[\\/<>:"|?*#\[\]\u0000-\u001f]/.test(segment)) throw projectionError(`${label} must be a safe path segment`);
   return segment;
 }
 
+/** @param {unknown} value @param {string} label @param {{ required?: boolean }} [options] @returns {string|null} */
 function safeInstant(value, label, { required = false } = {}) {
   if (value === null && !required) return null;
   if (typeof value !== "string" || !isValidUtcInstant(value)) throw projectionError(`${label} must be a UTC instant or null`);
   return new Date(value).toISOString();
 }
 
+/** @param {any} value @param {string} label @returns {string} */
 function safeStatus(value, label) {
   if (!SOURCE_STATUSES.includes(value)) throw projectionError(`${label} is unsupported`);
   return value;
 }
 
+/** @param {unknown} value @param {string} label @returns {number|null} */
 function safeNullableNumber(value, label) {
   if (value === null) return null;
-  if (typeof value !== "number" || !Number.isFinite(value)) throw projectionError(`${label} must be a finite number or null`);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw projectionError(`${label} must be a non-negative finite number or null`);
   return value;
 }
 
+/** @param {unknown} value @param {string} label @param {number} [depth] @returns {Record<string, any>} */
 function safeMetrics(value, label, depth = 0) {
-  assertRecord(value, label);
-  if (depth > 3 || Object.keys(value).length > 50) throw projectionError(`${label} is too deeply nested`);
+  const record = assertRecord(value, label);
+  if (depth > 3 || Object.keys(record).length > 50) throw projectionError(`${label} is too deeply nested`);
+  /** @type {Record<string, any>} */
   const result = {};
-  for (const [key, child] of Object.entries(value)) {
+  for (const [key, child] of Object.entries(record)) {
     if (typeof key !== "string" || key.length > 80 || /(?:gps|coordinate|location|latitude|longitude|(?:^|_)lat(?:_|$)|(?:^|_)lon(?:_|$)|track|polyline|geometry|point|telemetry|sensor|fit(?:_file)?|token|credential|url|export|raw)/i.test(key)) {
       throw projectionError(`${label} contains a private field`);
     }
     if (child === null || typeof child === "boolean") {
       result[key] = child;
-    } else if (typeof child === "number" && Number.isFinite(child)) {
+    } else if (typeof child === "number" && Number.isFinite(child) && child >= 0) {
       result[key] = child;
     } else if (typeof child === "string") {
       if (child.length > 500 || containsSensitiveText(child)) throw projectionError(`${label}.${key} contains private text`);
@@ -169,9 +181,11 @@ function safeMetrics(value, label, depth = 0) {
   return result;
 }
 
+/** @param {unknown} value @param {string} label @returns {Record<string, any>} */
 function safeSummary(value, label) {
   const summary = assertRecord(value, label);
   assertExactKeys(summary, SUMMARY_KEYS, label);
+  /** @type {Record<string, any>} */
   const normalized = {};
   for (const key of SUMMARY_KEYS) {
     const child = summary[key];
@@ -186,6 +200,7 @@ function safeSummary(value, label) {
   return normalized;
 }
 
+/** @param {unknown} value @param {string} label */
 function safeRoute(value, label) {
   const route = assertRecord(value, label);
   assertExactKeys(route, ROUTE_KEYS, label);
@@ -213,6 +228,7 @@ function safeRoute(value, label) {
   return { schema_version: 1, route_key: routeKey, route_name: routeName, sport_types: sportTypes, distance_range_km: distanceRange };
 }
 
+/** @param {unknown} value @param {string} targetDate @param {string} timezone @param {Set<string>} routeKeys @param {string} label */
 function safeActivity(value, targetDate, timezone, routeKeys, label) {
   const activity = assertRecord(value, label);
   assertExactKeys(activity, ACTIVITY_KEYS, label);
@@ -223,10 +239,12 @@ function safeActivity(value, targetDate, timezone, routeKeys, label) {
   if (activity.timezone !== timezone) throw projectionError(`${label}.timezone must equal the Athlete timezone`);
   const startedAt = safeInstant(activity.started_at, `${label}.started_at`);
   const endedAt = safeInstant(activity.ended_at, `${label}.ended_at`);
+  if (startedAt !== null && endedAt !== null && Date.parse(endedAt) < Date.parse(startedAt)) throw projectionError(`${label}.ended_at must not be before started_at`);
+  if (startedAt !== null && localDate(new Date(startedAt), timezone) !== targetDate) throw projectionError(`${label}.started_at must fall on target_date in the Athlete timezone`);
   const sportType = (() => {
     try { return normalizeSportType(activity.sport_type); } catch { throw projectionError(`${label}.sport_type is unsupported`); }
   })();
-  if (activity.sport_type !== sportType || activity.sport_name !== COROS_SPORT_TYPES[sportType]) throw projectionError(`${label}.sport_type must use the controlled COROS enum`);
+  if (activity.sport_type !== sportType || activity.sport_name !== /** @type {Record<number, string>} */ (COROS_SPORT_TYPES)[sportType]) throw projectionError(`${label}.sport_type must use the controlled COROS enum`);
   const sourceStatus = safeStatus(activity.source_status, `${label}.source_status`);
   const dataAsOf = safeInstant(activity.data_as_of, `${label}.data_as_of`);
   const updatedAt = safeInstant(activity.updated_at, `${label}.updated_at`);
@@ -252,7 +270,7 @@ function safeActivity(value, targetDate, timezone, routeKeys, label) {
     started_at: startedAt,
     ended_at: endedAt,
     sport_type: sportType,
-    sport_name: COROS_SPORT_TYPES[sportType],
+    sport_name: /** @type {Record<number, string>} */ (COROS_SPORT_TYPES)[sportType],
     source_status: sourceStatus,
     data_as_of: dataAsOf,
     updated_at: updatedAt,
@@ -264,6 +282,7 @@ function safeActivity(value, targetDate, timezone, routeKeys, label) {
   });
 }
 
+/** @param {string[]} statuses */
 function aggregateStatus(statuses) {
   if (!statuses.length || statuses.every((status) => status === "none")) return "none";
   if (statuses.every((status) => status === "complete" || status === "none")) return "complete";
@@ -276,6 +295,7 @@ function aggregateStatus(statuses) {
  * aerobic projection endpoint. This boundary intentionally accepts the safe
  * projection produced by the local sync orchestrator, never a provider payload.
  */
+/** @param {unknown} value @param {string} athleteTimezone */
 export function normalizeAerobicProjectionForSync(value, athleteTimezone) {
   const projection = assertRecord(value, "projection");
   assertExactKeys(projection, PROJECTION_KEYS, "projection");
@@ -349,6 +369,7 @@ export function syncAerobicProjection(state, rawBody, now = new Date()) {
       published_count: published.published_count,
       activity_count: state.aerobic_activities.length,
       route_count: state.routes.length,
+      archive_version: state.archive_version,
       source_statuses: published.source_statuses,
       data_as_of: state.aerobic_projection.data_as_of,
     },

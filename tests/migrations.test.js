@@ -8,6 +8,10 @@ const initialMigration = readFileSync(new URL("../migrations/0001_initial.sql", 
 const agentTokenMigration = readFileSync(new URL("../migrations/0005_agent_token_lookup.sql", import.meta.url), "utf8");
 const canonicalPlanMigration = readFileSync(new URL("../migrations/0006_canonical_plan_records.sql", import.meta.url), "utf8");
 const routeRecordingMigration = readFileSync(new URL("../migrations/0010_plan_recording_intent.sql", import.meta.url), "utf8");
+const mutationOwnerMigration = readFileSync(new URL("../migrations/0011_mutation_owner.sql", import.meta.url), "utf8");
+const canonicalSessionMigration = readFileSync(new URL("../migrations/0007_canonical_session_records.sql", import.meta.url), "utf8");
+const exerciseCategoryMigration = readFileSync(new URL("../migrations/0012_exercise_category.sql", import.meta.url), "utf8");
+const exerciseRegistry = JSON.parse(readFileSync(new URL("../config/exercises.json", import.meta.url), "utf8"));
 
 test("ticket 24 migration restores an idempotent per-Athlete date guard", () => {
   const db = new DatabaseSync(":memory:");
@@ -68,6 +72,71 @@ test("plan recording intent migration adds nullable COROS route columns", () => 
     assert.ok(columns.includes("recording_source"));
     assert.ok(columns.includes("recording_sport_type"));
     assert.ok(columns.includes("recording_route_key"));
+  } finally {
+    db.close();
+  }
+});
+
+test("mutation owner migration preserves existing Athlete state and adds the conditional-write identity", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(initialMigration);
+    db.prepare("INSERT INTO athlete_state (athlete_key, email, state_json, updated_at) VALUES (?, ?, ?, ?)").run("athlete-a", "a@example.invalid", '{"display_name":"Existing"}', "2026-08-29T00:00:00.000Z");
+    db.exec(mutationOwnerMigration);
+    const row = db.prepare("SELECT state_json, mutation_owner FROM athlete_state WHERE athlete_key = ?").get("athlete-a");
+    assert.ok(row);
+    assert.equal(typeof row.state_json, "string");
+    assert.equal(JSON.parse(String(row.state_json)).display_name, "Existing");
+    assert.equal(row.mutation_owner, null);
+  } finally {
+    db.close();
+  }
+});
+
+function createCategoryMigrationDatabase(exerciseIds) {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(initialMigration);
+  db.exec(canonicalPlanMigration);
+  db.exec(canonicalSessionMigration);
+  db.prepare("INSERT INTO athlete_state (athlete_key, email, state_json, updated_at) VALUES (?, ?, ?, ?)").run("athlete-a", "a@example.invalid", "{}", "2026-08-29T00:00:00.000Z");
+  db.prepare("INSERT INTO plans (plan_id, athlete_key, name, created_at) VALUES (?, ?, ?, ?)").run("plan-a", "athlete-a", "Workout", "2026-08-29T00:00:00.000Z");
+  db.prepare("INSERT INTO plan_revisions (plan_id, athlete_key, revision_key, revision_sequence, effective_from, created_at) VALUES (?, ?, ?, ?, ?, ?)").run("plan-a", "athlete-a", "revision-a", 1, "2026-08-29", "2026-08-29T00:00:00.000Z");
+  db.prepare("INSERT INTO sessions (athlete_key, session_key, plan_id, plan_revision_key, scheduled_date, timezone_at_session, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("athlete-a", "session-a", "plan-a", "revision-a", "2026-08-29", "Asia/Shanghai", "Workout", "completed", "2026-08-29T00:00:00.000Z", "2026-08-29T01:00:00.000Z");
+  const planInsert = db.prepare("INSERT INTO plan_exercises (revision_key, athlete_key, weekday, block_ordinal, block_title, exercise_ordinal, occurrence_key, exercise_id, execution_mode, name_snapshot, definition_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const sessionInsert = db.prepare("INSERT INTO session_exercises (session_key, occurrence_key, block_ordinal, block_title, exercise_ordinal, exercise_id, name_snapshot, definition_version, execution_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  exerciseIds.forEach((exerciseId, index) => {
+    const occurrenceKey = `occurrence_${index}`;
+    planInsert.run("revision-a", "athlete-a", "monday", 1, "Main", index + 1, occurrenceKey, exerciseId, "none", exerciseId, 1);
+    sessionInsert.run("session-a", occurrenceKey, 1, "Main", index + 1, exerciseId, exerciseId, 1, "none");
+  });
+  return db;
+}
+
+test("Exercise category migration backfills all 26 pinned IDs and requires future frozen values", () => {
+  const expected = new Map(exerciseRegistry.exercises.map((exercise) => [exercise.exercise_id, exercise.category]));
+  assert.equal(expected.size, 26);
+  const db = createCategoryMigrationDatabase([...expected.keys()]);
+  try {
+    db.exec(exerciseCategoryMigration);
+    const planRows = db.prepare("SELECT exercise_id, category FROM plan_exercises ORDER BY exercise_id").all();
+    const sessionRows = db.prepare("SELECT exercise_id, category FROM session_exercises ORDER BY exercise_id").all();
+    assert.deepEqual(new Map(planRows.map((row) => [row.exercise_id, row.category])), expected);
+    assert.deepEqual(new Map(sessionRows.map((row) => [row.exercise_id, row.category])), expected);
+    assert.throws(() => db.prepare("INSERT INTO plan_exercises (revision_key, athlete_key, weekday, block_ordinal, block_title, exercise_ordinal, occurrence_key, exercise_id, execution_mode, name_snapshot, definition_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("revision-a", "athlete-a", "tuesday", 1, "Main", 1, "missing_category", "dead_bug", "none", "dead_bug", 1), /category is required/);
+    assert.throws(() => db.prepare("UPDATE plan_exercises SET category = NULL WHERE occurrence_key = ?").run("occurrence_0"), /category is required/);
+    assert.throws(() => db.prepare("UPDATE session_exercises SET category = 'core' WHERE occurrence_key = ?").run("occurrence_0"), /constraint/i);
+  } finally {
+    db.close();
+  }
+});
+
+test("Exercise category migration fails closed for an unknown historical Exercise ID", () => {
+  const db = createCategoryMigrationDatabase(["unknown_historical_exercise"]);
+  try {
+    assert.throws(() => db.exec(exerciseCategoryMigration), /category|not null/i);
+    assert.equal(db.prepare("PRAGMA table_info('plan_exercises')").all().some((column) => column.name === "category"), false);
+    assert.equal(db.prepare("PRAGMA table_info('session_exercises')").all().some((column) => column.name === "category"), false);
   } finally {
     db.close();
   }

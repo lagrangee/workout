@@ -1,7 +1,9 @@
-// @ts-nocheck
+// @ts-check
 
 import { WEEKDAYS } from "./util.js";
 import { resolveExercise } from "./exercise-registry.js";
+
+const EXERCISE_CATEGORIES = new Set(["strength", "endurance", "mobility", "recovery"]);
 
 /**
  * Build the one-time SQL cutover for one Athlete. The input is already the
@@ -46,8 +48,8 @@ export function buildCanonicalRebuildSql(state, options = {}) {
       const kind = slot === null ? "no_plan" : slot?.kind === "rest" ? "rest" : "workout";
       statements.push(`INSERT INTO plan_slots (revision_key, weekday, kind, title, start_time, estimated_duration_min, recording_source, recording_sport_type, recording_route_key) VALUES (${sql(revision.revision_key)}, ${sql(weekday)}, ${sql(kind)}, ${sql(slot?.kind === "workout" ? slot.title : null)}, ${sql(slot?.kind === "workout" ? slot.start_time : null)}, ${numberOrNull(slot?.kind === "workout" ? slot.estimated_duration_min : null)}, ${sql(slot?.kind === "workout" ? slot.recording_intent?.source ?? null : null)}, ${numberOrNull(slot?.kind === "workout" ? slot.recording_intent?.sport_type ?? null : null)}, ${sql(slot?.kind === "workout" ? slot.recording_intent?.route_key ?? null : null)});`);
       if (slot?.kind !== "workout") continue;
-      slot.blocks.forEach((block, blockIndex) => block.exercises.forEach((exercise, exerciseIndex) => {
-        statements.push(`INSERT INTO plan_exercises (revision_key, athlete_key, weekday, block_ordinal, block_title, exercise_ordinal, occurrence_key, exercise_id, execution_mode, name_snapshot, definition_version) VALUES (${sql(revision.revision_key)}, ${sql(state.athlete_key)}, ${sql(weekday)}, ${integer(blockIndex + 1)}, ${sql(block.title)}, ${integer(exerciseIndex + 1)}, ${sql(exercise.occurrence_key)}, ${sql(exercise.exercise_id)}, ${sql(exercise.execution_mode)}, ${sql(exercise.name)}, ${integer(exercise.definition_version)});`);
+      /** @type {any[]} */ (slot.blocks).forEach((block, blockIndex) => /** @type {any[]} */ (block.exercises).forEach((exercise, exerciseIndex) => {
+        statements.push(`INSERT INTO plan_exercises (revision_key, athlete_key, weekday, block_ordinal, block_title, exercise_ordinal, occurrence_key, exercise_id, execution_mode, name_snapshot, definition_version, category) VALUES (${sql(revision.revision_key)}, ${sql(state.athlete_key)}, ${sql(weekday)}, ${integer(blockIndex + 1)}, ${sql(block.title)}, ${integer(exerciseIndex + 1)}, ${sql(exercise.occurrence_key)}, ${sql(exercise.exercise_id)}, ${sql(exercise.execution_mode)}, ${sql(exercise.name)}, ${integer(exercise.definition_version)}, ${sql(exercise.category)});`);
         for (const set of exercise.sets) statements.push(planSetSql(revision.revision_key, exercise.occurrence_key, set));
       }));
     }
@@ -55,9 +57,9 @@ export function buildCanonicalRebuildSql(state, options = {}) {
   for (const session of state.sessions ?? []) {
     if (!session.plan_id || !session.plan_revision_key) throw new Error(`Canonical Session ${session.session_key} requires plan_id and plan_revision_key`);
     statements.push(`INSERT INTO sessions (athlete_key, session_key, plan_id, plan_revision_key, scheduled_date, timezone_at_session, title, status, created_at, updated_at, scheduled_workout_key, local_date, start_time, estimated_duration_min) VALUES (${sql(state.athlete_key)}, ${sql(session.session_key)}, ${sql(session.plan_id)}, ${sql(session.plan_revision_key)}, ${sql(session.scheduled_date)}, ${sql(session.timezone_at_session)}, ${sql(session.title)}, ${sql(session.status)}, ${sql(session.created_at)}, ${sql(session.updated_at)}, ${sql(session.scheduled_workout_key)}, ${sql(session.local_date ?? session.scheduled_date)}, ${sql(session.snapshot.start_time)}, ${numberOrNull(session.snapshot.estimated_duration_min)});`);
-    session.snapshot.blocks.forEach((block, blockIndex) => block.exercises.forEach((exercise, exerciseIndex) => {
+    /** @type {any[]} */ (session.snapshot.blocks).forEach((block, blockIndex) => /** @type {any[]} */ (block.exercises).forEach((exercise, exerciseIndex) => {
       const occurrenceKey = exercise.exercise_occurrence_key ?? exercise.occurrence_key;
-      statements.push(`INSERT INTO session_exercises (session_key, occurrence_key, block_ordinal, block_title, exercise_ordinal, exercise_id, name_snapshot, definition_version, execution_mode) VALUES (${sql(session.session_key)}, ${sql(occurrenceKey)}, ${integer(blockIndex + 1)}, ${sql(block.title)}, ${integer(exerciseIndex + 1)}, ${sql(exercise.exercise_id)}, ${sql(exercise.name)}, ${integer(exercise.definition_version)}, ${sql(exercise.execution_mode)});`);
+      statements.push(`INSERT INTO session_exercises (session_key, occurrence_key, block_ordinal, block_title, exercise_ordinal, exercise_id, name_snapshot, definition_version, execution_mode, category) VALUES (${sql(session.session_key)}, ${sql(occurrenceKey)}, ${integer(blockIndex + 1)}, ${sql(block.title)}, ${integer(exerciseIndex + 1)}, ${sql(exercise.exercise_id)}, ${sql(exercise.name)}, ${integer(exercise.definition_version)}, ${sql(exercise.execution_mode)}, ${sql(exercise.category)});`);
     }));
     for (const item of session.snapshot.completion_items) statements.push(completionItemSql(session.session_key, item));
     const results = Array.isArray(session.set_results) && session.set_results.length > 0 ? session.set_results : (session.completion_results ?? []);
@@ -97,6 +99,7 @@ export function validateRebuildState(state) {
         const definition = resolveExercise(exercise.exercise_id);
         if (!definition || definition.status !== "active") throw new Error(`Plan Revision ${revision.revision_key} references an inactive or unknown Exercise ${exercise.exercise_id}`);
         if (exercise.definition_version !== definition.definition_version) throw new Error(`Plan Revision ${revision.revision_key} has a stale Exercise definition version for ${exercise.exercise_id}`);
+        if (!EXERCISE_CATEGORIES.has(exercise.category)) throw new Error(`Plan Revision ${revision.revision_key} requires a frozen Exercise category for ${exercise.exercise_id}`);
         for (const set of exercise.sets) if (!set.set_id || !set.target || set.target.value == null) throw new Error(`Plan Revision ${revision.revision_key} contains a non-canonical Set`);
       }
     }
@@ -110,25 +113,33 @@ export function validateRebuildState(state) {
     if (!Array.isArray(session.snapshot.completion_items)) throw new Error(`Session ${session.session_key} is missing Completion Items`);
     for (const block of session.snapshot.blocks ?? []) for (const exercise of block.exercises ?? []) {
       if (!resolveExercise(exercise.exercise_id)) throw new Error(`Session ${session.session_key} references an unknown Exercise ${exercise.exercise_id}`);
+      if (!EXERCISE_CATEGORIES.has(exercise.category)) throw new Error(`Session ${session.session_key} requires a frozen Exercise category for ${exercise.exercise_id}`);
     }
   }
   return true;
 }
 
-function firstPlanCreatedAt(state) { return state.plan_revisions.slice().sort((left, right) => left.revision_sequence - right.revision_sequence)[0]?.created_at ?? new Date().toISOString(); }
+/** @param {any} state */
+function firstPlanCreatedAt(state) { return /** @type {any[]} */ (state.plan_revisions).slice().sort((left, right) => left.revision_sequence - right.revision_sequence)[0]?.created_at ?? new Date().toISOString(); }
 
+/** @param {string} revisionKey @param {string} occurrenceKey @param {any} set */
 function planSetSql(revisionKey, occurrenceKey, set) {
   return `INSERT INTO plan_sets (revision_key, occurrence_key, set_id, ordinal, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec) VALUES (${sql(revisionKey)}, ${sql(occurrenceKey)}, ${sql(set.set_id)}, ${integer(set.ordinal)}, ${sql(set.target.metric)}, ${integer(set.target.value)}, ${sql(set.resistance_mode)}, ${numberOrNull(set.resistance_kg)}, ${sql(set.tempo)}, ${numberOrNull(set.rest_after_sec)});`;
 }
 
+/** @param {string} sessionKey @param {any} item */
 function completionItemSql(sessionKey, item) {
   return `INSERT INTO completion_items (session_key, completion_item_key, occurrence_key, set_id, side, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec, set_ordinal) VALUES (${sql(sessionKey)}, ${sql(item.completion_item_key)}, ${sql(item.exercise_occurrence_key ?? item.occurrence_key)}, ${sql(item.set_id ?? item.set_key)}, ${sql(item.side)}, ${sql(item.target.metric)}, ${integer(item.target.value)}, ${sql(item.resistance_mode ?? item.resistance?.mode)}, ${numberOrNull(item.resistance_kg ?? item.resistance?.load_kg)}, ${sql(item.tempo)}, ${numberOrNull(item.rest_after_sec ?? item.rest_sec)}, ${numberOrNull(item.set_ordinal)});`;
 }
 
+/** @param {string} sessionKey @param {any} result */
 function setResultSql(sessionKey, result) {
   return `INSERT INTO set_results (session_key, completion_item_key, status, actual_metric, actual_value, resistance_mode, resistance_kg, rir, note, completed_at) VALUES (${sql(sessionKey)}, ${sql(result.completion_item_key)}, ${sql(result.status)}, ${sql(result.actual?.metric)}, ${numberOrNull(result.actual?.value)}, ${sql(result.resistance_mode ?? result.resistance?.mode)}, ${numberOrNull(result.resistance_kg ?? result.resistance?.load_kg)}, ${numberOrNull(result.rir)}, ${sql(result.note)}, ${sql(result.completed_at)});`;
 }
 
+/** @param {unknown} value */
 function numberOrNull(value) { return value === null || value === undefined ? "NULL" : Number.isFinite(Number(value)) ? String(Number(value)) : "NULL"; }
+/** @param {unknown} value */
 function integer(value) { if (!Number.isInteger(value)) throw new Error("Canonical rebuild requires integer values"); return String(value); }
+/** @param {unknown} value */
 function sql(value) { if (value === null || value === undefined) return "NULL"; return `'${String(value).replaceAll("'", "''")}'`; }

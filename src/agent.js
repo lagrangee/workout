@@ -1,6 +1,9 @@
-// @ts-nocheck
+// @ts-check
 
 import { base64UrlEncode, constantTimeEqual } from "./util.js";
+
+/** @typedef {import("../types/interfaces.js").AgentState} AgentState */
+/** @typedef {import("../types/interfaces.js").AgentStore} AgentStore */
 
 const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,60}$/;
 
@@ -26,7 +29,7 @@ export function generateAgentToken() {
   return base64UrlEncode(bytes);
 }
 
-/** @param {any} state @param {Record<string, any>} env @param {Date} now */
+/** @param {AgentState} state @param {Record<string, any>} env @param {Date} now */
 export async function createAgentAccess(state, env, now) {
   const token = generateAgentToken();
   const previous = state.agent_access;
@@ -40,14 +43,14 @@ export async function createAgentAccess(state, env, now) {
   return { active: true, token, created_at: state.agent_access.created_at, rotated_at: state.agent_access.rotated_at, revoked_at: null, copy_available: true };
 }
 
-/** @param {any} state @param {Date} now */
+/** @param {AgentState} state @param {Date} now */
 export function revokeAgentAccess(state, now) {
   if (!state.agent_access || state.agent_access.revoked_at) return { active: false, revoked: false, persist: false };
   state.agent_access.revoked_at = now.toISOString();
   return { active: false, revoked: true, persist: true };
 }
 
-/** @param {any} state */
+/** @param {AgentState} state */
 export function agentAccessStatus(state) {
   const access = state.agent_access;
   return {
@@ -58,7 +61,7 @@ export function agentAccessStatus(state) {
   };
 }
 
-/** @param {any} store @param {string} token @param {Record<string, any>} env */
+/** @param {AgentStore} store @param {string} token @param {Record<string, any>} env */
 export async function findAgentInStore(store, token, env) {
   if (typeof token !== "string" || !AGENT_TOKEN_PATTERN.test(token)) return null;
   const digest = await agentTokenDigest(token, env);

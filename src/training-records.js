@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { addDays, dateRange, dateSpan, isValidLocalDate, localDate } from "./util.js";
 import { scheduleEntry } from "./plan.js";
@@ -45,7 +45,7 @@ function requiredLocalDate(value, field) {
 /** @param {unknown} value @param {string} field @returns {string} */
 function sourceStatus(value, field = "source_status") {
   const status = value ?? "complete";
-  if (!SOURCE_STATUSES.includes(status)) throw new Error(`${field} must be a supported source status`);
+  if (typeof status !== "string" || !SOURCE_STATUSES.includes(status)) throw new Error(`${field} must be a supported source status`);
   return status;
 }
 
@@ -107,6 +107,7 @@ function safeWorkoutDetailValue(value, depth = 0) {
  */
 export function normalizeWorkoutSessionDetails(session) {
   const nested = session?.details && typeof session.details === "object" && !Array.isArray(session.details) ? session.details : {};
+  /** @type {Record<string, any>} */
   const details = {};
   for (const [canonical, aliases] of Object.entries(WORKOUT_DETAIL_ALIASES)) {
     const candidate = aliases.map((alias) => session?.[alias] ?? nested?.[alias]).find((value) => value !== undefined);
@@ -142,7 +143,7 @@ function yamlValue(value) {
  * is contextual, not an inferred relation.
  *
  * @param {Record<string, any>} session
- * @param {{ timezone: string, dataAsOf?: string|null, sourceStatus?: string, includeDetails?: boolean }} context
+ * @param {{ timezone?: string, dataAsOf?: string|null, sourceStatus?: string, includeDetails?: boolean }} [context]
  */
 export function normalizeWorkoutSessionRecord(session, context = {}) {
   if (!session || typeof session !== "object" || Array.isArray(session)) throw new Error("Workout Session must be an object");
@@ -158,7 +159,7 @@ export function normalizeWorkoutSessionRecord(session, context = {}) {
   const details = context.includeDetails === true ? normalizeWorkoutSessionDetails(session) : {};
   const canonicalSnapshot = details.snapshot?.schema_version === 2 ? details.snapshot : null;
   const exerciseIds = canonicalSnapshot
-    ? [...new Set(canonicalSnapshot.blocks?.flatMap((block) => block.exercises?.map((exercise) => exercise.exercise_id).filter(Boolean)) ?? [])]
+    ? [...new Set(/** @type {any[]} */ (canonicalSnapshot.blocks ?? []).flatMap((block) => /** @type {any[]} */ (block.exercises ?? []).map((exercise) => exercise.exercise_id).filter(Boolean)))]
     : [];
   const planId = session.plan_id ?? session.planId ?? details.plan_id ?? null;
   const planRevisionKey = session.plan_revision_key ?? session.planRevisionKey ?? details.plan_revision_key ?? null;
@@ -169,6 +170,7 @@ export function normalizeWorkoutSessionRecord(session, context = {}) {
   const rpe = numberOrNull(session.session_rpe ?? session.sessionRpe);
   if (rpe !== null && (rpe < 0 || rpe > 10)) throw new Error("session_rpe must be between 0 and 10");
   const normalizedSourceStatus = sourceStatus(context.sourceStatus ?? session.source_status ?? session.sourceStatus);
+  /** @type {any} */
   const record = {
     kind: WORKOUT_SESSION_KIND,
     schema_version: RECORD_SCHEMA_VERSION,
@@ -224,7 +226,7 @@ export function fileComponent(value) {
 /** @param {unknown[]} values @returns {number|null} */
 function completeSum(values) {
   if (!values.length || values.some((value) => numberOrNull(value) === null)) return null;
-  return values.reduce((sum, value) => sum + value, 0);
+  return /** @type {number[]} */ (values).reduce((sum, value) => sum + value, 0);
 }
 
 /** @param {any[]} activities @returns {string} */
@@ -251,7 +253,7 @@ function latestDataAsOf(activities) {
  */
 export function compactAerobicSummary(state, date, now = new Date()) {
   requiredLocalDate(date, "date");
-  const activities = (state.aerobic_activities ?? []).map(safeAerobicActivity).filter((activity) => activity.local_date === date);
+  const activities = /** @type {any[]} */ (state.aerobic_activities ?? []).map(safeAerobicActivity).filter((activity) => activity.local_date === date);
   return {
     schema_version: RECORD_SCHEMA_VERSION,
     generated_at: now.toISOString(),
@@ -277,7 +279,7 @@ export function compactAerobicSummary(state, date, now = new Date()) {
 export function recordingEvidence(state, date, intent, now = new Date()) {
   if (!intent) return null;
   requiredLocalDate(date, "date");
-  const activities = (state.aerobic_activities ?? []).map(safeAerobicActivity).filter((activity) => activity.local_date === date);
+  const activities = /** @type {any[]} */ (state.aerobic_activities ?? []).map(safeAerobicActivity).filter((activity) => activity.local_date === date);
   const matches = activities.filter((activity) => activity.sport_type === intent.sport_type && activity.route_key === intent.route_key);
   const status = matches.length === 1 ? "recorded" : activities.length ? "needs_link" : "awaiting_sync";
   return {
@@ -299,7 +301,7 @@ export function recordingEvidence(state, date, intent, now = new Date()) {
  * Build the date Hub. The two source lists are deliberately separate in both
  * machine refs and links; there is no paired event or cross-source join.
  *
- * @param {{ targetDate: string, timezone: string, now?: Date, workout?: any, coros?: any, activities?: any[] }} input
+ * @param {{ targetDate: string, timezone: string, now?: Date, workout?: any, coros?: any, activities?: any[], errors?: any[] }} input
  */
 export function dailyHubModel(input) {
   const targetDate = requiredLocalDate(input.targetDate, "targetDate");
@@ -308,10 +310,10 @@ export function dailyHubModel(input) {
   const workout = input.workout ?? { source_status: "none", data_as_of: null, sessions: [] };
   const coros = input.coros ?? { source_status: "none", data_as_of: null };
   const errors = Array.isArray(input.errors) ? input.errors.filter((error) => error && typeof error.message === "string") : [];
-  const sessions = (workout.sessions ?? [])
+  const sessions = /** @type {any[]} */ (workout.sessions ?? [])
     .map((session) => normalizeWorkoutSessionRecord(session, { timezone, dataAsOf: workout.data_as_of, sourceStatus: workout.source_status }))
     .filter((session) => session.local_date === targetDate);
-  const activities = (input.activities ?? []).map(safeAerobicActivity).filter((activity) => activity.local_date === targetDate);
+  const activities = /** @type {any[]} */ (input.activities ?? []).map(safeAerobicActivity).filter((activity) => activity.local_date === targetDate);
   const workoutLinks = sessions.map((record) => `[[${workoutSessionRelativePath(record.local_date, record.session_key)}]]`);
   const aerobicLinks = activities.map((activity) => `[[${corosActivityPath(activity.activity_ref, targetDate)}]]`);
   const workoutStatus = sourceStatus(workout.source_status ?? "none", "workout.source_status");
@@ -374,7 +376,7 @@ export function workoutTableModel(state, from, to, now = new Date()) {
   const start = from ?? addDays(today, -29);
   const end = to ?? today;
   if (!isValidLocalDate(start) || !isValidLocalDate(end) || start > end || (dateSpan(start, end) ?? Infinity) > 3660) throw new Error("Workout table period is invalid");
-  const rows = (state.sessions ?? [])
+  const rows = /** @type {any[]} */ (state.sessions ?? [])
     .filter((session) => session.scheduled_date >= start && session.scheduled_date <= end)
     .map((session) => normalizeWorkoutSessionRecord(session, { timezone: state.timezone }))
     .sort((left, right) => right.local_date.localeCompare(left.local_date) || right.session_key.localeCompare(left.session_key));
@@ -400,8 +402,8 @@ export function recordsOverviewModel(state, from, to, now = new Date()) {
   const end = to ?? today;
   if (!isValidLocalDate(start) || !isValidLocalDate(end) || start > end || (dateSpan(start, end) ?? Infinity) > 3660) return { error: { code: "invalid_period", message: "from and to must be valid inclusive local dates within 3660 days" } };
   const dates = dateRange(start, end);
-  const activities = (state.aerobic_activities ?? []).map(safeAerobicActivity);
-  const sessionRows = (state.sessions ?? []).map((session) => normalizeWorkoutSessionRecord(session, { timezone: state.timezone }));
+  const activities = /** @type {any[]} */ (state.aerobic_activities ?? []).map(safeAerobicActivity);
+  const sessionRows = /** @type {any[]} */ (state.sessions ?? []).map((session) => normalizeWorkoutSessionRecord(session, { timezone: state.timezone }));
   const rangedSessions = sessionRows.filter((session) => session.local_date >= start && session.local_date <= end);
   const days = dates.map((date) => {
     const entry = scheduleEntry(state, date, now, false);
@@ -437,12 +439,12 @@ export function recordsOverviewModel(state, from, to, now = new Date()) {
 
 /** @param {any} hub */
 export function dailyHubNote(hub) {
-  const workoutLinks = hub.links.workout_sessions;
-  const aerobicLinks = hub.links.coros_activities;
-  const workoutKeys = hub.machine_refs.workout_session_keys;
-  const activityRefs = hub.machine_refs.activity_refs;
-  const routeKeys = hub.machine_refs.route_keys ?? [];
-  const routeLinks = hub.links.routes ?? [];
+  const workoutLinks = /** @type {any[]} */ (hub.links.workout_sessions);
+  const aerobicLinks = /** @type {any[]} */ (hub.links.coros_activities);
+  const workoutKeys = /** @type {any[]} */ (hub.machine_refs.workout_session_keys);
+  const activityRefs = /** @type {any[]} */ (hub.machine_refs.activity_refs);
+  const routeKeys = /** @type {any[]} */ (hub.machine_refs.route_keys ?? []);
+  const routeLinks = /** @type {any[]} */ (hub.links.routes ?? []);
   const distance = hub.summary.coros.distance_km;
   const duration = hub.summary.coros.duration_sec;
   return [
@@ -487,7 +489,7 @@ export function dailyHubNote(hub) {
     `- COROS 有氧：${hub.summary.coros.activity_count} 次 · ${distance == null ? "—" : `${distance} km`} · ${duration == null ? "—" : `${duration} 秒`}`,
     "",
     "## 限制与待补",
-    hub.errors.length ? hub.errors.map((error) => `- ${error.source ?? "source"}: ${error.message}`).join("\n") : (hub.source_status.workout === "error" || hub.source_status.coros === "error" ? "- source 读取失败；缺失事实保持 null，等待下一次 sync data。" : "- 同一 local date 仅提供上下文链接，不表示两类训练属于同一事件。"),
+    hub.errors.length ? /** @type {any[]} */ (hub.errors).map((error) => `- ${error.source ?? "source"}: ${error.message}`).join("\n") : (hub.source_status.workout === "error" || hub.source_status.coros === "error" ? "- source 读取失败；缺失事实保持 null，等待下一次 sync data。" : "- 同一 local date 仅提供上下文链接，不表示两类训练属于同一事件。"),
     "",
   ].join("\n");
 }
@@ -629,7 +631,7 @@ function renderCanonicalWorkoutDetailSections(details) {
   const snapshot = details.snapshot;
   const items = Array.isArray(details.completion_items) ? details.completion_items : (snapshot.completion_items ?? []);
   const resultValues = Array.isArray(details.set_results) && details.set_results.length ? details.set_results : (details.completion_results ?? []);
-  const results = new Map(resultValues.map((result) => [result.completion_item_key, result]));
+  const results = new Map(/** @type {any[]} */ (resultValues).map((result) => [result.completion_item_key, result]));
   const lines = ["## 训练计划", `- 计划快照：${snapshot.schema_version}`, `- 训练标题：${snapshot.title ?? "—"}`, `- 执行模式和左右结果均按 Session 创建时的快照保存。`, ""];
   for (const [blockIndex, block] of (snapshot.blocks ?? []).entries()) {
     lines.push(`### ${markdownCell(block?.title ?? `训练块 ${blockIndex + 1}`)}`);
@@ -639,9 +641,9 @@ function renderCanonicalWorkoutDetailSections(details) {
       lines.push(`#### ${markdownCell(exerciseTitle)} · \`${markdownCell(exercise?.exercise_id ?? "—")}\` · ${mode}`);
       lines.push("| 组 | 侧别 | 目标 | 计划阻力 | 节奏 | 休息 | 实际 | 实际阻力 | 状态 | RIR | 备注 |");
       lines.push("| ---: | --- | --- | --- | --- | ---: | --- | --- | --- | ---: | --- |");
-      const exerciseItems = items.filter((item) => (item.exercise_occurrence_key ?? item.occurrence_key) === (exercise.exercise_occurrence_key ?? exercise.occurrence_key));
+      const exerciseItems = /** @type {any[]} */ (items).filter((item) => (item.exercise_occurrence_key ?? item.occurrence_key) === (exercise.exercise_occurrence_key ?? exercise.occurrence_key));
       for (const [itemIndex, item] of exerciseItems.entries()) {
-        const set = (exercise.sets ?? []).find((candidate) => (candidate.set_id ?? candidate.set_key) === (item.set_id ?? item.set_key));
+        const set = /** @type {any[]} */ (exercise.sets ?? []).find((candidate) => (candidate.set_id ?? candidate.set_key) === (item.set_id ?? item.set_key));
         const result = results.get(item.completion_item_key);
         const target = item.target ?? set?.target;
         const plannedResistance = item.resistance ?? canonicalResistanceFromFields(item.resistance_mode, item.resistance_kg) ?? set?.resistance;
@@ -699,12 +701,12 @@ function formatCanonicalResistance(resistance) {
 
 /** @param {any} mode @returns {string} */
 function formatExecutionMode(mode) {
-  return ({ none: "不分左右", bilateral: "双侧", per_side: "左右分别", alternating: "左右交替" }[mode] ?? "模式未记录");
+  return (/** @type {Record<string, string>} */ ({ none: "不分左右", bilateral: "双侧", per_side: "左右分别", alternating: "左右交替" })[mode] ?? "模式未记录");
 }
 
 /** @param {any} status @returns {string} */
 function formatResultStatus(status) {
-  return ({ completed: "已完成", partial: "部分完成", skipped: "已跳过" }[status] ?? "未记录");
+  return (/** @type {Record<string, string>} */ ({ completed: "已完成", partial: "部分完成", skipped: "已跳过" })[status] ?? "未记录");
 }
 
 /** @param {any} mode @param {any} load @returns {any} */

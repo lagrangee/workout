@@ -1,0 +1,31 @@
+name = "workout-tracker"
+main = "src/worker.js"
+compatibility_date = "2026-07-31"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "workout.example.com", custom_domain = true, previews_enabled = false }]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "workout-tracker"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+ENVIRONMENT = "production"
+DEFAULT_TIMEZONE = "UTC"
+PRODUCTION_HOST = "workout.example.com"
+PUBLIC_ORIGIN = "https://workout.example.com"
+AUTH_LOGIN_LIMIT = "5"
+AUTH_LOGIN_CLIENT_LIMIT = "20"
+AUTH_LOGIN_WINDOW_SECONDS = "600"

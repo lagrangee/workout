@@ -165,7 +165,12 @@ test("ticket 03 Records overview distinguishes only-strength, only-aerobic, both
       wednesday: null, thursday: null, friday: null, saturday: null, sunday: null,
     } }],
     sessions: [session({ scheduled_date: "2026-08-10", session_key: "sess-strength-only" }), session({ scheduled_date: "2026-08-15" }), session({ scheduled_date: "2026-08-01", session_key: "sess-outside-range" })],
-    aerobic_activities: [activity({ local_date: "2026-08-11", activity_ref: "coros-aerobic-only" }), activity()],
+    aerobic_activities: [activity({
+      local_date: "2026-08-11",
+      activity_ref: "coros-aerobic-only",
+      started_at: "2026-08-11T00:00:00.000Z",
+      ended_at: "2026-08-11T01:00:00.000Z",
+    }), activity()],
     aerobic_projection: { source_status: "complete", source_statuses: { workout: "complete", coros: "complete" }, data_as_of: "2026-08-15T23:59:00.000Z" },
   };
   const overview = recordsOverviewModel(state, "2026-08-07", "2026-08-15", now);

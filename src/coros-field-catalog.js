@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 /**
  * The COROS response is provider-shaped. Only the fields confirmed by the
@@ -71,10 +71,12 @@ export const COROS_LAP_TABLE_COLUMNS = Object.freeze([
   { key: "average_power_w", label: "跑步功率", unit: "W" },
 ]);
 
+/** @param {unknown} value */
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** @param {Record<string, any>} target @param {string} key @param {unknown} value */
 function setIfMissing(target, key, value) {
   if (value === null || value === undefined) return;
   if (target[key] === null || target[key] === undefined) target[key] = value;

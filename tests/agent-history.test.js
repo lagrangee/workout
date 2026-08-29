@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, base64UrlDecode, base64UrlEncode } from "../src/util.js";
 import { createSession } from "../src/session.js";
-import { appFixture, call, post, testAgentSecret, today } from "./helpers.js";
+import { appFixture, call, post, testAgentSecret, TEST_NOW, testInstant, today } from "./helpers.js";
 
 async function createToken(handler) {
   const result = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" });
@@ -29,6 +29,15 @@ async function seedHistoricalSession(store, date) {
   const result = createSession(state, date, new Date(`${date}T04:00:00.000Z`), "start");
   assert.equal(result.error, undefined);
   await store.save(state);
+}
+
+function tamperSignedCursor(cursor, mutate) {
+  const parts = cursor.split(".");
+  assert.equal(parts.length, 3);
+  const value = JSON.parse(new TextDecoder().decode(base64UrlDecode(parts[1])));
+  mutate(value);
+  parts[1] = base64UrlEncode(new TextEncoder().encode(JSON.stringify(value)));
+  return parts.join(".");
 }
 
 test("Agent Session list preserves bounded filters, provenance, and training version", async () => {
@@ -75,12 +84,19 @@ test("Agent Session cursors bind filters and training version", async () => {
   const wrongFilter = await agentGet(handler, token, `/api/agent/v1/sessions?limit=1&status=completed&cursor=${encodeURIComponent(first.body.page.next_cursor)}`);
   assert.equal(wrongFilter.response.status, 400);
   assert.equal(wrongFilter.body.error.code, "invalid_cursor");
+  const wrongLimit = await agentGet(handler, token, `/api/agent/v1/sessions?limit=2&cursor=${encodeURIComponent(first.body.page.next_cursor)}`);
+  assert.equal(wrongLimit.response.status, 400);
+  assert.equal(wrongLimit.body.error.code, "invalid_cursor");
 
-  const expiredCursor = JSON.parse(new TextDecoder().decode(base64UrlDecode(first.body.page.next_cursor)));
-  expiredCursor.issued_at = Date.now() - 16 * 60 * 1000;
-  const expired = await agentGet(handler, token, `/api/agent/v1/sessions?limit=1&cursor=${encodeURIComponent(base64UrlEncode(new TextEncoder().encode(JSON.stringify(expiredCursor))))}`);
-  assert.equal(expired.response.status, 400);
-  assert.equal(expired.body.error.code, "invalid_cursor");
+  for (const mutate of [
+    (value) => { value.issued_at += 1; },
+    (value) => { value.position.key = "client_forged_position"; },
+  ]) {
+    const tamperedCursor = tamperSignedCursor(first.body.page.next_cursor, mutate);
+    const tampered = await agentGet(handler, token, `/api/agent/v1/sessions?limit=1&cursor=${encodeURIComponent(tamperedCursor)}`);
+    assert.equal(tampered.response.status, 400);
+    assert.equal(tampered.body.error.code, "invalid_cursor");
+  }
 
   const malformed = await agentGet(handler, token, "/api/agent/v1/sessions?limit=1&cursor=not-a-cursor");
   assert.equal(malformed.response.status, 400);
@@ -100,6 +116,11 @@ test("Agent Session cursors bind filters and training version", async () => {
   const state = await store.getByEmail("athlete-a@example.invalid");
   state.training_version += 1;
   await store.save(state);
+  const tamperedCursor = tamperSignedCursor(first.body.page.next_cursor, (value) => { value.training_version = state.training_version; });
+  const tampered = await agentGet(handler, token, `/api/agent/v1/sessions?limit=1&cursor=${encodeURIComponent(tamperedCursor)}`);
+  assert.equal(tampered.response.status, 400);
+  assert.equal(tampered.body.error.code, "invalid_cursor");
+
   const changed = await agentGet(handler, token, `/api/agent/v1/sessions?limit=1&cursor=${encodeURIComponent(first.body.page.next_cursor)}`);
   assert.equal(changed.response.status, 409);
   assert.equal(changed.body.error.code, "training_version_changed");
@@ -122,7 +143,7 @@ test("Agent Session list preserves skipped status and empty status boundaries", 
   assert.equal(completedPage.body.page.next_cursor, null);
 });
 
-test("Coach Share session cursors remain compatible with the legacy cursor shape", async () => {
+test("Coach Share session cursors use opaque signed continuation tokens", async () => {
   const { handler, store } = appFixture();
   await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "agent-history-coach-start"));
   await seedHistoricalSession(store, addDays(today, -7));
@@ -135,6 +156,7 @@ test("Coach Share session cursors remain compatible with the legacy cursor shape
   const first = await call(handler, `/api/coach/v1/${coachToken}/sessions?limit=1`, { headers: {} }, "ignored@example.invalid");
   assert.equal(first.response.status, 200);
   assert.equal(typeof first.body.page.next_cursor, "string");
+  assert.match(first.body.page.next_cursor, /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
   const second = await call(handler, `/api/coach/v1/${coachToken}/sessions?limit=1&cursor=${encodeURIComponent(first.body.page.next_cursor)}`, { headers: {} }, "ignored@example.invalid");
   assert.equal(second.response.status, 200);
   assert.equal(second.body.items.length, 1);
@@ -173,7 +195,8 @@ test("Agent Session detail preserves the immutable snapshot and actual training 
 });
 
 test("Agent progress preserves metric evidence, incomplete current date, and empty denominators", async () => {
-  const { handler } = appFixture();
+  let current = Date.parse(TEST_NOW);
+  const { handler } = appFixture({ clock: () => new Date(current) });
   const tokenA = await createToken(handler);
   const tokenBResult = await call(handler, "/api/private/agent-access", { method: "POST", body: "{}" }, "athlete-b@example.invalid");
   const tokenB = tokenBResult.body.token;
@@ -191,8 +214,8 @@ test("Agent progress preserves metric evidence, incomplete current date, and emp
 
   const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "agent-history-progress-start"));
   const detail = await call(handler, `/api/private/sessions/${started.body.session_key}`);
-  const recordedAt = new Date().toISOString();
-  const endedAt = new Date(Date.now() + 1000).toISOString();
+  const recordedAt = TEST_NOW;
+  const endedAt = testInstant(1000);
   const record = {
     record_schema_version: 1,
     completion_results: detail.body.snapshot.completion_items.slice(0, 1).map((item) => ({ completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: item.target.min }, resistance: item.resistance, rir: 2, completed_at: recordedAt })),
@@ -202,6 +225,7 @@ test("Agent progress preserves metric evidence, incomplete current date, and emp
     exercise_feedback: [{ exercise_occurrence_key: detail.body.snapshot.exercise_occurrence_keys[0], text: "稳定" }],
     skip_reason: null,
   };
+  current += 1000;
   const ended = await call(handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record, ended_at: endedAt }, "agent-history-progress-end"));
   assert.equal(ended.response.status, 200);
   assert.equal(ended.body.status, "partial");
@@ -217,11 +241,12 @@ test("Agent progress preserves metric evidence, incomplete current date, and emp
 });
 
 test("Agent exercise history preserves names, resistance semantics, sides, and Session references", async () => {
-  const { handler } = appFixture();
+  let current = Date.parse(TEST_NOW);
+  const { handler } = appFixture({ clock: () => new Date(current) });
   const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "agent-history-exercise-start"));
   const detail = await call(handler, `/api/private/sessions/${started.body.session_key}`);
-  const recordedAt = new Date().toISOString();
-  const endedAt = new Date(Date.now() + 1000).toISOString();
+  const recordedAt = TEST_NOW;
+  const endedAt = testInstant(1000);
   const record = {
     record_schema_version: 1,
     completion_results: detail.body.snapshot.completion_items.map((item) => ({ completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: item.target.min }, resistance: item.resistance, rir: 1, completed_at: recordedAt })),
@@ -231,6 +256,7 @@ test("Agent exercise history preserves names, resistance semantics, sides, and S
     exercise_feedback: [],
     skip_reason: null,
   };
+  current += 1000;
   const ended = await call(handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record, ended_at: endedAt }, "agent-history-exercise-end"));
   assert.equal(ended.response.status, 200);
   assert.equal(ended.body.status, "completed");

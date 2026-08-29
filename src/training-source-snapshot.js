@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -14,11 +14,13 @@ const FIT_PAYLOAD_KEYS = ["fit_bytes", "fitBytes", "fit_data", "fitData", "fit_c
  * local artifacts so the manifest stays inspectable and retries do not need
  * to reconstruct a provider envelope.
  */
+/** @param {{ archiveDir: string, timezone: string, dates: string[], capturedAt?: string|number|Date, workoutByDate?: Record<string, any>, corosByDate?: Record<string, any> }} options */
 export async function stageSourceSnapshot({ archiveDir, timezone, dates, capturedAt, workoutByDate = {}, corosByDate = {} }) {
   const snapshotId = `snapshot-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const root = join(archiveDir, ...SNAPSHOT_DIR, snapshotId);
   const fitRoot = join(root, "fit");
   await mkdir(fitRoot, { recursive: true });
+  /** @type {Record<string, any>} */
   const dateEntries = {};
 
   for (const targetDate of dates) {
@@ -73,18 +75,22 @@ export async function removeSourceSnapshot({ archiveDir, snapshotId }) {
   await rm(join(archiveDir, ...SNAPSHOT_DIR, snapshotId), { recursive: true, force: true });
 }
 
+/** @param {string} archiveDir */
 async function latestSnapshotId(archiveDir) {
   try {
     const entries = await readdir(join(archiveDir, ...SNAPSHOT_DIR), { withFileTypes: true });
     return entries.filter((entry) => entry.isDirectory() && /^snapshot-[a-z0-9-]+$/i.test(entry.name)).map((entry) => entry.name).sort().at(-1) ?? null;
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
     throw error;
   }
 }
 
+/** @param {string} root @param {any} manifest */
 async function mapsFromManifest(root, manifest) {
+  /** @type {Record<string, any>} */
   const workoutByDate = {};
+  /** @type {Record<string, any>} */
   const corosByDate = {};
   for (const [targetDate, entry] of Object.entries(manifest.dates)) {
     workoutByDate[targetDate] = cloneJson(entry.workout ?? { source_status: "none", data_as_of: null, sessions: [] });
@@ -97,7 +103,7 @@ async function mapsFromManifest(root, manifest) {
         activity.fit_bytes = new Uint8Array(await readFile(join(root, relativePath)));
       } catch (error) {
         activity.fit_file = { ...(activity.fit_file ?? {}), status: "error", error: { code: "snapshot_fit_read_failed", message: "Staged FIT artifact could not be read" } };
-        if (error?.code === "ENOENT") activity.fit_file.status = "error";
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") activity.fit_file.status = "error";
       }
     }
     corosByDate[targetDate] = coros;
@@ -105,6 +111,7 @@ async function mapsFromManifest(root, manifest) {
   return { workoutByDate, corosByDate };
 }
 
+/** @param {any} raw */
 function extractActivityFitBytes(raw) {
   for (const value of [
     ...FIT_PAYLOAD_KEYS.map((key) => raw?.[key]),
@@ -124,6 +131,7 @@ function extractActivityFitBytes(raw) {
   return null;
 }
 
+/** @param {Record<string, any>} activity */
 function stripFitPayload(activity) {
   for (const key of FIT_PAYLOAD_KEYS) delete activity[key];
   for (const key of ["fit", "fitFile", "fit_file"]) {
@@ -136,17 +144,20 @@ function stripFitPayload(activity) {
   return activity;
 }
 
+/** @param {any} raw */
 function cloneJsonWithoutFitPayload(raw) {
   const value = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
   stripFitPayload(value);
   return cloneJson(value);
 }
 
+/** @param {unknown} value @returns {any} */
 function cloneJson(value) {
   if (value === undefined) return null;
   return sanitizeSnapshotValue(value);
 }
 
+/** @param {unknown} value @param {number} [depth] @returns {any} */
 function sanitizeSnapshotValue(value, depth = 0) {
   if (value === null || value === undefined) return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
@@ -158,10 +169,12 @@ function sanitizeSnapshotValue(value, depth = 0) {
     .map(([key, child]) => [key, sanitizeSnapshotValue(child, depth + 1)]));
 }
 
+/** @param {unknown} value */
 function isSafeSnapshotPath(value) {
   return typeof value === "string" && value.startsWith("fit/") && !value.includes("..") && !value.includes("\\") && !value.startsWith("/");
 }
 
+/** @param {string} path @param {unknown} value */
 async function writeJsonAtomic(path, value) {
   await writeAtomicFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }

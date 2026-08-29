@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { WEEKDAYS, weekdayKey } from "../src/util.js";
-import { appFixture, call, today } from "./helpers.js";
+import { appFixture, call, TEST_NOW, today } from "./helpers.js";
 
 function currentCanonicalRevision() {
   /** @param {string} set_id @param {number} value @param {string|null} [tempo] @param {string} [resistance_mode] @param {number|null} [resistance_kg] */
@@ -14,7 +14,7 @@ function currentCanonicalRevision() {
   return {
     revision_key: "rev-canonical-session",
     revision_sequence: 1,
-    created_at: new Date().toISOString(),
+    created_at: TEST_NOW,
     effective_from: "2026-01-01",
     week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? { kind: "workout", title: "核心快训", start_time: "21:00", estimated_duration_min: 20, blocks: [{ title: "主训练", exercises }] } : null])),
   };

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, canonicalJson, localDate, weekdayKey } from "../src/util.js";
-import { appFixture, call, json, packageText, post, today, workout, week } from "./helpers.js";
+import { appFixture, call, json, packageText, post, TEST_NOW, testInstant, today, workout, week } from "./helpers.js";
 
 test("ticket 16: private identity is isolated and settings are validated", async () => {
   const { handler } = appFixture();
@@ -11,7 +11,7 @@ test("ticket 16: private identity is isolated and settings are validated", async
   assert.equal(missing.response.status, 403); assert.equal(missing.body.error.code, "forbidden");
   const noAuth = await handler.fetch(new Request("https://workout.example/api/private/me"), { LOCAL_AUTH: "true" });
   assert.equal(noAuth.status, 401);
-  const unsignedClaims = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url") + "." + Buffer.from(JSON.stringify({ email: "athlete-a@example.invalid", exp: Math.floor(Date.now() / 1000) + 300 })).toString("base64url") + ".unsigned";
+  const unsignedClaims = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url") + "." + Buffer.from(JSON.stringify({ email: "athlete-a@example.invalid", exp: Math.floor(Date.parse(TEST_NOW) / 1000) + 300 })).toString("base64url") + ".unsigned";
   const unsigned = await handler.fetch(new Request("https://workout.example/api/private/me", { headers: { "CF-Access-Jwt-Assertion": unsignedClaims } }), { ENVIRONMENT: "development" });
   assert.equal(unsigned.status, 401);
   const update = await call(handler, "/api/private/settings", json({ method: "PUT" }, { display_name: "Updated Athlete", timezone: "UTC" }));
@@ -111,12 +111,13 @@ test("ticket 09: historical skipped Session remains correctable and Calendar rea
 
 /** @param {any} detail @param {number} count @param {number|null} rpe @returns {any} */
 function recordFor(detail, count = detail.snapshot.completion_items.length, rpe = null) {
-  const now = new Date().toISOString();
+  const now = TEST_NOW;
   return { record_schema_version: 1, completion_results: detail.snapshot.completion_items.slice(0, count).map(/** @param {any} item */ (item) => ({ completion_item_key: item.completion_item_key, completed: true, actual: { metric: item.target.metric, value: item.target.min }, resistance: item.resistance, rir: null, completed_at: now })), training_intervals: detail.training_intervals, session_rpe: rpe, note: "  split work  ", exercise_feedback: [{ exercise_occurrence_key: detail.snapshot.exercise_occurrence_keys[0], text: "动作稳定" }], skip_reason: null };
 }
 
 test("tickets 19-20: record, end, continue, split intervals and terminal correction", async () => {
-  const { handler } = appFixture();
+  let current = Date.parse(TEST_NOW);
+  const { handler } = appFixture({ clock: () => new Date(current) });
   const start = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "start"));
   let detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); const partialRecord = recordFor(detail.body, 1);
   const otherAthleteDetail = await call(handler, `/api/private/sessions/${start.body.session_key}`, {}, "athlete-b@example.invalid");
@@ -124,17 +125,18 @@ test("tickets 19-20: record, end, continue, split intervals and terminal correct
   const otherAthleteCorrection = await call(handler, `/api/private/sessions/${start.body.session_key}/record`, json({ method: "PUT" }, partialRecord), "athlete-b@example.invalid");
   assert.equal(otherAthleteCorrection.response.status, 404);
   const saved = await call(handler, `/api/private/sessions/${start.body.session_key}/record`, json({ method: "PUT" }, partialRecord)); assert.equal(saved.response.status, 200);
-  detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); const endedAt = new Date().toISOString(); const endedRecord = recordFor(detail.body, 1, 7); endedRecord.training_intervals[0].ended_at = endedAt;
+  detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); current += 1000; const endedAt = new Date(current).toISOString(); const endedRecord = recordFor(detail.body, 1, 7); endedRecord.training_intervals[0].ended_at = endedAt;
   const ended = await call(handler, `/api/private/sessions/${start.body.session_key}/end`, post({ record: endedRecord, ended_at: endedAt }, "end")); assert.equal(ended.response.status, 200); assert.equal(ended.body.status, "partial"); assert.equal(ended.body.training_intervals[0].ended_at, endedAt);
-  const continued = await call(handler, `/api/private/sessions/${start.body.session_key}/continue`, post({}, "continue")); assert.equal(continued.response.status, 200); assert.equal(continued.body.status, "in_progress"); assert.equal(continued.body.training_intervals.length, 2);
-  detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); const closed = recordFor(detail.body, 4, 8); closed.training_intervals = detail.body.training_intervals.map(/** @param {any} interval */ (interval) => interval.ended_at ? interval : { ...interval, ended_at: new Date(Math.max(Date.now(), Date.parse(interval.started_at) + 1000)).toISOString() });
+  current += 1000; const continued = await call(handler, `/api/private/sessions/${start.body.session_key}/continue`, post({}, "continue")); assert.equal(continued.response.status, 200); assert.equal(continued.body.status, "in_progress"); assert.equal(continued.body.training_intervals.length, 2);
+  detail = await call(handler, `/api/private/sessions/${start.body.session_key}`); current += 1000; const closed = recordFor(detail.body, 4, 8); closed.training_intervals = detail.body.training_intervals.map(/** @param {any} interval */ (interval) => interval.ended_at ? interval : { ...interval, ended_at: new Date(current).toISOString() });
   const completed = await call(handler, `/api/private/sessions/${start.body.session_key}/end`, post({ record: closed, ended_at: closed.training_intervals.at(-1).ended_at }, "end-2")); assert.equal(completed.response.status, 200); assert.equal(completed.body.status, "completed");
   const beforeSnapshot = canonicalJson(completed.body.snapshot); const correction = { ...closed, completion_results: closed.completion_results.slice(0, 2), training_intervals: completed.body.training_intervals, session_rpe: 6, note: "corrected", exercise_feedback: [], skip_reason: null };
   const corrected = await call(handler, `/api/private/sessions/${start.body.session_key}/record`, json({ method: "PUT" }, correction)); assert.equal(corrected.response.status, 200); assert.equal(corrected.body.status, "partial"); assert.equal(canonicalJson(corrected.body.snapshot), beforeSnapshot);
 });
 
 test("execution lifecycle: pause closes the active interval, resume opens a new one, and paused Sessions can end", async () => {
-  const { handler } = appFixture();
+  let current = Date.parse(TEST_NOW);
+  const { handler } = appFixture({ clock: () => new Date(current) });
   const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, post({}, "pause-lifecycle-start"));
   const paused = await call(handler, `/api/private/sessions/${started.body.session_key}/pause`, post({}, "pause-lifecycle-pause"));
   assert.equal(paused.response.status, 200);
@@ -142,6 +144,7 @@ test("execution lifecycle: pause closes the active interval, resume opens a new 
   const pauseReplay = await call(handler, `/api/private/sessions/${started.body.session_key}/pause`, post({}, "pause-lifecycle-pause-replay"));
   assert.deepEqual(pauseReplay.body.training_intervals, paused.body.training_intervals);
 
+  current += 1;
   const resumed = await call(handler, `/api/private/sessions/${started.body.session_key}/resume`, post({}, "pause-lifecycle-resume"));
   assert.equal(resumed.response.status, 200);
   assert.equal(resumed.body.training_intervals.length, 2);
@@ -151,7 +154,8 @@ test("execution lifecycle: pause closes the active interval, resume opens a new 
 
   const detail = await call(handler, `/api/private/sessions/${started.body.session_key}`);
   const finalRecord = recordFor(detail.body, 0, 8);
-  const ended = await call(handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record: finalRecord, ended_at: new Date().toISOString() }, "pause-lifecycle-end"));
+  current += 1;
+  const ended = await call(handler, `/api/private/sessions/${started.body.session_key}/end`, post({ record: finalRecord, ended_at: new Date(current).toISOString() }, "pause-lifecycle-end"));
   assert.equal(ended.response.status, 200);
   assert.equal(ended.body.status, "partial");
   assert.ok(ended.body.training_intervals.every(/** @param {any} interval */ (interval) => interval.ended_at));
@@ -164,7 +168,7 @@ test("execution lifecycle: pause boundaries are strict, Athlete-scoped, and acti
   const before = await store.getByEmail("athlete-a@example.invalid");
   const invalidNull = await call(handler, `${sessionPath}/pause`, post({ close_at: null }, "pause-validation-null"));
   assert.equal(invalidNull.response.status, 400);
-  const invalidFuture = await call(handler, `${sessionPath}/pause`, post({ close_at: new Date(Date.now() + 60_000).toISOString() }, "pause-validation-future"));
+  const invalidFuture = await call(handler, `${sessionPath}/pause`, post({ close_at: testInstant(60_000) }, "pause-validation-future"));
   assert.equal(invalidFuture.response.status, 400);
   const unchanged = await store.getByEmail("athlete-a@example.invalid");
   assert.equal(unchanged.training_version, before.training_version);

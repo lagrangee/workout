@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, opaqueKey } from "../src/util.js";
-import { agentRequest, appFixture, call, createAgentToken, testAgentSecret, today, week, workout } from "./helpers.js";
+import { agentRequest, appFixture, call, createAgentToken, TEST_NOW, testAgentSecret, today, week, workout } from "./helpers.js";
 
 /** @param {any} handler @param {string} token @param {string} path @param {Record<string, string>} extraHeaders */
 async function agentGet(handler, token, path, extraHeaders = {}) {
@@ -15,7 +15,7 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   stateA.plan_revisions.push({
     revision_key: opaqueKey("rev"),
     revision_sequence: 2,
-    created_at: new Date().toISOString(),
+    created_at: TEST_NOW,
     effective_from: futureEffectiveFrom,
     week: week(workout("未来计划")),
   });

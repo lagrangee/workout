@@ -1,71 +1,22 @@
-// @ts-nocheck
+// @ts-check
+
+import { PLAN_UPDATE_PACKAGE_V2_SCHEMA, PLAN_UPDATE_WEEKDAYS, validateSchemaValue } from "../src/plan-update-structure.js";
+
+/** @typedef {import("../types/interfaces.js").JsonRecord} JsonRecord */
+/** @typedef {import("../types/interfaces.js").JsonSchema} JsonSchema */
+/** @typedef {import("../types/interfaces.js").ToolDefinition} ToolDefinition */
+/** @typedef {import("../types/interfaces.js").WorkoutToolArguments} WorkoutToolArguments */
+/** @typedef {import("../types/interfaces.js").WorkoutToolName} WorkoutToolName */
+/** @typedef {import("../types/interfaces.js").PlanUpdatePackage} PlanUpdatePackage */
+/** @typedef {import("../types/interfaces.js").PlanUpdateBatch} PlanUpdateBatch */
 
 const BRIDGE_PROTOCOL_VERSION = "2025-06-18";
 const BRIDGE_SERVER_INFO = { name: "workout-agent-mcp", version: "0.1.0" };
-const PLAN_UPDATE_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+/** @param {Record<string, JsonSchema>} properties @returns {JsonSchema & { type: "object", properties: Record<string, JsonSchema>, required: string[] }} */
 const exactObject = (properties) => ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
-const nullable = (schema) => ({ oneOf: [{ type: "null" }, schema] });
+/** @param {JsonSchema} items @param {number} minItems @param {number} [maxItems] @returns {JsonSchema} */
 const arrayOf = (items, minItems, maxItems) => ({ type: "array", items, minItems, ...(maxItems === undefined ? {} : { maxItems }) });
-const PLAN_UPDATE_TARGET_SCHEMA = exactObject({
-  metric: { type: "string", enum: ["reps", "duration_sec"] },
-  value: { type: "integer", minimum: 1 },
-});
-const PLAN_UPDATE_RESISTANCE_SCHEMA = {
-  oneOf: [
-    exactObject({ mode: { const: "bodyweight" } }),
-    exactObject({ mode: { const: "external_load" }, value: { type: "number", minimum: 0 }, unit: { type: "string", enum: ["kg", "lb"] } }),
-  ],
-};
-const PLAN_UPDATE_TEMPO_SCHEMA = nullable({ type: "string", pattern: "^(?:0|[1-9]\\d*)-(?:0|[1-9]\\d*)-(?:0|[1-9]\\d*)-(?:0|[1-9]\\d*)$" });
-const PLAN_UPDATE_SET_SCHEMA = exactObject({
-  set_id: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
-  ordinal: { type: "integer", minimum: 1 },
-  target: PLAN_UPDATE_TARGET_SCHEMA,
-  resistance: PLAN_UPDATE_RESISTANCE_SCHEMA,
-  tempo: PLAN_UPDATE_TEMPO_SCHEMA,
-  rest_after_sec: nullable({ type: "integer", minimum: 0 }),
-});
-const PLAN_UPDATE_EXERCISE_SCHEMA = exactObject({
-  occurrence_key: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
-  exercise_id: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
-  execution_mode: { type: "string", enum: ["none", "bilateral", "per_side", "alternating"] },
-  sets: arrayOf(PLAN_UPDATE_SET_SCHEMA, 1, 200),
-});
-const PLAN_UPDATE_BLOCK_SCHEMA = exactObject({
-  title: { type: "string", minLength: 1, maxLength: 100 },
-  exercises: arrayOf(PLAN_UPDATE_EXERCISE_SCHEMA, 1),
-});
-const PLAN_UPDATE_RECORDING_INTENT_SCHEMA = exactObject({
-  schema_version: { type: "integer", const: 1 },
-  source: { const: "coros" },
-  sport_type: { type: "integer", enum: [100, 102, 104, 200] },
-  route_key: { type: "string", minLength: 1, maxLength: 100, pattern: "^[^/\\\\]+$" },
-});
-const PLAN_UPDATE_WORKOUT_SCHEMA = {
-  type: "object",
-  properties: {
-    kind: { const: "workout" },
-    title: { type: "string", minLength: 1, maxLength: 100 },
-    start_time: nullable({ type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }),
-    estimated_duration_min: { type: "integer", minimum: 1 },
-    recording_intent: PLAN_UPDATE_RECORDING_INTENT_SCHEMA,
-    blocks: arrayOf(PLAN_UPDATE_BLOCK_SCHEMA, 1, 20),
-  },
-  required: ["kind", "title", "start_time", "estimated_duration_min", "blocks"],
-  additionalProperties: false,
-};
-const PLAN_UPDATE_SLOT_SCHEMA = {
-  oneOf: [
-    { type: "null" },
-    exactObject({ kind: { const: "rest" } }),
-    PLAN_UPDATE_WORKOUT_SCHEMA,
-  ],
-};
-const PLAN_UPDATE_PACKAGE_SCHEMA = exactObject({
-  schema_version: { type: "integer", const: 2 },
-  effective_from: { type: "string", format: "date" },
-  week: exactObject(Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, PLAN_UPDATE_SLOT_SCHEMA]))),
-});
+const PLAN_UPDATE_PACKAGE_SCHEMA = PLAN_UPDATE_PACKAGE_V2_SCHEMA;
 const PLAN_UPDATE_APPLY_SCHEMA = exactObject({
   package: PLAN_UPDATE_PACKAGE_SCHEMA,
   package_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
@@ -85,6 +36,7 @@ const PLAN_UPDATE_BATCH_APPLY_SCHEMA = exactObject({
   idempotency_key: { type: "string", minLength: 1, maxLength: 200 },
 });
 
+/** @type {ToolDefinition[]} */
 const TOOL_DEFINITIONS = [
   {
     name: "workout_get_overview",
@@ -155,6 +107,7 @@ const TOOL_DEFINITIONS = [
 ];
 
 export class WorkoutApiError extends Error {
+  /** @param {string} code @param {string} message @param {number} [status] @param {unknown[]} [details] */
   constructor(code, message, status = 0, details = []) {
     super(message);
     this.name = "WorkoutApiError";
@@ -165,6 +118,7 @@ export class WorkoutApiError extends Error {
 }
 
 export class WorkoutApiClient {
+  /** @param {{ origin?: string, token?: string, fetchImpl?: typeof globalThis.fetch }} [options] */
   constructor({ origin, token, fetchImpl = globalThis.fetch } = {}) {
     if (typeof origin !== "string" || !origin) throw new Error("WORKOUT_AGENT_API_ORIGIN is required");
     if (typeof token !== "string" || !token) throw new Error("WORKOUT_AGENT_TOKEN is required");
@@ -179,31 +133,36 @@ export class WorkoutApiClient {
 
   listTools() { return TOOL_DEFINITIONS.map((tool) => ({ ...tool, inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties }, ...(tool.inputSchema.required ? { required: [...tool.inputSchema.required] } : {}) }, annotations: { ...tool.annotations } })); }
 
-  async callTool(name, args = {}) {
-    if (name === "workout_get_overview") return this.getOverview(args);
-    if (name === "workout_get_plan") return this.getPlan(args);
-    if (name === "workout_get_schedule") return this.getSchedule(args);
-    if (name === "workout_list_sessions") return this.listSessions(args);
-    if (name === "workout_get_session") return this.getSession(args);
-    if (name === "workout_get_progress") return this.getProgress(args);
-    if (name === "workout_get_exercise_history") return this.getExerciseHistory(args);
-    if (name === "workout_validate_plan_update") return this.validatePlanUpdate(args);
-    if (name === "workout_apply_plan_update") return this.applyPlanUpdate(args);
-    if (name === "workout_validate_plan_update_batch") return this.validatePlanUpdateBatch(args);
-    if (name === "workout_apply_plan_update_batch") return this.applyPlanUpdateBatch(args);
+  /** @template {WorkoutToolName} Name @param {Name} name @param {WorkoutToolArguments[Name]} [args] */
+  async callTool(name, args = /** @type {WorkoutToolArguments[Name]} */ ({})) {
+    const input = /** @type {any} */ (args);
+    if (name === "workout_get_overview") return this.getOverview(input);
+    if (name === "workout_get_plan") return this.getPlan(input);
+    if (name === "workout_get_schedule") return this.getSchedule(input);
+    if (name === "workout_list_sessions") return this.listSessions(input);
+    if (name === "workout_get_session") return this.getSession(input);
+    if (name === "workout_get_progress") return this.getProgress(input);
+    if (name === "workout_get_exercise_history") return this.getExerciseHistory(input);
+    if (name === "workout_validate_plan_update") return this.validatePlanUpdate(input);
+    if (name === "workout_apply_plan_update") return this.applyPlanUpdate(input);
+    if (name === "workout_validate_plan_update_batch") return this.validatePlanUpdateBatch(input);
+    if (name === "workout_apply_plan_update_batch") return this.applyPlanUpdateBatch(input);
     throw new WorkoutApiError("tool_not_found", `Tool is not available: ${name}`, 0);
   }
 
+  /** @param {WorkoutToolArguments["workout_get_overview"]} [args] */
   async getOverview(args = {}) {
     assertToolArguments("workout_get_overview", args);
     const query = new URLSearchParams();
-    for (const field of ["from", "to", "preset", "range"]) if (typeof args[field] === "string") query.set(field, args[field]);
+    for (const field of /** @type {(keyof WorkoutToolArguments["workout_get_overview"])[]} */ (["from", "to", "preset", "range"])) if (typeof args[field] === "string") query.set(field, args[field]);
     return this.get(`/overview${query.size ? `?${query}` : ""}`);
   }
 
+  /** @param {WorkoutToolArguments["workout_get_plan"]} [args] */
   async getPlan(args = {}) { assertToolArguments("workout_get_plan", args); return this.get("/plan"); }
 
-  async getSchedule(args = {}) {
+  /** @param {WorkoutToolArguments["workout_get_schedule"]} args */
+  async getSchedule(args) {
     assertToolArguments("workout_get_schedule", args);
     const query = new URLSearchParams();
     if (typeof args.from === "string") query.set("from", args.from);
@@ -212,38 +171,44 @@ export class WorkoutApiClient {
     return this.get(`/schedule${query.size ? `?${query}` : ""}`);
   }
 
+  /** @param {WorkoutToolArguments["workout_list_sessions"]} [args] */
   async listSessions(args = {}) {
     assertToolArguments("workout_list_sessions", args);
     const query = new URLSearchParams();
-    for (const field of ["from", "to", "limit", "cursor", "status", "exercise_id"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+    for (const field of /** @type {(keyof WorkoutToolArguments["workout_list_sessions"])[]} */ (["from", "to", "limit", "cursor", "status", "exercise_id"])) if (args[field] !== undefined) query.set(field, String(args[field]));
     return this.get(`/sessions${query.size ? `?${query}` : ""}`);
   }
 
-  async getSession(args = {}) {
+  /** @param {WorkoutToolArguments["workout_get_session"]} args */
+  async getSession(args) {
     assertToolArguments("workout_get_session", args);
     return this.get(`/sessions/${encodeURIComponent(args.session_key)}`);
   }
 
+  /** @param {WorkoutToolArguments["workout_get_progress"]} [args] */
   async getProgress(args = {}) {
     assertToolArguments("workout_get_progress", args);
     const query = new URLSearchParams();
-    for (const field of ["from", "to", "preset", "range", "bucket"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+    for (const field of /** @type {(keyof WorkoutToolArguments["workout_get_progress"])[]} */ (["from", "to", "preset", "range", "bucket"])) if (args[field] !== undefined) query.set(field, String(args[field]));
     return this.get(`/progress${query.size ? `?${query}` : ""}`);
   }
 
-  async getExerciseHistory(args = {}) {
+  /** @param {WorkoutToolArguments["workout_get_exercise_history"]} args */
+  async getExerciseHistory(args) {
     assertToolArguments("workout_get_exercise_history", args);
     const query = new URLSearchParams();
-    for (const field of ["from", "to", "preset", "range"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+    for (const field of /** @type {(keyof WorkoutToolArguments["workout_get_exercise_history"])[]} */ (["from", "to", "preset", "range"])) if (args[field] !== undefined) query.set(field, String(args[field]));
     return this.get(`/exercises/${encodeURIComponent(args.exercise_id)}${query.size ? `?${query}` : ""}`);
   }
 
-  async validatePlanUpdate(args = {}) {
+  /** @param {WorkoutToolArguments["workout_validate_plan_update"]} args */
+  async validatePlanUpdate(args) {
     assertToolArguments("workout_validate_plan_update", args);
     return this.post("/plan-updates/validate", { package_text: JSON.stringify(args.package) });
   }
 
-  async applyPlanUpdate(args = {}) {
+  /** @param {WorkoutToolArguments["workout_apply_plan_update"]} args */
+  async applyPlanUpdate(args) {
     assertToolArguments("workout_apply_plan_update", args);
     const applied = await this.post("/plan-updates/apply", {
       package_text: JSON.stringify(args.package),
@@ -261,7 +226,7 @@ export class WorkoutApiClient {
       verifyPlanReadback(plan, readbackFrom, args.package);
       verifyScheduleReadback(schedule, readbackFrom, readbackTo);
       return { ...applied, readback: { status: "verified", plan, schedule } };
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       return {
         ...applied,
         readback: {
@@ -277,12 +242,14 @@ export class WorkoutApiClient {
     }
   }
 
-  async validatePlanUpdateBatch(args = {}) {
+  /** @param {WorkoutToolArguments["workout_validate_plan_update_batch"]} args */
+  async validatePlanUpdateBatch(args) {
     assertToolArguments("workout_validate_plan_update_batch", args);
     return this.post("/plan-update-batches/validate", { batch_text: JSON.stringify(args.batch) });
   }
 
-  async applyPlanUpdateBatch(args = {}) {
+  /** @param {WorkoutToolArguments["workout_apply_plan_update_batch"]} args */
+  async applyPlanUpdateBatch(args) {
     assertToolArguments("workout_apply_plan_update_batch", args);
     const applied = await this.post("/plan-update-batches/apply", {
       batch_text: JSON.stringify(args.batch),
@@ -300,7 +267,7 @@ export class WorkoutApiClient {
       for (const update of args.batch.updates) verifyPlanReadback(plan, update.effective_from, update);
       verifyScheduleRangeReadback(schedule, readbackFrom, readbackTo);
       return { ...applied, readback: { status: "verified", plan, schedule } };
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       return {
         ...applied,
         readback: {
@@ -316,19 +283,22 @@ export class WorkoutApiClient {
     }
   }
 
+  /** @param {string} path */
   async get(path) {
     return this.request(path, { method: "GET" });
   }
 
+  /** @param {string} path @param {unknown} body @param {Record<string, string>} [headers] @param {RequestInit} [requestOptions] */
   async post(path, body, headers = {}, requestOptions = {}) {
     return this.request(path, { ...requestOptions, method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
   }
 
+  /** @param {string} path @param {RequestInit} [options] @returns {Promise<any>} */
   async request(path, options = {}) {
     let response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, { ...options, headers: { Accept: "application/json", Authorization: `Bearer ${this.token}`, ...(options.headers ?? {}) } });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       throw new WorkoutApiError("transport_error", error instanceof Error ? error.message : "Agent API request failed");
     }
     const text = await response.text();
@@ -343,11 +313,15 @@ export class WorkoutApiClient {
   }
 }
 
+/** @param {unknown} message */
 export function hasId(message) { return Boolean(message && typeof message === "object" && Object.prototype.hasOwnProperty.call(message, "id")); }
+/** @param {unknown} id @param {unknown} result */
 function makeResponse(id, result) { return { jsonrpc: "2.0", id, result }; }
+/** @param {unknown} id @param {number} code @param {string} message */
 export function makeError(id, code, message) { return { jsonrpc: "2.0", id, error: { code, message } }; }
 
 export class McpBridge {
+  /** @param {{ client?: import("../types/interfaces.js").McpClient, serverInfo?: { name: string, version: string } }} [options] */
   constructor({ client, serverInfo = BRIDGE_SERVER_INFO } = {}) {
     if (!client || typeof client.listTools !== "function" || typeof client.callTool !== "function") throw new TypeError("McpBridge requires a typed workout client");
     this.client = client;
@@ -356,6 +330,7 @@ export class McpBridge {
 
   async getTools() { return this.client.listTools(); }
 
+  /** @param {any} message */
   async handleMessage(message) {
     if (!message || typeof message !== "object" || message.jsonrpc !== "2.0" || typeof message.method !== "string") return makeError(hasId(message ?? {}) ? message.id : null, -32600, "Invalid Request");
     if (message.method === "notifications/initialized") return null;
@@ -367,8 +342,9 @@ export class McpBridge {
     return makeError(message.id, -32601, `Method not found: ${message.method}`);
   }
 
+  /** @param {any} message */
   async handleToolCall(message) {
-    const params = message.params;
+    const params = /** @type {JsonRecord|undefined} */ (message.params);
     if (!params || typeof params !== "object" || typeof params.name !== "string") return makeError(message.id, -32602, "tools/call requires params.name");
     if (params.arguments !== undefined && (!params.arguments || typeof params.arguments !== "object" || Array.isArray(params.arguments))) return makeError(message.id, -32602, "tools/call params.arguments must be an object");
     const available = await this.getTools();
@@ -376,16 +352,18 @@ export class McpBridge {
     const validationError = validateToolArguments(available.find((tool) => tool.name === params.name), params.arguments ?? {});
     if (validationError) return makeError(message.id, -32602, validationError);
     try {
-      const value = await this.client.callTool(params.name, params.arguments ?? {});
+      const value = await this.client.callTool(/** @type {WorkoutToolName} */ (params.name), params.arguments ?? {});
       return makeResponse(message.id, { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       const failure = { error: { code: error.code ?? "transport_error", message: error.message ?? String(error), details: error.details ?? [] }, status: error.status ?? 0 };
       return makeResponse(message.id, { content: [{ type: "text", text: JSON.stringify(failure) }], structuredContent: failure, isError: true });
     }
   }
 }
 
+/** @param {ToolDefinition|undefined} tool @param {JsonRecord} args */
 function validateToolArguments(tool, args) {
+  if (!tool) return "Tool is not available";
   const schema = tool.inputSchema;
   const properties = schema.properties ?? {};
   for (const required of schema.required ?? []) if (!Object.hasOwn(args, required)) return `Missing required argument: ${required}`;
@@ -398,49 +376,15 @@ function validateToolArguments(tool, args) {
   return null;
 }
 
+/** @param {JsonSchema} property @param {unknown} value @param {string} label */
 function validateArgumentValue(property, value, label) {
-  if (property.oneOf) {
-    if (property.oneOf.some((candidate) => !validateArgumentValue(candidate, value, label))) return null;
-    return `${label} does not match the expected shape`;
-  }
-  if (property.type === "null") return value === null ? null : `${label} must be null`;
-  if (property.type === "string" && typeof value !== "string") return `${label} must be a string`;
-  if (property.type === "string" && property.pattern && !new RegExp(property.pattern).test(value)) return `${label} has an invalid format`;
-  if (property.type === "string" && property.minLength !== undefined && value.length < property.minLength) return `${label} is too short`;
-  if (property.type === "string" && property.maxLength !== undefined && value.length > property.maxLength) return `${label} is too long`;
-  if (property.type === "object") {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return `${label} must be an object`;
-    for (const required of property.required ?? []) if (!Object.hasOwn(value, required)) return `Missing required argument: ${label}.${required}`;
-    for (const key of Object.keys(value)) {
-      const hasNestedProperty = Object.hasOwn(property.properties ?? {}, key);
-      const nested = hasNestedProperty ? property.properties[key] : undefined;
-      if (!hasNestedProperty && property.additionalProperties === false) return `Unknown argument: ${label}.${key}`;
-      if (nested) {
-        const error = validateArgumentValue(nested, value[key], `${label}.${key}`);
-        if (error) return error;
-      }
-    }
-  }
-  if (property.type === "array") {
-    if (!Array.isArray(value)) return `${label} must be an array`;
-    if (property.minItems !== undefined && value.length < property.minItems) return `${label} must contain at least ${property.minItems} items`;
-    if (property.maxItems !== undefined && value.length > property.maxItems) return `${label} must contain at most ${property.maxItems} items`;
-    for (let index = 0; index < value.length; index += 1) {
-      const error = validateArgumentValue(property.items, value[index], `${label}.${index}`);
-      if (error) return error;
-    }
-  }
-  if (property.type === "boolean" && typeof value !== "boolean") return `${label} must be a boolean`;
-  if (property.type === "integer" && !Number.isInteger(value)) return `${label} must be an integer`;
-  if (property.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) return `${label} must be a number`;
-  if (property.const !== undefined && value !== property.const) return `${label} is unsupported`;
-  if (property.minimum !== undefined && value < property.minimum) return `${label} is below the minimum`;
-  if (property.maximum !== undefined && value > property.maximum) return `${label} is above the maximum`;
-  if (property.enum && !property.enum.includes(value)) return `${label} is unsupported`;
-  if (property.format === "date" && !isValidDateArgument(value)) return `${label} must be a valid YYYY-MM-DD date`;
-  return null;
+  const error = validateSchemaValue(property, value)[0];
+  if (!error) return null;
+  const nestedLabel = error.path ? `${label}${error.path.replaceAll("/", ".")}` : label;
+  return `${nestedLabel} ${error.message}`;
 }
 
+/** @param {WorkoutToolName} name @param {JsonRecord} args */
 function assertToolArguments(name, args) {
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new WorkoutApiError("invalid_arguments", "Tool arguments must be an object");
   const tool = TOOL_DEFINITIONS.find((candidate) => candidate.name === name);
@@ -448,18 +392,14 @@ function assertToolArguments(name, args) {
   if (validationError) throw new WorkoutApiError("invalid_arguments", validationError);
 }
 
-function isValidDateArgument(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}
-
+/** @param {string} value @param {number} days */
 function addDays(value, days) {
   const date = new Date(`${value}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
 
+/** @param {any} plan @param {string} effectiveFrom @param {PlanUpdatePackage} expectedPackage */
 function verifyPlanReadback(plan, effectiveFrom, expectedPackage) {
   const revisions = [plan?.current, ...(Array.isArray(plan?.future) ? plan.future : [])];
   const revision = revisions.find((candidate) => candidate?.effective_from === effectiveFrom);
@@ -467,12 +407,14 @@ function verifyPlanReadback(plan, effectiveFrom, expectedPackage) {
   if (JSON.stringify(comparablePlanWeek(revision.week)) !== JSON.stringify(comparablePlanWeek(expectedPackage.week))) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not match the applied Weekly Template");
 }
 
+/** @param {any} schedule @param {string} from @param {string} to */
 function verifyScheduleReadback(schedule, from, to) {
   const entries = schedule?.entries;
   const expectedDates = Array.from({ length: 7 }, (_, index) => addDays(from, index));
   if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied seven-day window");
 }
 
+/** @param {any} schedule @param {string} from @param {string} to */
 function verifyScheduleRangeReadback(schedule, from, to) {
   const entries = schedule?.entries;
   const expectedLength = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
@@ -480,10 +422,12 @@ function verifyScheduleRangeReadback(schedule, from, to) {
   if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied batch window");
 }
 
+/** @param {any} week */
 function comparablePlanWeek(week) {
   return Object.fromEntries(PLAN_UPDATE_WEEKDAYS.map((day) => [day, comparablePlanSlot(week?.[day])]));
 }
 
+/** @param {any} slot */
 function comparablePlanSlot(slot) {
   if (slot === null) return null;
   if (slot?.kind === "rest") return { kind: "rest" };
@@ -495,13 +439,13 @@ function comparablePlanSlot(slot) {
     start_time: source.start_time,
     estimated_duration_min: source.estimated_duration_min,
     ...(source.recording_intent ? { recording_intent: source.recording_intent } : {}),
-    blocks: source.blocks.map((block) => ({
+    blocks: source.blocks.map((/** @type {any} */ block) => ({
       title: block.title,
-      exercises: block.exercises.map((exercise) => ({
+      exercises: block.exercises.map((/** @type {any} */ exercise) => ({
         occurrence_key: exercise.occurrence_key,
         exercise_id: exercise.exercise_id,
         execution_mode: exercise.execution_mode,
-        sets: exercise.sets.map((set) => ({
+        sets: exercise.sets.map((/** @type {any} */ set) => ({
           set_id: set.set_id,
           ordinal: set.ordinal,
           target: set.target,

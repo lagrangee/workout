@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -14,7 +16,12 @@ jobs:
   validate:
     name: Validate
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    # Explicit Bash uses GitHub's fail-fast, pipefail invocation so tee cannot
+    # hide a non-zero gate or audit result.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -28,5 +35,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run release checks
-        run: npm run release-check
+      - name: Run reproducible public source gate
+        run: |
+          mkdir -p artifacts
+          npm run public:gate 2>&1 | tee artifacts/public-source-gate.log
+
+      - name: Review runtime dependency advisories
+        run: npm run audit:runtime 2>&1 | tee artifacts/runtime-advisories.log
+
+      - name: Review development dependency advisories
+        run: npm run audit:development 2>&1 | tee artifacts/development-advisories.log
+
+      - name: Preserve source-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-source-gate-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14

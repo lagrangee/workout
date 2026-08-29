@@ -18,6 +18,7 @@ ID-to-name mapping.
       "name": "死虫",
       "definition_version": 1,
       "status": "active",
+      "category": "strength",
       "execution": { "side_modes": ["per_side", "alternating"] },
       "target": { "metrics": ["reps", "duration_sec"] },
       "resistance": { "modes": ["bodyweight"], "units": [] },
@@ -29,10 +30,16 @@ ID-to-name mapping.
 ```
 
 `exercise_id` is immutable and is the identity used by Plans, Sessions, joins,
-and history. `slug` is only a readable reference. A formal name may change;
-that change increments only the Exercise's `definition_version`. An ID is
+and history. `slug` is only a readable reference. A formal name or category may
+change; either change increments the Exercise's `definition_version`. An ID is
 never reused. `status` is `active` or `deprecated`: both remain resolvable for
 historical reads, but only active definitions may be selected by a new Plan.
+
+`category` is required and is exactly one of `strength`, `endurance`,
+`mobility`, or `recovery`. It states the Exercise's primary training intent and
+is never inferred from `exercise_id`, name, equipment, or capabilities. Plan
+and Session snapshots retain the category selected at their respective write
+boundaries so a later Registry change cannot reinterpret history.
 
 The four standard capability groups are strict:
 

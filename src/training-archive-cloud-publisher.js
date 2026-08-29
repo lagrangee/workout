@@ -106,6 +106,7 @@ export function createAgentAerobicProjectionPublisher(options = {}) {
  */
 export function createAuthenticatedAerobicProjectionPublisher(options = {}) {
   const origin = options.origin;
+  if (typeof origin !== "string" || !origin.trim()) throw new Error("A Workout application origin is required");
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof options.sessionCookie === "string" && !normalizeSessionCookie(options.sessionCookie)) throw new Error("An application session cookie is invalid");
   if (typeof options.sessionCookie !== "string" && !(typeof options.email === "string" && typeof options.password === "string")) {
@@ -122,7 +123,7 @@ export function createAuthenticatedAerobicProjectionPublisher(options = {}) {
       const endpoint = new URL("/api/auth/login", origin);
       const response = await fetchImpl(endpoint, {
         method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        headers: { Accept: "application/json", Origin: new URL(origin).origin, "Content-Type": "application/json" },
         body: JSON.stringify({ email: options.email, password: options.password }),
       });
       const payload = await readJson(response);
@@ -147,6 +148,7 @@ export function createAuthenticatedAerobicProjectionPublisher(options = {}) {
     const cookie = await ensureSessionCookie();
     const headers = new Headers(init.headers);
     headers.set("Cookie", cookie);
+    headers.set("Origin", new URL(origin).origin);
     return fetchImpl(url, { ...init, credentials: "omit", headers });
   };
 

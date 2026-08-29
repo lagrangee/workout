@@ -43,8 +43,8 @@ GET /api/agent/v1
 ```
 
 The token-authenticated manifest identifies the Athlete display name and
-timezone, unit conventions, freshness timestamps, `training_version`, safe
-relative resource paths, and the explicit date rules. It contains no email,
+timezone, unit conventions, freshness timestamps, `training_version`,
+`archive_version`, safe relative resource paths, and the explicit date rules. It contains no email,
 database identity, digest, Token, Coach Share URL, or token-bearing URL.
 
 The current read resources are:
@@ -90,10 +90,13 @@ prescriptions keyed by the stable `prescription_ref` already present on each
 workout entry. The same plan revision and weekday therefore share one
 prescription object across multiple dates.
 
-All resources preserve `data_as_of`, `training_version`, the relevant
-Athlete-local period, and token-free `source_ref` values. Schedule expansion
-uses the public prescription shape from the wire catalog; it never returns a
-raw internal plan slot or revision identity.
+Workout-owned resources preserve `data_as_of`, `training_version`, the relevant
+Athlete-local period, and token-free `source_ref` values. Training Archive
+resources instead preserve `data_as_of` and `archive_version`: Workout Plan or
+Session mutations do not invalidate Archive traversal, while a successful
+Archive publication does. Schedule expansion uses the public prescription
+shape from the wire catalog; it never returns a raw internal plan slot or
+revision identity.
 
 Plan responses use the same typed Weekly Template projection: a workout slot
 contains a `prescription`, a Rest Day remains `{ kind: "rest" }`, and an empty
@@ -103,10 +106,12 @@ and do not expose internal Plan Revision keys.
 `sessions` accepts optional inclusive local-date bounds, a status enum, a
 stable global `exercise_id`, and a limit from 1 to 200 (default 50). Results are ordered by
 scheduled date descending and stable Session key descending. `page.next_cursor`
-is opaque, bound to every filter including the limit, expires after 15 minutes,
-and carries the `training_version`; a version change returns HTTP 409 with
+is opaque, versioned, HMAC-protected, bound to the Athlete, Agent Session
+resource, every filter including the limit, immutable sort position, issue
+time, and `training_version`, and expires after 15 minutes; a version change returns HTTP 409 with
 `training_version_changed`, so the Agent must restart at page one. Malformed,
-expired, or mismatched cursors return HTTP 400 with `invalid_cursor`.
+tampered, old-format, cross-resource, expired, or mismatched cursors return HTTP
+400 with `invalid_cursor`.
 
 `sessions/:session_key` returns the immutable Training Plan Snapshot alongside
 Actual Training Data: exact targets, planned resistance, tempo, rest, side,
@@ -127,6 +132,14 @@ source status and freshness, and exposes an explicit single-activity lookup
 handle for the existing Workout skill boundary. It does not perform an
 implicit live source refresh or widen the requested period.
 
+Archive index and route-history cursors are opaque, versioned, and protected
+by HMAC-SHA-256. They expire after 15 minutes and bind the Athlete, resource,
+every selector, requested limit, traversal position, and `archive_version`.
+A malformed, tampered, old-version, expired, or mismatched cursor—including
+one issued before a successful Archive publication—returns HTTP 400 with
+`invalid_cursor`, so the Agent restarts that Archive traversal at page one. A
+Workout-only `training_version` change does not invalidate an Archive cursor.
+
 The daily context resource is an exact-date, source-separated projection of
 the daily Hub. Its `sync_evidence` is `synced` only when that exact local date
 has a persisted archive publication record; otherwise it is `not_synced`.
@@ -139,10 +152,14 @@ telemetry remain outside the Agent API.
 
 `plan-updates/validate` is non-mutating. Its request body is exactly
 `{ "package_text": string }`; the string is the canonical Plan Update Package
-v2 JSON consumed by the existing strict validator. The Agent/MCP layer does
-not parse natural-language coaching requests and does not fill missing package
-fields. A valid response includes the complete resulting week, changed weekday
-count, `package_digest`, `base_plan_digest`, explicit current-plan base
+v2 JSON consumed by the strict validator. The typed MCP tools and Worker reuse
+the same portable package structure, including nullable resistance and decimal
+four-phase tempo. MCP rejects structural mismatches before transport, but
+Athlete-local date rules, Exercise Registry membership and capabilities,
+ordered/unique identities, and trimming remain Worker-owned semantic checks.
+The Agent/MCP layer does not parse natural-language coaching requests and does
+not fill missing package fields. A valid response includes the complete
+resulting week, changed weekday count, `package_digest`, `base_plan_digest`, explicit current-plan base
 evidence, `training_version`, and safe `source_ref` values; `base_plan` is the
 effective plan template selected for the package's future date, so the preview
 and base digest refer to the same template even when another future revision is
@@ -195,7 +212,9 @@ route references, and provenance, but never raw provider payloads, FIT bytes,
 GPS/coordinates, high-frequency telemetry, or local paths. A successful `200`
 response is the safe publication receipt; invalid projection, conflicting key,
 or concurrent state errors return `invalid_projection`, `idempotency_conflict`,
-or `session_state_conflict` without a partial write.
+or `session_state_conflict` without a partial write. A successful publication
+increments `archive_version` exactly once, does not change `training_version`,
+and includes the resulting `archive_version` in the receipt.
 
 ## Response and privacy rules
 

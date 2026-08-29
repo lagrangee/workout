@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { addDays, canonicalJson, isValidLocalDate, localDate, sha256Hex } from "./util.js";
@@ -28,12 +26,32 @@ const PRIVACY_OMISSIONS = Object.freeze([
   "agent_token",
 ]);
 
+/** @typedef {"none"|"complete"|"partial"|"error"} SourceStatus */
+/** @typedef {"pending"|"running"|"complete"|"partial"|"error"|"skipped"} PhaseStatus */
+/** @typedef {{ source?: string, code: string, message: string, activity_ref?: string }} SafeError */
+/** @typedef {{ [key: string]: any }} ArchiveRecord */
+/** @typedef {{ read: (targetDate: string, context: { timezone: string, now: Date }) => unknown|Promise<unknown>, readFit?: (activityRef: string, context: ArchiveRecord) => unknown|Promise<unknown> }} SourceAdapter */
+/** @typedef {{ source_status: SourceStatus, data_as_of: string|null, activities: ArchiveRecord[], sessions: ArchiveRecord[], errors: SafeError[] }} SourceResult */
+/** @typedef {{ activity_ref: string, source_ref: string, local_date: string, timezone: string, started_at: string|null, ended_at: string|null, sport_type: number, sport_name: string, source_status: string, data_as_of: string|null, updated_at: string|null, summary: ArchiveRecord, route_key: string|null, route_direction: string|null, route_match_status: string, fit_status?: string|null, fit_file?: ArchiveRecord, provider_shape?: ArchiveRecord, lap_groups?: ArchiveRecord[], lap_field_warnings?: string[], [key: string]: any }} ActivityRecord */
+/** @typedef {ActivityRecord} NormalizedActivity */
+/** @typedef {ActivityRecord} SafeActivity */
+/** @typedef {{ route_key: string, route_name?: string, sport_types?: number[], distance_range_km?: number[]|null, [key: string]: any }} RouteRecord */
+/** @typedef {{ routes: RouteRecord[], [key: string]: any }} RouteRegistry */
+/** @typedef {{ schema_version: number, publication_key: string, source_ref: string|null, target_date: string, timezone: string, source_status: SourceStatus, source_statuses: { workout: SourceStatus, coros: SourceStatus }, workout_source_status?: SourceStatus, source_data_as_of?: { workout: string|null, coros: string|null }, data_as_of: string|null, activities: SafeActivity[], routes?: ArchiveRecord[] }} CloudProjection */
+/** @typedef {{ status: SourceStatus, published_count: number, attempts: number, retryable: boolean, idempotency_key?: string|null, error?: SafeError|ArchiveRecord|null, errors: SafeError[], retried?: boolean }} CloudPublication */
+/** @typedef {(projection: CloudProjection, context: ArchiveRecord) => unknown|Promise<unknown>} ProjectionPublisher */
+/** @typedef {{ archiveDir?: string, timezone?: string, targetDate?: string, now?: Date|string|number, workoutSource?: SourceAdapter, corosSource?: SourceAdapter, publish?: ProjectionPublisher, applicationOrigin?: string, fetchImpl?: typeof fetch, credentials?: RequestCredentials, maxPublicationAttempts?: number, cloudTimeoutMs?: number, syncMode?: "refresh"|"resume", forceRefresh?: boolean, snapshotId?: string, retryCloudOnly?: boolean }} SyncOptions */
+/** @typedef {{ [name: string]: { status: PhaseStatus, [key: string]: any } }} SyncPhases */
+/** @typedef {{ target_date: string, publication_key: string, cloud_publication: CloudPublication, local_archive: ArchiveRecord, errors: SafeError[], pending_artifacts?: ArchiveRecord[], pending_projection?: CloudProjection|null, local_projection?: { activities: NormalizedActivity[] }, source_status?: { workout: SourceStatus, coros: SourceStatus }, phases?: SyncPhases, status: SourceStatus|string, [key: string]: any }} SyncReceipt */
+/** @typedef {{ status: "skipped", points: never[], error: null } | { status: "complete", points: Array<{lat:number,lon:number,distance_m:number|null,timestamp:string|null}>, diagnostics: ArchiveRecord, error: null } | { status: "error", points: never[], error: SafeError }} FitRouteResult */
+
 /**
  * Run the two-stage Training Archive sync. Source adapters and the safe cloud
  * publisher are injected so this seam remains local, deterministic, and free
  * of COROS credentials, a real vault, or production D1.
  *
- * @param {{ archiveDir: string, timezone: string, targetDate?: string, now?: Date, workoutSource?: { read: Function }, corosSource?: { read: Function, readFit?: Function }, publish?: Function, applicationOrigin?: string, fetchImpl?: Function, credentials?: string, maxPublicationAttempts?: number }} options
+ * @param {SyncOptions} options
+ * @returns {Promise<SyncReceipt>}
  */
 export async function syncTrainingArchive(options = {}) {
   const now = options.now instanceof Date ? options.now : new Date(options.now ?? Date.now());
@@ -47,10 +65,10 @@ export async function syncTrainingArchive(options = {}) {
 
   const priorReceipt = await readSyncReceipt(options.archiveDir, targetDate);
   if (shouldRetryMissingArtifacts(priorReceipt, options)) {
-    return retryMissingArtifacts({ options, priorReceipt, targetDate, timezone, now, publish });
+    return retryMissingArtifacts({ options, priorReceipt: /** @type {SyncReceipt} */ (priorReceipt), targetDate, timezone, now, publish });
   }
   if (shouldRetryCloudOnly(priorReceipt, options)) {
-    return retryPendingPublication({ options, priorReceipt, targetDate, timezone, now, publish });
+    return retryPendingPublication({ options, priorReceipt: /** @type {SyncReceipt} */ (priorReceipt), targetDate, timezone, now, publish });
   }
 
   const mode = options.syncMode === "refresh" || options.forceRefresh === true ? "refresh" : "resume";
@@ -72,6 +90,7 @@ export async function syncTrainingArchive(options = {}) {
   const workoutResult = await readSource(options.workoutSource, "workout", targetDate, timezone, now);
   const corosResult = await readSource(options.corosSource, "coros", targetDate, timezone, now);
   const prepared = prepareCorosActivities(corosResult, targetDate, timezone, now, routeRegistry, options);
+  /** @type {SafeError[]} */
   const errors = [...workoutResult.errors, ...corosResult.errors, ...prepared.errors];
   phases.source_read = completedPhase(sourceReadPhaseStatus(workoutResult, corosResult), { statuses: { workout: workoutResult.source_status, coros: corosResult.source_status } });
   phases.fit_decode = completedPhase(prepared.fitDecode.error ? "partial" : (prepared.fitDecode.attempted ? "complete" : "skipped"), prepared.fitDecode);
@@ -144,6 +163,7 @@ export async function syncTrainingArchive(options = {}) {
     routeRegistry,
   });
 
+  /** @type {CloudPublication} */
   let cloudPublication;
   if (localWrite.write_status !== "complete") {
     cloudPublication = {
@@ -213,6 +233,7 @@ export function resolveSyncTargetDate(targetDate, now, timezone) {
   return targetDate;
 }
 
+/** @param {SourceAdapter|undefined} adapter @param {string} source @param {string} targetDate @param {string} timezone @param {Date} now @returns {Promise<SourceResult>} */
 async function readSource(adapter, source, targetDate, timezone, now) {
   if (!adapter || typeof adapter.read !== "function") {
     return {
@@ -221,7 +242,7 @@ async function readSource(adapter, source, targetDate, timezone, now) {
     };
   }
   try {
-    const result = await adapter.read(targetDate, { timezone, now });
+    const result = /** @type {ArchiveRecord} */ (await adapter.read(targetDate, { timezone, now }));
     const activities = Array.isArray(result?.activities) ? result.activities : [];
     const sessions = safeSessions(result?.sessions, targetDate, timezone, result?.data_as_of, result?.source_status);
     const sourceErrors = safeErrors(result?.errors, source);
@@ -229,7 +250,7 @@ async function readSource(adapter, source, targetDate, timezone, now) {
     const inferredWithErrors = sourceErrors.length ? (activities.length || sessions.length ? "partial" : "error") : inferredStatus;
     let sourceStatus = result?.source_status ?? inferredWithErrors;
     if (sourceErrors.length && sourceStatus === "none") sourceStatus = activities.length || sessions.length ? "partial" : "error";
-    if (!SOURCE_STATUSES.includes(sourceStatus)) throw new Error(`Unsupported source_status: ${String(sourceStatus)}`);
+    if (!isSourceStatus(sourceStatus)) throw new Error(`Unsupported source_status: ${String(sourceStatus)}`);
     return {
       source_status: sourceStatus,
       data_as_of: safeInstant(result?.data_as_of),
@@ -245,10 +266,12 @@ async function readSource(adapter, source, targetDate, timezone, now) {
   }
 }
 
+/** @param {SourceStatus} sourceStatus @returns {SourceResult} */
 function emptySource(sourceStatus) {
   return { source_status: sourceStatus, data_as_of: null, activities: [], sessions: [], errors: [] };
 }
 
+/** @param {unknown} value @param {string} targetDate @param {string} timezone @param {unknown} dataAsOf @param {SourceStatus} sourceStatus @returns {ArchiveRecord[]} */
 function safeSessions(value, targetDate, timezone, dataAsOf, sourceStatus) {
   if (!Array.isArray(value)) return [];
   return value.map((session) => {
@@ -289,12 +312,19 @@ function safeSessions(value, targetDate, timezone, dataAsOf, sourceStatus) {
   }).filter(Boolean);
 }
 
+/** @param {SourceResult} coros @param {string} targetDate @param {string} timezone @param {Date} now @param {RouteRegistry} routeRegistry @param {SyncOptions} options */
 function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry, options = {}) {
+  /** @type {Map<string, NormalizedActivity>} */
   const byRef = new Map();
+  /** @type {Map<string, Uint8Array>} */
   const fitBytesByRef = new Map();
+  /** @type {ArchiveRecord[]} */
   const pendingArtifacts = [];
+  /** @type {Array<string|number>} */
   const ignoredSportTypes = [];
+  /** @type {SafeError[]} */
   const errors = [];
+  /** @type {Record<string, number>} */
   const routeAssignments = { matched: 0, registered: 0, unmatched: 0, ambiguous: 0, ignored: 0, error: 0 };
   const fitDecode = { attempted: 0, complete: 0, error: 0, skipped: 0 };
   for (const raw of coros.activities) {
@@ -316,7 +346,7 @@ function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry,
       const routeRaw = fitBytes && fitResult.status === "complete" ? { ...raw, fit_points: fitResult.points } : raw;
       const routeMatch = fitResult.status === "error"
         ? { status: "error", route_key: null, route_direction: null, matcher_version: null, registration_proposal: null }
-        : assignRoute({ raw: routeRaw, activityRef, registry: routeRegistry, options });
+        : assignRoute({ raw: routeRaw, activityRef: /** @type {string} */ (activityRef), registry: routeRegistry, options });
       routeAssignments[routeMatch.status] = (routeAssignments[routeMatch.status] ?? 0) + 1;
       const activityStatus = deriveActivityStatus(raw, coros.source_status, fitStatus, fitResult.status);
       const fitFile = {
@@ -325,7 +355,7 @@ function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry,
         bytes: fitBytes ? fitBytes.byteLength : raw?.fit_file?.bytes ?? raw?.fitFile?.bytes ?? null,
         decode_status: fitResult.status,
       };
-      const activity = normalizeCorosActivity({
+      const activity = /** @type {NormalizedActivity} */ (normalizeCorosActivity({
         ...raw,
         route_key: routeMatch.route_key,
         route_direction: routeMatch.route_direction,
@@ -338,13 +368,14 @@ function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry,
         dataAsOf: coros.data_as_of,
         sourceStatus: activityStatus,
         updatedAt: now.toISOString(),
-      });
+      }));
       if (activity.local_date !== targetDate) continue;
-      activity.fit_file.relative_path = `data/coros/${targetDate}-${fileComponent(activity.activity_ref)}.fit`;
+      const activityFitFile = /** @type {ArchiveRecord} */ (activity.fit_file);
+      activityFitFile.relative_path = `data/coros/${targetDate}-${fileComponent(activity.activity_ref)}.fit`;
       byRef.set(activity.activity_ref, activity);
       if (fitBytes && fitBytes.byteLength > 0) fitBytesByRef.set(activity.activity_ref, fitBytes);
       if (fitStatus !== "complete" && hasFitOutcome(raw)) {
-        pendingArtifacts.push({ kind: "fit", activity_ref: activity.activity_ref, relative_path: activity.fit_file.relative_path, status: fitStatus });
+        pendingArtifacts.push({ kind: "fit", activity_ref: activity.activity_ref, relative_path: activityFitFile.relative_path, status: fitStatus });
       }
       errors.push(...activityDiagnostics(raw, activity.activity_ref, fitStatus));
     } catch (error) {
@@ -355,6 +386,7 @@ function prepareCorosActivities(coros, targetDate, timezone, now, routeRegistry,
   return { activities: [...byRef.values()], fitBytesByRef, pendingArtifacts, ignoredSportTypes: [...new Set(ignoredSportTypes)], errors, routeAssignments, fitDecode };
 }
 
+/** @param {Uint8Array|null} bytes @param {string|null} activityRef @returns {FitRouteResult} */
 function decodeFitForRoute(bytes, activityRef) {
   if (!bytes || bytes.byteLength === 0) return { status: "skipped", points: [], error: null };
   try {
@@ -364,19 +396,21 @@ function decodeFitForRoute(bytes, activityRef) {
     return {
       status: "error",
       points: [],
-      error: safeError(error, "coros", error?.code ?? "fit_decode_failed", activityRef),
+      error: safeError(error, "coros", safeCode((/** @type {ArchiveRecord|null|undefined} */ (error))?.code) ?? "fit_decode_failed", activityRef),
     };
   }
 }
 
+/** @param {ArchiveRecord} raw @param {string} activityRef @param {string} fitStatus @returns {SafeError[]} */
 function activityDiagnostics(raw, activityRef, fitStatus) {
+  /** @type {SafeError[]} */
   const errors = [];
   for (const [field, code, label] of [
     ["detail_status", "coros_detail_partial", "COROS detail data is incomplete"],
     ["lap_status", "coros_lap_partial", "COROS lap data is incomplete"],
   ]) {
     const status = activityPartStatus(raw, field.replace("_status", ""));
-    if (["partial", "error"].includes(status)) errors.push({ source: "coros", code, message: label, activity_ref: activityRef });
+    if (["partial", "error"].includes(status ?? "")) errors.push({ source: "coros", code, message: label, activity_ref: activityRef });
   }
   if (fitStatus !== "complete" && hasFitOutcome(raw)) {
     const fitError = raw?.fit_error ?? raw?.fit?.error ?? raw?.fitFile?.error ?? raw?.fit_file?.error;
@@ -385,21 +419,24 @@ function activityDiagnostics(raw, activityRef, fitStatus) {
   return errors;
 }
 
+/** @param {ArchiveRecord} raw @param {SourceStatus} sourceStatus @param {string} fitStatus @param {string} fitDecodeStatus @returns {SourceStatus} */
 function deriveActivityStatus(raw, sourceStatus, fitStatus, fitDecodeStatus = "skipped") {
   const explicit = raw?.source_status ?? raw?.sourceStatus;
   if (explicit === "error") return "error";
   if (sourceStatus === "error") return "error";
   const fitFailure = (fitStatus !== "complete" && hasFitOutcome(raw)) || fitDecodeStatus === "error";
-  if (explicit === "partial" || sourceStatus === "partial" || fitFailure || [activityPartStatus(raw, "detail"), activityPartStatus(raw, "lap")].some((status) => ["partial", "error"].includes(status))) return "partial";
+  if (explicit === "partial" || sourceStatus === "partial" || fitFailure || [activityPartStatus(raw, "detail"), activityPartStatus(raw, "lap")].some((status) => ["partial", "error"].includes(status ?? ""))) return "partial";
   return sourceStatus;
 }
 
+/** @param {ArchiveRecord} raw @param {string} part @returns {string|null} */
 function activityPartStatus(raw, part) {
   const value = raw?.[`${part}_status`] ?? raw?.[part];
   if (typeof value === "string") return value;
   return value?.status ?? value?.source_status ?? null;
 }
 
+/** @param {ArchiveRecord} raw @returns {boolean} */
 function hasFitOutcome(raw) {
   return raw?.fit_status !== undefined
     || raw?.fitStatus !== undefined
@@ -413,6 +450,7 @@ function hasFitOutcome(raw) {
     || extractFitBytes(raw) !== null;
 }
 
+/** @param {ArchiveRecord} raw @param {Uint8Array|null} fitBytes @returns {string} */
 function deriveFitStatus(raw, fitBytes) {
   const declared = raw?.fit_file?.status ?? raw?.fit_file?.fit_status ?? raw?.fit?.status ?? raw?.fit?.fit_status ?? raw?.fit_status ?? raw?.fitStatus;
   if (fitBytes && fitBytes.byteLength > 0) return "complete";
@@ -421,6 +459,7 @@ function deriveFitStatus(raw, fitBytes) {
   return declared === "partial" ? "partial" : "partial";
 }
 
+/** @param {ArchiveRecord} raw @returns {Uint8Array|null} */
 function extractFitBytes(raw) {
   for (const value of [raw?.fit_bytes, raw?.fitBytes, raw?.fit_data, raw?.fitData, raw?.fit_content, raw?.fit?.data, raw?.fit?.content, raw?.fit?.bytes, raw?.fit_file?.data, raw?.fitFile?.data, raw?.fit_file?.content, raw?.fitFile?.content, raw?.fit_file?.bytes, raw?.fitFile?.bytes]) {
     const bytes = toBytes(value);
@@ -429,10 +468,12 @@ function extractFitBytes(raw) {
   return null;
 }
 
+/** @param {unknown} value @returns {Uint8Array|null} */
 function toBytes(value) {
   return toFitBytes(value);
 }
 
+/** @param {{ archiveDir: string, targetDate: string, timezone: string, now: Date, workout: SourceResult, coros: SourceResult, activitiesToWrite: NormalizedActivity[], activitiesForNote: NormalizedActivity[], fitBytesByRef: Map<string, Uint8Array>, routeRegistry: RouteRegistry, routeAssignments: Record<string, number>, errors: SafeError[] }} input */
 async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workout, coros, activitiesToWrite, activitiesForNote, fitBytesByRef, routeRegistry, routeAssignments, errors }) {
   const dailyPath = join(archiveDir, "daily", `${targetDate}.md`);
   const activityPaths = [];
@@ -494,12 +535,13 @@ async function writeLocalArchive({ archiveDir, targetDate, timezone, now, workou
   return { write_status: "complete", written_paths: [relativePath(archiveDir, dailyPath), ...workoutPaths, ...activityPaths, ...routePaths], fit_bytes: fitBytes, workout_sessions: workoutRecords.length, route_assignments: routeAssignments };
 }
 
+/** @param {string} archiveDir @returns {Promise<NormalizedActivity[]>} */
 async function readArchivedActivities(archiveDir) {
   let names;
   try {
     names = await readdir(join(archiveDir, "data", "coros"));
   } catch (error) {
-    if (error?.code === "ENOENT") return [];
+    if ((/** @type {ArchiveRecord|null|undefined} */ (error))?.code === "ENOENT") return [];
     throw error;
   }
   const records = [];
@@ -514,6 +556,7 @@ async function readArchivedActivities(archiveDir) {
   return records;
 }
 
+/** @param {NormalizedActivity[]} existing @param {NormalizedActivity[]} current @returns {NormalizedActivity[]} */
 function mergeActivityHistory(existing, current) {
   const byRef = new Map();
   for (const activity of [...existing, ...current]) {
@@ -527,6 +570,7 @@ function mergeActivityHistory(existing, current) {
   return [...byRef.values()];
 }
 
+/** @param {{ targetDate: string, timezone: string, workout: SourceResult, coros: SourceResult, activities: NormalizedActivity[], routeRegistry: RouteRegistry }} input @returns {CloudProjection} */
 function buildProjection({ targetDate, timezone, workout, coros, activities, routeRegistry }) {
   const sourceStatus = aggregateSourceStatus([workout.source_status, coros.source_status]);
   return {
@@ -545,17 +589,19 @@ function buildProjection({ targetDate, timezone, workout, coros, activities, rou
   };
 }
 
+/** @param {ProjectionPublisher} publish @param {CloudProjection} projection @param {SyncOptions} options @returns {Promise<CloudPublication>} */
 async function publishProjection(publish, projection, options) {
   const maxAttempts = publicationAttempts(options);
   const idempotencyKey = await projectionRequestIdempotencyKey(projection);
+  /** @type {CloudPublication|null} */
   let last = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const result = await publishWithTimeout(publish, projection, {
+      const result = /** @type {ArchiveRecord} */ (await publishWithTimeout(publish, projection, {
         idempotency_key: idempotencyKey,
         attempt,
         max_attempts: maxAttempts,
-      }, publicationTimeout(options));
+      }, publicationTimeout(options)));
       const status = publicationStatus(result?.status ?? (projection.activities.length ? "complete" : "none"));
       const publishedCount = boundedCount(result?.published_count, status === "complete" ? projection.activities.length : 0, projection.activities.length);
       const error = result?.error ? safeError(result.error, "cloud", result.error.code ?? "projection_publish_failed") : (status === "partial" || status === "error" ? { code: status === "partial" ? "projection_partial" : "projection_publish_failed", message: "Cloud publication did not complete" } : null);
@@ -563,7 +609,7 @@ async function publishProjection(publish, projection, options) {
       if (status === "complete" || (status === "none" && projection.activities.length === 0)) return last;
     } catch (error) {
       const normalized = safeError(error, "cloud", "projection_publish_failed");
-      last = { status: "error", published_count: 0, attempts: attempt, retryable: error?.retryable !== false, idempotency_key: idempotencyKey, error: normalized, errors: [normalized] };
+      last = { status: "error", published_count: 0, attempts: attempt, retryable: (/** @type {ArchiveRecord|null|undefined} */ (error))?.retryable !== false, idempotency_key: idempotencyKey, error: normalized, errors: [normalized] };
     }
   }
   return last ?? { status: "error", published_count: 0, attempts: maxAttempts, retryable: true, idempotency_key: idempotencyKey, error: { code: "projection_publish_failed", message: "Cloud publication did not complete" }, errors: [] };
@@ -573,13 +619,14 @@ async function publishProjection(publish, projection, options) {
  * Keep the logical publication identity stable while binding the HTTP retry
  * key to the exact safe projection body. This lets a same-date refresh update
  * D1 without colliding with the private mutation idempotency record.
- * @param {any} projection
+ * @param {CloudProjection} projection
  */
 export async function projectionRequestIdempotencyKey(projection) {
   if (!projection || typeof projection.publication_key !== "string" || !projection.publication_key.trim()) throw new Error("projection.publication_key is required");
   return `${projection.publication_key}:${await sha256Hex(canonicalJson(projection))}`;
 }
 
+/** @param {SyncOptions} options */
 function publicationAttempts(options) {
   const requested = options.maxPublicationAttempts ?? MAX_PUBLICATION_ATTEMPTS;
   const number = Number(requested);
@@ -587,12 +634,14 @@ function publicationAttempts(options) {
   return Math.min(MAX_PUBLICATION_ATTEMPTS, Math.max(1, Math.floor(number)));
 }
 
+/** @param {SyncOptions} options */
 function publicationTimeout(options) {
   const requested = Number(options.cloudTimeoutMs ?? DEFAULT_CLOUD_TIMEOUT_MS);
   if (!Number.isFinite(requested)) return DEFAULT_CLOUD_TIMEOUT_MS;
   return Math.max(1, Math.min(120_000, Math.floor(requested)));
 }
 
+/** @param {ProjectionPublisher} publish @param {CloudProjection} projection @param {ArchiveRecord} context @param {number} timeoutMs */
 async function publishWithTimeout(publish, projection, context, timeoutMs) {
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   let timer;
@@ -611,6 +660,7 @@ async function publishWithTimeout(publish, projection, context, timeoutMs) {
   }
 }
 
+/** @param {{ targetDate: string, timezone: string, now: Date, sourceStatus: { workout: SourceStatus, coros: SourceStatus }, sourceDataAsOf: { workout: string|null, coros: string|null }, sourceStatusAggregate: SourceStatus, dataAsOf: string|null, localWrite: ArchiveRecord, localStatus: SourceStatus|string, cloudPublication: CloudPublication, activitiesWritten: number, activitiesPublished: number, ignoredSportTypes: Array<string|number>, errors: SafeError[], pendingArtifacts?: ArchiveRecord[], routeAssignments?: Record<string, number>, routeRegistryPath?: string, privacyEvidence?: ArchiveRecord, projection: CloudProjection, mode?: string, snapshotId?: string|null, phases?: SyncPhases }} input @returns {SyncReceipt} */
 function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, sourceStatusAggregate, dataAsOf, localWrite, localStatus, cloudPublication, activitiesWritten, activitiesPublished, ignoredSportTypes, errors, pendingArtifacts = [], routeAssignments = {}, routeRegistryPath, privacyEvidence, projection, mode = "resume", snapshotId = null, phases = createSyncPhases() }) {
   return {
     schema_version: 1,
@@ -646,12 +696,14 @@ function makeReceipt({ targetDate, timezone, now, sourceStatus, sourceDataAsOf, 
   };
 }
 
+/** @param {SyncReceipt|null} priorReceipt @param {SyncOptions} options */
 function shouldRetryMissingArtifacts(priorReceipt, options) {
   return typeof options.corosSource?.readFit === "function"
     && Array.isArray(priorReceipt?.pending_artifacts)
     && priorReceipt.pending_artifacts.some((artifact) => artifact?.kind === "fit" && safeReference(artifact.activity_ref));
 }
 
+/** @param {{ options: SyncOptions, priorReceipt: SyncReceipt, targetDate: string, timezone: string, now: Date, publish: ProjectionPublisher }} input @returns {Promise<SyncReceipt>} */
 async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezone, now, publish }) {
   const pending = (priorReceipt.pending_artifacts ?? []).filter((artifact) => artifact?.kind === "fit" && safeReference(artifact.activity_ref));
   const localActivities = Array.isArray(priorReceipt.local_projection?.activities) ? priorReceipt.local_projection.activities.map(safeAerobicActivity) : [];
@@ -662,10 +714,10 @@ async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezo
   for (const artifact of pending) {
     const activityRef = safeReference(artifact.activity_ref);
     try {
-      const result = await options.corosSource.readFit(activityRef, { targetDate, timezone, now, relative_path: artifact.relative_path });
+      const result = await (/** @type {NonNullable<SourceAdapter["readFit"]>} */ (options.corosSource?.readFit))(/** @type {string} */ (activityRef), { targetDate, timezone, now, relative_path: artifact.relative_path });
       const bytes = extractRetryFitBytes(result);
       if (!bytes || bytes.byteLength === 0) throw Object.assign(new Error("FIT artifact was not returned"), { code: "fit_retry_empty" });
-      await writeRetriedFitArtifact(options.archiveDir, targetDate, activityRef, bytes);
+      await writeRetriedFitArtifact(/** @type {string} */ (options.archiveDir), targetDate, /** @type {string} */ (activityRef), bytes);
       resolvedRefs.add(activityRef);
       fitBytes += bytes.byteLength;
     } catch (error) {
@@ -685,7 +737,7 @@ async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezo
     : { workout: "none", coros: "none" };
   const sourceStatusAggregate = aggregateSourceStatus([sourceStatus.workout, sourceStatus.coros]);
   const priorErrors = Array.isArray(priorReceipt.errors) ? priorReceipt.errors.filter((error) => !resolvedRefs.has(error.activity_ref)) : [];
-  const receipt = {
+  const receipt = /** @type {SyncReceipt} */ ({
     schema_version: 1,
     sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
     publication_key: projection?.publication_key ?? priorReceipt.publication_key ?? `training-archive:${targetDate}`,
@@ -717,19 +769,22 @@ async function retryMissingArtifacts({ options, priorReceipt, targetDate, timezo
     },
     errors: [...priorErrors, ...retryErrors, ...(cloudPublication.errors ?? [])],
     receipt_path: receiptRelativePath(targetDate),
-  };
-  const persistedProjection = projection ?? { schema_version: 1, publication_key: receipt.publication_key, source_ref: receipt.publication_key, target_date: targetDate, timezone, source_status: sourceStatusAggregate, source_statuses: sourceStatus, data_as_of: receipt.data_as_of, activities: updatedActivities };
-  await persistReceipt(options.archiveDir, receipt, persistedProjection, updatedActivities);
+  });
+  const persistedProjection = /** @type {CloudProjection} */ (projection ?? { schema_version: 1, publication_key: receipt.publication_key, source_ref: receipt.publication_key, target_date: targetDate, timezone, source_status: sourceStatusAggregate, source_statuses: sourceStatus, data_as_of: receipt.data_as_of, activities: updatedActivities });
+  await persistReceipt(/** @type {string} */ (options.archiveDir), receipt, persistedProjection, updatedActivities);
   return receipt;
 }
 
+/** @param {unknown} result @returns {Uint8Array|null} */
 function extractRetryFitBytes(result) {
+  const record = /** @type {ArchiveRecord} */ (result);
   const value = result && typeof result === "object" && !(result instanceof Uint8Array) && !(typeof Buffer !== "undefined" && Buffer.isBuffer(result))
-    ? (result.bytes ?? result.fit_bytes ?? result.data ?? result.content)
+    ? (record.bytes ?? record.fit_bytes ?? record.data ?? record.content)
     : result;
   return toBytes(value);
 }
 
+/** @param {string} archiveDir @param {string} targetDate @param {string} activityRef @param {Uint8Array} bytes */
 async function writeRetriedFitArtifact(archiveDir, targetDate, activityRef, bytes) {
   const stem = `${targetDate}-${fileComponent(activityRef)}`;
   const relativeFitPath = `data/coros/${stem}.fit`;
@@ -750,6 +805,7 @@ async function writeRetriedFitArtifact(archiveDir, targetDate, activityRef, byte
   }
 }
 
+/** @param {SyncReceipt|null} priorReceipt @param {SyncOptions} options */
 function shouldRetryCloudOnly(priorReceipt, options) {
   return options.retryCloudOnly !== false
     && priorReceipt?.local_archive?.write_status === "complete"
@@ -758,13 +814,14 @@ function shouldRetryCloudOnly(priorReceipt, options) {
     && Array.isArray(priorReceipt.pending_projection.activities);
 }
 
+/** @param {{ options: SyncOptions, priorReceipt: SyncReceipt, targetDate: string, timezone: string, now: Date, publish: ProjectionPublisher }} input @returns {Promise<SyncReceipt>} */
 async function retryPendingPublication({ options, priorReceipt, targetDate, timezone, now, publish }) {
   const projection = safePendingProjection(priorReceipt.pending_projection);
   if (!projection) return syncTrainingArchive({ ...options, timezone, retryCloudOnly: false });
   const cloudPublication = await publishProjection(publish, projection, options);
   const sourceStatus = priorReceipt.source_status ?? projection.source_statuses ?? { workout: "none", coros: projection.source_status ?? "none" };
   const sourceStatusAggregate = aggregateSourceStatus([sourceStatus.workout, sourceStatus.coros]);
-  const receipt = {
+  const receipt = /** @type {SyncReceipt} */ ({
     schema_version: 1,
     sync_ref: `training-sync:${targetDate}:${now.toISOString()}`,
     publication_key: projection.publication_key,
@@ -790,11 +847,12 @@ async function retryPendingPublication({ options, priorReceipt, targetDate, time
     },
     errors: cloudPublication.errors ?? [],
     receipt_path: receiptRelativePath(targetDate),
-  };
-  await persistReceipt(options.archiveDir, receipt, projection, priorReceipt.local_projection?.activities ?? projection.activities);
+  });
+  await persistReceipt(/** @type {string} */ (options.archiveDir), receipt, projection, priorReceipt.local_projection?.activities ?? projection.activities);
   return receipt;
 }
 
+/** @param {string} archiveDir @param {SyncReceipt} receipt @param {CloudProjection} projection @param {NormalizedActivity[]} localActivities */
 async function persistReceipt(archiveDir, receipt, projection, localActivities = projection.activities) {
   const persisted = {
     ...receipt,
@@ -812,18 +870,22 @@ async function persistReceipt(archiveDir, receipt, projection, localActivities =
   }
 }
 
+/** @returns {SyncPhases} */
 function createSyncPhases() {
   return Object.fromEntries(SYNC_PHASES.map((name) => [name, { status: "pending" }]));
 }
 
+/** @param {ArchiveRecord} details @returns {{ status: PhaseStatus, [key: string]: any }} */
 function runningPhase(details = {}) {
-  return { status: "running", ...details };
+  return /** @type {{ status: PhaseStatus, [key: string]: any }} */ ({ status: "running", ...details });
 }
 
+/** @param {PhaseStatus} status @param {ArchiveRecord} details @returns {{ status: PhaseStatus, [key: string]: any }} */
 function completedPhase(status, details = {}) {
-  return { status, ...details };
+  return /** @type {{ status: PhaseStatus, [key: string]: any }} */ ({ status, ...details });
 }
 
+/** @param {SourceResult} workout @param {SourceResult} coros @returns {PhaseStatus} */
 function sourceReadPhaseStatus(workout, coros) {
   const statuses = [workout.source_status, coros.source_status];
   if (statuses.every((status) => status === "error")) return "error";
@@ -831,6 +893,7 @@ function sourceReadPhaseStatus(workout, coros) {
   return "complete";
 }
 
+/** @param {string} archiveDir @param {{ targetDate: string, timezone: string, now: Date, mode: string, snapshotId: string|null, phases: SyncPhases, sourceStatus: ArchiveRecord, sourceDataAsOf?: ArchiveRecord|null, errors?: SafeError[], pendingArtifacts?: ArchiveRecord[] }} input */
 async function persistPhaseCheckpoint(archiveDir, { targetDate, timezone, now, mode, snapshotId, phases, sourceStatus, sourceDataAsOf = null, errors = [], pendingArtifacts = [] }) {
   const checkpoint = {
     schema_version: 1,
@@ -858,11 +921,13 @@ async function persistPhaseCheckpoint(archiveDir, { targetDate, timezone, now, m
   }
 }
 
+/** @param {string} archiveDir @param {string} targetDate @param {unknown} value */
 async function writeReceiptFile(archiveDir, targetDate, value) {
   const path = join(archiveDir, ...SYNC_RECEIPT_DIR, `${targetDate}.json`);
   await writeAtomicFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+/** @param {string} archiveDir @param {string} targetDate @returns {Promise<SyncReceipt|null>} */
 async function readSyncReceipt(archiveDir, targetDate) {
   if (typeof archiveDir !== "string" || !archiveDir.trim()) return null;
   try {
@@ -873,6 +938,7 @@ async function readSyncReceipt(archiveDir, targetDate) {
   }
 }
 
+/** @param {ArchiveRecord|null|undefined} value @returns {CloudProjection|null} */
 function safePendingProjection(value) {
   if (value === null || value === undefined) return null;
   if (typeof value !== "object" || !Array.isArray(value.activities)) throw new Error("Persisted pending projection is invalid");
@@ -898,8 +964,10 @@ function safePendingProjection(value) {
   };
 }
 
+/** @param {CloudProjection} projection @param {Date} now */
 function projectionPrivacyEvidence(projection, now) {
   const serialized = JSON.stringify(projection);
+  /** @type {Array<[string, RegExp]>} */
   const patterns = [
     ["fit_file", /fit[_-]file/i],
     ["fit_path", /fit[_-]path|\.fit\b/i],
@@ -920,18 +988,21 @@ function projectionPrivacyEvidence(projection, now) {
   };
 }
 
+/** @param {unknown} value @param {string} field @returns {SourceStatus} */
 function persistedStatus(value, field) {
   if (value === undefined || value === null) return "none";
-  if (!SOURCE_STATUSES.includes(value)) throw new Error(`Invalid persisted ${field}`);
+  if (!isSourceStatus(value)) throw new Error(`Invalid persisted ${field}`);
   return value;
 }
 
+/** @param {unknown} value @param {string} field @returns {string} */
 function requiredReference(value, field) {
   const reference = safeReference(value);
   if (!reference) throw new Error(`Invalid persisted ${field}`);
   return reference;
 }
 
+/** @param {SyncReceipt|null} priorReceipt @param {SourceStatus} sourceStatus @returns {NormalizedActivity[]} */
 function previousActivitiesForFailedSource(priorReceipt, sourceStatus) {
   if (!["partial", "error"].includes(sourceStatus) || !Array.isArray(priorReceipt?.local_projection?.activities)) return [];
   return priorReceipt.local_projection.activities.flatMap((activity) => {
@@ -939,6 +1010,7 @@ function previousActivitiesForFailedSource(priorReceipt, sourceStatus) {
   });
 }
 
+/** @param {NormalizedActivity[]} current @param {NormalizedActivity[]} previous @returns {NormalizedActivity[]} */
 function mergeActivities(current, previous) {
   const merged = new Map(previous.map((activity) => [activity.activity_ref, activity]));
   for (const activity of current) {
@@ -949,28 +1021,38 @@ function mergeActivities(current, previous) {
   return [...merged.values()].sort((left, right) => (right.started_at ?? "").localeCompare(left.started_at ?? "") || right.activity_ref.localeCompare(left.activity_ref));
 }
 
+/** @param {Array<unknown>} statuses @returns {SourceStatus} */
 function aggregateSourceStatus(statuses) {
-  const filtered = statuses.filter((status) => SOURCE_STATUSES.includes(status));
+  const filtered = statuses.filter(isSourceStatus);
   if (!filtered.length || filtered.every((status) => status === "none")) return "none";
   if (filtered.every((status) => status === "complete" || status === "none")) return "complete";
   if (filtered.some((status) => status === "partial") || filtered.some((status) => status === "error" && filtered.some((other) => other === "complete" || other === "partial"))) return "partial";
   return "error";
 }
 
+/** @param {unknown} value @returns {SourceStatus} */
 function publicationStatus(value) {
-  return SOURCE_STATUSES.includes(value) ? value : "error";
+  return isSourceStatus(value) ? value : "error";
 }
 
+/** @param {unknown} value @returns {value is SourceStatus} */
+function isSourceStatus(value) {
+  return typeof value === "string" && SOURCE_STATUSES.includes(value);
+}
+
+/** @param {unknown} value @param {number} fallback @param {number} maximum */
 function boundedCount(value, fallback, maximum) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(0, Math.min(maximum, Math.floor(number)));
 }
 
+/** @param {unknown} value @param {string} source @returns {SafeError[]} */
 function safeErrors(value, source) {
   return Array.isArray(value) ? value.map((error) => safeError(error, source, error?.code ?? "source_error")) : [];
 }
 
+/** @param {any} error @param {string} source @param {string} fallbackCode @param {string|null} activityRef @returns {SafeError} */
 function safeError(error, source, fallbackCode, activityRef = null) {
   const code = safeCode(error?.code ?? fallbackCode) ?? fallbackCode;
   const rawMessage = typeof error?.message === "string" ? error.message : (typeof error === "string" ? error : "Operation failed");
@@ -978,49 +1060,59 @@ function safeError(error, source, fallbackCode, activityRef = null) {
   return { source, code, message, ...(activityRef ? { activity_ref: activityRef } : {}) };
 }
 
+/** @param {unknown} value @returns {string|null} */
 function safeCode(value) {
   return typeof value === "string" && /^[a-z0-9_.-]{1,80}$/i.test(value) ? value : null;
 }
 
+/** @param {unknown} value @returns {string|null} */
 function safeReference(value) {
   if (typeof value !== "string" || !value.trim()) return null;
   const reference = value.trim();
   return containsSensitiveText(reference) || reference.includes("/") || reference.includes("\\") ? null : reference;
 }
 
+/** @param {unknown} value @returns {string|null} */
 function safeInstant(value) {
   if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return null;
   return new Date(value).toISOString();
 }
 
+/** @param {unknown} value @returns {boolean} */
 function isInScopeSportType(value) {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isInteger(number) && Object.hasOwn(COROS_SPORT_TYPES, number);
 }
 
+/** @param {string} value */
 function fileComponent(value) {
   return encodeURIComponent(value).replaceAll("%", "_");
 }
 
+/** @param {string} root @param {string} value */
 function relativePath(root, value) {
   const prefix = root.endsWith("/") ? root : `${root}/`;
   return value.slice(prefix.length).replaceAll("\\", "/");
 }
 
+/** @param {string} targetDate */
 function receiptRelativePath(targetDate) {
   return `${SYNC_RECEIPT_DIR.join("/")}/${targetDate}.json`;
 }
 
+/** @param {unknown} value */
 function yamlValue(value) {
   if (value === null || value === undefined) return "null";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(String(value));
 }
 
+/** @param {unknown[]} values */
 function listYaml(values) {
   return values.length ? values.map((value) => `  - ${yamlValue(value)}`).join("\n") : "  []";
 }
 
+/** @param {NormalizedActivity} activity */
 export function corosActivityNote(activity) {
   const routeLines = activity.route_key
     ? [`route_key: ${yamlValue(activity.route_key)}`, `route_direction: ${yamlValue(activity.route_direction)}`, `route_match_status: ${yamlValue(activity.route_match_status ?? "matched")}`, `route: ${yamlValue(routeLink(activity.route_key))}`]
@@ -1071,6 +1163,7 @@ export function corosActivityNote(activity) {
   ].join("\n");
 }
 
+/** @type {Readonly<Record<string, string>>} */
 const ACTIVITY_METRIC_LABELS = Object.freeze({
   duration_sec: "用时",
   total_duration_sec: "总用时",
@@ -1095,14 +1188,14 @@ function activityMetricLabel(key) {
   return ACTIVITY_METRIC_LABELS[key] ?? key;
 }
 
-/** @param {any} value @returns {string|null} */
+/** @param {unknown} value @returns {string|null} */
 function activityMetricValue(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
   try { return JSON.stringify(value); } catch { return null; }
 }
 
-/** @param {any} value @param {string} prefix @returns {string[]} */
+/** @param {unknown} value @param {string} prefix @returns {string[]} */
 function renderActivityMetricMap(value, prefix = "") {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
   const lines = [];
@@ -1164,7 +1257,7 @@ function markdownCell(value) {
   return String(value ?? "—").replaceAll("|", "\\|").replaceAll("\n", " ").replaceAll("\r", " ");
 }
 
-/** @param {any} group @param {number} index @returns {string} */
+/** @param {ArchiveRecord} group @param {number} index @returns {string} */
 function lapGroupLabel(group, index) {
   if (group?.group_type === -1) return "总计";
   const rawDistance = lapNumber(group?.lap_distance_raw);
@@ -1176,7 +1269,7 @@ function lapGroupLabel(group, index) {
   return group?.group_type == null ? `分组 ${index + 1}` : `分组 ${group.group_type}`;
 }
 
-/** @param {number} key @param {any} value @returns {string} */
+/** @param {string} key @param {unknown} value @returns {string} */
 function formatLapCell(key, value) {
   if (key === "lap_index") return value == null ? "—" : String(value);
   if (key === "distance_m") return formatDistance(value);
@@ -1194,7 +1287,7 @@ function formatLapCell(key, value) {
   return activityMetricValue(value) ?? "—";
 }
 
-/** @param {any} group @returns {string[]} */
+/** @param {ArchiveRecord} group @returns {string[]} */
 function renderLapGroupTable(group) {
   const laps = Array.isArray(group?.laps) ? group.laps : [];
   if (!laps.length) return [];
@@ -1207,7 +1300,7 @@ function renderLapGroupTable(group) {
   return [header, separator, ...rows];
 }
 
-/** @param {any} activity @returns {string[]} */
+/** @param {NormalizedActivity} activity @returns {string[]} */
 function renderActivityDetailSections(activity) {
   const lines = [];
   const summary = activity.summary ?? {};
@@ -1232,7 +1325,7 @@ function renderActivityDetailSections(activity) {
   }
   const providerShape = activity.provider_shape;
   if (providerShape && typeof providerShape === "object") {
-    const columns = Array.isArray(providerShape.columns) ? providerShape.columns.map((column) => column?.label || column?.name).filter(Boolean) : [];
+    const columns = Array.isArray(providerShape.columns) ? providerShape.columns.map((/** @type {ArchiveRecord} */ column) => column?.label || column?.name).filter(Boolean) : [];
     lines.push("## COROS 细分字段");
     if (providerShape.mode !== null && providerShape.mode !== undefined) lines.push(`- 模式：${providerShape.mode}${providerShape.sub_mode == null ? "" : ` / ${providerShape.sub_mode}`}`);
     lines.push(`- 细分数据：${providerShape.sport_data_details_present ? "有" : "无"}`);
@@ -1257,6 +1350,7 @@ function renderActivityDetailSections(activity) {
   return lines;
 }
 
+/** @param {RouteRecord} route @param {NormalizedActivity[]} activities */
 function routeNote(route, activities) {
   const history = activities.filter((activity) => activity.route_key === route.route_key).sort((left, right) => right.local_date.localeCompare(left.local_date) || right.activity_ref.localeCompare(left.activity_ref));
   const activityRefs = history.map((activity) => activity.activity_ref);
@@ -1282,6 +1376,7 @@ function routeNote(route, activities) {
   ].join("\n");
 }
 
+/** @param {RouteRegistry} registry @param {NormalizedActivity[]} activities */
 function routeIndexNote(registry, activities) {
   const routes = registry.routes ?? [];
   return [
@@ -1298,6 +1393,7 @@ function routeIndexNote(registry, activities) {
   ].join("\n");
 }
 
+/** @param {{ targetDate: string, timezone: string, now: Date, workout: SourceResult, coros: SourceResult, activities: NormalizedActivity[], errors: SafeError[] }} input */
 function dailyNote({ targetDate, timezone, now, workout, coros, activities, errors }) {
   const hub = dailyHubModel({ targetDate, timezone, now, workout, coros, activities, errors });
   return dailyHubNote(hub);

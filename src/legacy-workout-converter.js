@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { createHash } from "node:crypto";
 import { deepClone, WEEKDAYS } from "./util.js";
@@ -8,14 +8,18 @@ const KEY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const TARGET_METRICS = new Set(["reps", "duration_sec"]);
 const LEGACY_TEMPO_KEYS = ["eccentric_sec", "bottom_hold_sec", "concentric_sec", "top_hold_sec"];
 
+/** @typedef {{ rangePolicy: "max" }} RangeOptions */
+/** @typedef {NonNullable<ReturnType<typeof resolveExercise>>} ExerciseDefinition */
+/** @typedef {{ revision_key: string, revision_sequence: number, created_at: string, effective_from: string, week: Record<string, any> }} ConvertedRevision */
+
 /**
  * Convert the bounded legacy Workout v1 document to the canonical v2 state
  * consumed by the explicit D1 rebuild. This is intentionally one-way and
  * strict: the caller must name the range policy, and unsupported legacy
  * shapes fail instead of being silently repaired.
  *
- * @param {any} legacyState
- * @param {{ rangePolicy: "max" }} options
+ * @param {unknown} legacyState
+ * @param {RangeOptions} options
  */
 export function convertLegacyState(legacyState, options) {
   if (options?.rangePolicy !== "max") throw new Error("Legacy conversion requires --range-policy max");
@@ -51,8 +55,8 @@ export function convertLegacyState(legacyState, options) {
 
 /**
  * Convert the JSON envelope emitted by Wrangler's `d1 execute --json`.
- * @param {any} input
- * @param {{ rangePolicy: "max" }} options
+ * @param {unknown} input
+ * @param {RangeOptions} options
  */
 export function convertLegacyExport(input, options) {
   const rows = extractRows(input);
@@ -69,15 +73,17 @@ export function convertLegacyExport(input, options) {
   });
 }
 
+/** @param {unknown} input @returns {any[]} */
 function extractRows(input) {
   if (Array.isArray(input)) {
     if (input.every((part) => Array.isArray(part?.results))) return input.flatMap((part) => part.results);
     return input;
   }
-  if (Array.isArray(input?.results)) return input.results;
+  if (typeof input === "object" && input !== null && "results" in input && Array.isArray(input.results)) return input.results;
   return [input];
 }
 
+/** @param {unknown} revision @param {number} revisionIndex @param {RangeOptions} options @returns {ConvertedRevision} */
 function convertLegacyRevision(revision, revisionIndex, options) {
   requireRecord(revision, `plan_revisions[${revisionIndex}]`);
   const label = `plan_revisions[${revisionIndex}]`;
@@ -86,6 +92,7 @@ function convertLegacyRevision(revision, revisionIndex, options) {
   const effectiveFrom = requireString(revision.effective_from, `${label}.effective_from`);
   const createdAt = requireString(revision.created_at, `${label}.created_at`);
   requireRecord(revision.week, `${label}.week`);
+  /** @type {Record<string, any>} */
   const week = {};
   for (const weekday of WEEKDAYS) {
     if (!Object.hasOwn(revision.week, weekday)) throw new Error(`${label}.week.${weekday} is required`);
@@ -94,6 +101,7 @@ function convertLegacyRevision(revision, revisionIndex, options) {
   return { revision_key: revisionKey, revision_sequence: revisionSequence, created_at: createdAt, effective_from: effectiveFrom, week };
 }
 
+/** @param {unknown} slot @param {string} label @param {string} weekday @param {RangeOptions} options */
 function convertLegacySlot(slot, label, weekday, options) {
   if (slot === null) return null;
   requireRecord(slot, label);
@@ -120,6 +128,7 @@ function convertLegacySlot(slot, label, weekday, options) {
   return { kind: "workout", title, start_time: startTime, estimated_duration_min: estimatedDuration, blocks };
 }
 
+/** @param {unknown} exercise @param {string} label @param {string} weekday @param {number} blockIndex @param {number} exerciseIndex @param {RangeOptions} options */
 function convertLegacyPlanExercise(exercise, label, weekday, blockIndex, exerciseIndex, options) {
   requireRecord(exercise, label);
   const exerciseId = requireString(exercise.exercise_key, `${label}.exercise_key`);
@@ -129,9 +138,18 @@ function convertLegacyPlanExercise(exercise, label, weekday, blockIndex, exercis
   const occurrenceKey = generatedKey(`${weekday}_block_${blockIndex + 1}_exercise_${exerciseIndex + 1}_${exerciseId}`);
   if (!Array.isArray(exercise.sets) || exercise.sets.length === 0) throw new Error(`${label}.sets must be a non-empty array`);
   const sets = exercise.sets.map((set, setIndex) => convertLegacySet(set, `${label}.sets[${setIndex}]`, generatedKey(`${occurrenceKey}_set_${setIndex + 1}`), options, setIndex + 1));
-  return { occurrence_key: occurrenceKey, exercise_id: exerciseId, execution_mode: executionMode, name: definition.name, definition_version: definition.definition_version, sets };
+  return {
+    occurrence_key: occurrenceKey,
+    exercise_id: exerciseId,
+    execution_mode: executionMode,
+    name: definition.name,
+    definition_version: definition.definition_version,
+    category: definition.category,
+    sets,
+  };
 }
 
+/** @param {unknown} session @param {number} sessionIndex @param {string} planId @param {ConvertedRevision[]} revisions @param {RangeOptions} options */
 function convertLegacySession(session, sessionIndex, planId, revisions, options) {
   const label = `sessions[${sessionIndex}]`;
   requireRecord(session, label);
@@ -171,6 +189,7 @@ function convertLegacySession(session, sessionIndex, planId, revisions, options)
   };
 }
 
+/** @param {Record<string, any>} session @param {string} scheduledDate @param {ConvertedRevision[]} revisions @param {string} label @returns {ConvertedRevision} */
 function selectRevision(session, scheduledDate, revisions, label) {
   if (revisions.length === 0) throw new Error(`${label} cannot be converted because there is no Plan Revision`);
   if (session.plan_revision_key) {
@@ -183,6 +202,7 @@ function selectRevision(session, scheduledDate, revisions, label) {
   return applicable[0];
 }
 
+/** @param {unknown} snapshot @param {string} label @param {RangeOptions} options */
 function convertLegacySnapshot(snapshot, label, options) {
   requireRecord(snapshot, label);
   if (!Array.isArray(snapshot.blocks)) throw new Error(`${label}.blocks must be an array`);
@@ -213,6 +233,7 @@ function convertLegacySnapshot(snapshot, label, options) {
         exercise_id: definition.exercise_id,
         name: requireString(exercise.name, `${exerciseLabel}.name`),
         definition_version: definition.definition_version,
+        category: definition.category,
         execution_mode: executionMode,
         sets: sets.map((set) => ({ set_key: set.set_id, ...set })),
       };
@@ -269,6 +290,7 @@ function convertLegacySnapshot(snapshot, label, options) {
   };
 }
 
+/** @param {unknown} set @param {string} label @param {string} setId @param {RangeOptions} options @param {number} fallbackOrdinal */
 function convertLegacySet(set, label, setId, options, fallbackOrdinal) {
   requireRecord(set, label);
   const target = convertLegacyTarget(set.target, `${label}.target`, options);
@@ -284,6 +306,7 @@ function convertLegacySet(set, label, setId, options, fallbackOrdinal) {
   };
 }
 
+/** @param {unknown} target @param {string} label @param {RangeOptions} options */
 function convertLegacyTarget(target, label, options) {
   requireRecord(target, label);
   const metric = requireString(target.metric, `${label}.metric`);
@@ -295,6 +318,7 @@ function convertLegacyTarget(target, label, options) {
   return { metric, value: maximum };
 }
 
+/** @param {unknown} value @param {string} label */
 function convertLegacyResistance(value, label) {
   if (value === null || value === undefined) return { resistance_mode: null, resistance_kg: null };
   requireRecord(value, label);
@@ -309,6 +333,7 @@ function convertLegacyResistance(value, label) {
   return { resistance_mode: "external_load", resistance_kg: value.load_kg ?? null };
 }
 
+/** @param {unknown} value @param {string} label */
 function convertLegacyTempo(value, label) {
   if (value === null || value === undefined) return null;
   requireRecord(value, label);
@@ -319,6 +344,7 @@ function convertLegacyTempo(value, label) {
   return values.map((phase) => phase ?? 0).join("-");
 }
 
+/** @param {unknown} results @param {string} label @param {Map<string, any>} itemMap */
 function convertLegacyResults(results, label, itemMap) {
   if (!Array.isArray(results)) throw new Error(`${label} must be an array`);
   const seen = new Set();
@@ -349,6 +375,7 @@ function convertLegacyResults(results, label, itemMap) {
   });
 }
 
+/** @param {unknown} value @param {string} label @param {string} expectedMetric */
 function convertActual(value, label, expectedMetric) {
   requireRecord(value, label);
   const metric = requireString(value.metric, `${label}.metric`);
@@ -356,6 +383,7 @@ function convertActual(value, label, expectedMetric) {
   return { metric, value: requirePositiveInteger(value.value, `${label}.value`) };
 }
 
+/** @param {unknown} intervals @param {string} label */
 function convertLegacyIntervals(intervals, label) {
   if (!Array.isArray(intervals)) throw new Error(`${label} must be an array`);
   return intervals.map((interval, index) => {
@@ -369,6 +397,7 @@ function convertLegacyIntervals(intervals, label) {
   });
 }
 
+/** @param {unknown} feedback @param {string} label @param {string[]} occurrenceKeys */
 function convertLegacyFeedback(feedback, label, occurrenceKeys) {
   if (!Array.isArray(feedback)) throw new Error(`${label} must be an array`);
   return feedback.map((item, index) => {
@@ -380,16 +409,19 @@ function convertLegacyFeedback(feedback, label, occurrenceKeys) {
   });
 }
 
+/** @param {string} exerciseId @param {string} label @returns {ExerciseDefinition} */
 function activeDefinition(exerciseId, label) {
   const definition = resolveExercise(exerciseId);
   if (!definition || definition.status !== "active") throw new Error(`${label} references an inactive or unknown Exercise ${exerciseId}`);
   return definition;
 }
 
+/** @param {ExerciseDefinition} definition @param {string} mode @param {string} label */
 function ensureModeSupported(definition, mode, label) {
   if (!definition.execution.side_modes.includes(mode)) throw new Error(`${label} uses ${mode}, unsupported by ${definition.exercise_id}`);
 }
 
+/** @param {unknown} value @param {ExerciseDefinition} definition @param {string} label @returns {string} */
 function legacyExecutionMode(value, definition, label) {
   if (value === "none") {
     if (definition.execution.side_modes.includes("none")) return "none";
@@ -400,12 +432,14 @@ function legacyExecutionMode(value, definition, label) {
   throw new Error(`${label} cannot be represented canonically: ${value}`);
 }
 
+/** @param {string | null} mode @param {number | null} load */
 function resistanceProjection(mode, load) {
   if (mode === "bodyweight") return { mode: "bodyweight" };
   if (mode === "external_load") return { mode: "external_load", load_kg: load, quantity: 1 };
   return null;
 }
 
+/** @param {unknown} value @returns {string} */
 function generatedKey(value) {
   const normalized = String(value).toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || "legacy";
   const base = /^[a-z]/.test(normalized) ? normalized : `legacy_${normalized}`;
@@ -414,32 +448,41 @@ function generatedKey(value) {
   return `${base.slice(0, 53)}_${digest}`;
 }
 
+/** @param {string} value @param {string} label @returns {string} */
 function canonicalKey(value, label) {
   if (!KEY_PATTERN.test(value)) throw new Error(`${label} is not a canonical key: ${value}`);
   return value;
 }
 
+/** @param {unknown} value @param {string} label @returns {asserts value is Record<string, any>} */
 function requireRecord(value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} must be an object`);
 }
 
+/** @param {unknown} value @param {string} label @returns {string} */
 function requireString(value, label) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} must be a non-empty string`);
   return value;
 }
 
+/** @param {unknown} value @param {string} label @returns {number} */
 function requirePositiveInteger(value, label) {
-  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer`);
-  return value;
+  const numericValue = /** @type {number} */ (value);
+  if (!Number.isInteger(numericValue) || numericValue <= 0) throw new Error(`${label} must be a positive integer`);
+  return numericValue;
 }
 
+/** @param {unknown} value @param {string} label @returns {number} */
 function requireNonNegativeInteger(value, label) {
-  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
-  return value;
+  const numericValue = /** @type {number} */ (value);
+  if (!Number.isInteger(numericValue) || numericValue < 0) throw new Error(`${label} must be a non-negative integer`);
+  return numericValue;
 }
 
+/** @param {unknown} value @param {string} label @param {number} minimum @param {number} maximum @returns {number | null} */
 function nullableInteger(value, label, minimum, maximum) {
   if (value === null || value === undefined) return null;
-  if (!Number.isInteger(value) || value < minimum || value > maximum) throw new Error(`${label} must be null or an integer between ${minimum} and ${maximum}`);
-  return value;
+  const numericValue = /** @type {number} */ (value);
+  if (!Number.isInteger(numericValue) || numericValue < minimum || numericValue > maximum) throw new Error(`${label} must be null or an integer between ${minimum} and ${maximum}`);
+  return numericValue;
 }

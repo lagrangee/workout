@@ -28,8 +28,8 @@ Athlete-local ID-to-name map.
                   "set_id": "dead_bug_set_1",
                   "ordinal": 1,
                   "target": { "metric": "reps", "value": 5 },
-                  "resistance": { "mode": "bodyweight" },
-                  "tempo": "3-1-1-0",
+                  "resistance": null,
+                  "tempo": "3.5-1-1.25-0",
                   "rest_after_sec": 45
                 }
               ]
@@ -75,12 +75,23 @@ occurrence selects exactly one `execution_mode` and cannot switch mode between
 Sets. The mode must be advertised by that Exercise's registry
 `execution.side_modes`.
 
+Exercise Category is Registry-owned and is not a Plan Update input member.
+Callers that submit `category` are rejected as unknown input. Successful
+validation copies the Registry's current `category` (`strength`, `endurance`,
+`mobility`, or `recovery`) into the immutable Plan occurrence together with the
+formal name and `definition_version`.
+
 Targets are exact positive integers: `reps` or `duration_sec` with one
 `value`; range-shaped `min`/`max` targets are invalid. A Set's `ordinal` is its
 ordered position and `set_id` is its stable local identity. Tempo is either
-`null` or a strict four-component string such as `3-1-1-0`.
+`null` or a strict four-component string such as `3-1-1-0` or
+`3.5-1-1.25-0`. Each phase is a non-negative integer or decimal number.
 
 Resistance input is explicit and is normalized at validation time:
+
+```json
+null
+```
 
 ```json
 { "mode": "bodyweight" }
@@ -91,15 +102,25 @@ Resistance input is explicit and is normalized at validation time:
 ```
 
 The normalized Plan Set stores `resistance_mode` and `resistance_kg`;
-bodyweight stores a non-numeric `bodyweight` mode and `null` load. The only
-accepted input units are `kg` and `lb`. No numeric string, zero-as-bodyweight,
-unsupported mode, or unknown Exercise is repaired.
+`null` stores both normalized fields as `null`, while bodyweight stores a
+non-numeric `bodyweight` mode and `null` load. The only accepted input units
+are `kg` and `lb`. No numeric string, zero-as-bodyweight, unsupported mode, or
+unknown Exercise is repaired.
 
-Successful validation resolves the current registry name and
-`definition_version` into the read model. A Session created later freezes
-those values again in its Training Plan Snapshot. A later registry rename
-therefore changes the Current Plan read name but cannot mutate an existing
-Session.
+The structured MCP tools and the Worker reuse one portable v2 structural
+definition. That definition owns exact object members, required fields, scalar
+types, array bounds, key formats, target shape, resistance variants, and tempo
+shape. It intentionally does not decide whether an Athlete-local effective
+date is valid or future, whether an Exercise exists, whether that Exercise
+supports the requested execution, target, resistance, or Recording Intent, or
+whether human-readable strings need trimming. Those contextual decisions stay
+with the Worker and return field-addressed semantic errors without mutation.
+
+Successful validation resolves the current registry name, `definition_version`,
+and category into the read model. A Session created later freezes those values
+again in its Training Plan Snapshot. A later registry rename may change the
+Current Plan read name, but neither a rename nor a category change can mutate
+an existing Plan Revision or Session.
 
 The Worker validates and applies this package atomically. D1 stores the
 Athlete-owned Plan, immutable revision, weekday slot, occurrence, and Set

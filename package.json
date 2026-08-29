@@ -1,7 +1,22 @@
 {
   "name": "workout-tracker",
   "version": "0.1.0",
+  "description": "A mobile-first, self-hosted workout plan, session, and training archive tracker for Cloudflare Workers and D1.",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lagrangee/workout.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lagrangee/workout/issues"
+  },
+  "homepage": "https://github.com/lagrangee/workout#readme",
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "packageManager": "npm@11.8.0",
   "type": "module",
   "scripts": {
     "dev": "node scripts/local-server.mjs",
@@ -9,20 +24,38 @@
     "deploy": "wrangler deploy",
     "generate-types": "wrangler types",
     "test": "node --test tests/**/*.test.js",
+    "test:behavior": "npm test",
+    "test:integration": "node --test tests/d1-persistence.test.js tests/agent-mcp.test.js tests/training-archive-fit-integration.test.js tests/synthetic-fit-roundtrip.test.js",
+    "test:contracts": "node --test tests/boundaries.test.js tests/plan-update-structure.test.js tests/training-archive-safety.test.js tests/public-repo-readiness.test.js tests/public-source-gate.test.js",
+    "test:browser": "node --test tests/records-browser.test.js tests/session-feedback.test.js tests/ui-formatters.test.js tests/workout-timeline.test.js",
+    "test:coverage:persistence": "node --experimental-test-coverage --test-coverage-include=src/store.js --test-coverage-lines=90 --test-coverage-branches=70 --test tests/d1-persistence.test.js tests/canonical-assembler.test.js tests/canonical-rebuild.test.js tests/canonical-plan.test.js tests/canonical-session.test.js tests/migrations.test.js",
+    "test:coverage:validation": "node --experimental-test-coverage --test-coverage-include=src/validation.js --test-coverage-lines=95 --test-coverage-branches=55 --test tests/core.test.js tests/agent-plan-update.test.js tests/agent-plan-apply.test.js tests/plan-update-batch.test.js tests/plan-update-structure.test.js tests/canonical-plan.test.js tests/canonical-results.test.js tests/training-archive-safety.test.js",
+    "test:coverage": "npm run test:coverage:persistence && npm run test:coverage:validation",
+    "test:fit-compat": "node --test tests/fit-real-compatibility.test.js",
     "test:watch": "node --test --watch tests/**/*.test.js",
+    "assets:generate": "node scripts/generate-public-assets.mjs",
+    "assets:check": "node scripts/generate-public-assets.mjs --check",
+    "licenses:check": "node scripts/check-public-licenses.mjs",
+    "source:scan": "node scripts/scan-public-source.mjs",
+    "docs:lint": "node scripts/lint-docs-evidence.mjs",
+    "audit:runtime": "npm audit --omit=dev --audit-level=high",
+    "audit:development": "npm audit --include=dev --audit-level=critical",
     "seed:verify": "node scripts/verify-seed.mjs",
     "mcp:check": "node --check mcp/bridge.mjs && node --check mcp/cli.mjs && node --check mcp/launch.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -p tsconfig.core.json --pretty false && tsc -p tsconfig.interfaces.json --pretty false",
     "check": "npm run typecheck && npm test",
     "forbidden-scan": "node scripts/forbidden-feature-scan.mjs",
-    "release-check": "npm run check && npm run seed:verify && npm run forbidden-scan && node scripts/release-acceptance.mjs"
+    "source:acceptance": "npm run seed:verify && npm run forbidden-scan && npm run assets:check && npm run licenses:check && npm run source:scan && node scripts/release-acceptance.mjs",
+    "public:gate": "npm run typecheck && npm run test:behavior && npm run test:integration && npm run test:contracts && npm run test:browser && npm run test:coverage && npm run docs:lint && npm run source:acceptance",
+    "public:gate:online": "npm run public:gate && npm run audit:runtime && npm run audit:development",
+    "release-check": "npm run public:gate"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
-    "wrangler": "^4.116.0"
+    "wrangler": "^4.127.1"
   },
   "dependencies": {
-    "@garmin/fitsdk": "21.213.0"
+    "fit-file-parser": "5.0.2"
   }
 }

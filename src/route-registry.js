@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ export const ROUTE_REGISTRY_SCHEMA_VERSION = 1;
 export const ROUTE_REGISTRY_RELATIVE_PATH = "config/routes.json";
 export const ROUTE_MATCH_STATUSES = Object.freeze(["matched", "registered", "unmatched", "ambiguous", "ignored", "error"]);
 
+/** @param {unknown} value */
 function safeRouteKey(value) {
   if (typeof value !== "string" || !value.trim() || containsSensitiveText(value)) return null;
   const key = value.trim();
@@ -17,11 +18,13 @@ function safeRouteKey(value) {
   return key;
 }
 
+/** @param {unknown} value @param {string} fallback */
 function routeName(value, fallback) {
   if (typeof value !== "string" || !value.trim() || containsSensitiveText(value)) return fallback;
   return value.trim().slice(0, 120);
 }
 
+/** @param {unknown} value */
 function safeSportTypes(value) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.flatMap((item) => {
@@ -29,18 +32,21 @@ function safeSportTypes(value) {
   }))].sort((left, right) => left - right);
 }
 
+/** @param {unknown} value */
 function safeDistanceRange(value) {
   if (!Array.isArray(value) || value.length !== 2) return null;
   const [minimum, maximum] = value.map(Number);
   return Number.isFinite(minimum) && Number.isFinite(maximum) && minimum >= 0 && maximum >= minimum ? [minimum, maximum] : null;
 }
 
+/** @param {any} value */
 function safeCoordinate(value) {
   const lat = Number(value?.lat);
   const lon = Number(value?.lon);
   return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 ? { lat, lon } : null;
 }
 
+/** @param {any} value */
 function safeSignature(value) {
   if (!value || typeof value !== "object") return null;
   const start = safeCoordinate(value.start);
@@ -58,9 +64,11 @@ function safeSignature(value) {
   };
 }
 
+/** @param {any} value @param {{ requireSignature?: boolean }} [options] */
 export function normalizeRouteRecord(value, { requireSignature = true } = {}) {
   const routeKey = safeRouteKey(value?.route_key);
   if (!routeKey) throw new Error("route_key must be a safe non-empty route identity");
+  /** @type {Record<string, any>} */
   const signatures = {};
   for (const direction of ["forward", "reverse"]) {
     const signature = safeSignature(value?.direction_signatures?.[direction]);
@@ -76,6 +84,7 @@ export function normalizeRouteRecord(value, { requireSignature = true } = {}) {
   };
 }
 
+/** @param {any} value */
 export function normalizeRouteRegistry(value) {
   const routes = Array.isArray(value) ? value : value?.routes;
   if (routes === undefined) return { schema_version: ROUTE_REGISTRY_SCHEMA_VERSION, routes: [] };
@@ -88,16 +97,18 @@ export function normalizeRouteRegistry(value) {
   return { schema_version: ROUTE_REGISTRY_SCHEMA_VERSION, routes: [...unique.values()] };
 }
 
+/** @param {string} archiveDir */
 export async function readRouteRegistry(archiveDir) {
   const path = join(archiveDir, ROUTE_REGISTRY_RELATIVE_PATH);
   try {
     return { path, exists: true, registry: normalizeRouteRegistry(JSON.parse(await readFile(path, "utf8"))) };
   } catch (error) {
-    if (error?.code === "ENOENT") return { path, exists: false, registry: { schema_version: ROUTE_REGISTRY_SCHEMA_VERSION, routes: [] } };
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return { path, exists: false, registry: { schema_version: ROUTE_REGISTRY_SCHEMA_VERSION, routes: [] } };
     throw error;
   }
 }
 
+/** @param {string} archiveDir @param {any} registry */
 export async function writeRouteRegistry(archiveDir, registry) {
   const normalized = normalizeRouteRegistry(registry);
   const path = join(archiveDir, ROUTE_REGISTRY_RELATIVE_PATH);
@@ -106,12 +117,14 @@ export async function writeRouteRegistry(archiveDir, registry) {
   return path;
 }
 
+/** @param {unknown} value */
 function routeKeyFromName(value) {
   const key = safeRouteKey(value);
   if (!key) throw new Error("route name must produce a safe route_key");
   return key;
 }
 
+/** @param {any} raw */
 function pointsForActivity(raw) {
   for (const value of [raw?.fit_points, raw?.fitPoints, raw?.route_points, raw?.routePoints, raw?.fit?.points, raw?.route?.points, raw?.points]) {
     if (Array.isArray(value)) return value;
@@ -119,6 +132,7 @@ function pointsForActivity(raw) {
   return [];
 }
 
+/** @param {any} raw @param {any[]} points */
 function activityDistanceM(raw, points) {
   const explicit = Number(raw?.distance_m ?? raw?.distanceM);
   if (Number.isFinite(explicit) && explicit >= 0) return explicit;
@@ -127,11 +141,13 @@ function activityDistanceM(raw, points) {
   return null;
 }
 
+/** @param {any} raw */
 function activitySportType(raw) {
   const value = Number(raw?.sport_type ?? raw?.sportType);
   return Number.isInteger(value) && Object.hasOwn(COROS_SPORT_TYPES, value) ? value : null;
 }
 
+/** @param {any} options @param {string} activityRef */
 function confirmationForActivity(options, activityRef) {
   const confirmations = options?.routeConfirmations;
   const specific = confirmations && typeof confirmations === "object" && !Array.isArray(confirmations) ? confirmations[activityRef] : null;
@@ -144,12 +160,13 @@ function confirmationForActivity(options, activityRef) {
  * Match an outdoor activity against the human-maintained registry. The matcher
  * sees temporary FIT points only; callers persist the sanitized assignment.
  */
+/** @param {{ raw: any, activityRef: string, registry: any, options?: any }} input */
 export function assignRoute({ raw, activityRef, registry, options = {} }) {
   const sportType = activitySportType(raw);
   if (sportType === 101) return { status: "ignored", route_key: null, route_direction: null, matcher_version: MATCHER_VERSION, registration_proposal: null };
   const routes = registry?.routes ?? [];
   const explicitKey = safeRouteKey(raw?.route_key ?? raw?.routeKey);
-  if (explicitKey && routes.some((route) => route.route_key === explicitKey)) {
+  if (explicitKey && routes.some((/** @type {any} */ route) => route.route_key === explicitKey)) {
     return { status: "matched", route_key: explicitKey, route_direction: ["forward", "reverse"].includes(raw?.route_direction ?? raw?.routeDirection) ? (raw.route_direction ?? raw.routeDirection) : null, matcher_version: MATCHER_VERSION, registration_proposal: null };
   }
   const points = pointsForActivity(raw);
@@ -161,7 +178,7 @@ export function assignRoute({ raw, activityRef, registry, options = {} }) {
   if (!confirmation) return result;
   const requestedKey = confirmation.route_key ?? confirmation.routeKey ?? confirmation.route_name ?? confirmation.name;
   const newKey = routeKeyFromName(requestedKey);
-  if (routes.some((route) => route.route_key === newKey)) return { ...result, status: "ambiguous", registration_proposal: null, error: "route_key_already_exists" };
+  if (routes.some((/** @type {any} */ route) => route.route_key === newKey)) return { ...result, status: "ambiguous", registration_proposal: null, error: "route_key_already_exists" };
   const proposal = result.registration_proposal;
   const created = normalizeRouteRecord({
     route_key: newKey,
@@ -186,11 +203,13 @@ export function safeRouteProjection(route) {
   };
 }
 
+/** @param {unknown} routeKey */
 export function routeLink(routeKey) {
   const key = safeRouteKey(routeKey);
   return key ? `[[routes/${key}]]` : null;
 }
 
+/** @param {string} archiveDir @param {unknown} routeKey */
 export function routeFilePath(archiveDir, routeKey) {
   const key = safeRouteKey(routeKey);
   if (!key) throw new Error("route_key must be safe before building a route path");

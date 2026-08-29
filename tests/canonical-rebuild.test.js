@@ -18,6 +18,8 @@ const MIGRATIONS = [
   "0008_canonical_session_read_model.sql",
   "0009_canonical_workout_cutover.sql",
   "0010_plan_recording_intent.sql",
+  "0011_mutation_owner.sql",
+  "0012_exercise_category.sql",
 ];
 
 function execMigrations(db) {
@@ -42,6 +44,7 @@ function canonicalState() {
     exercise_id: "dead_bug",
     name: "死虫",
     definition_version: 1,
+    category: "mobility",
     execution_mode: "alternating",
     sets: [{ set_key: set.set_id, ...set }],
   };
@@ -145,6 +148,8 @@ test("bounded canonical rebuild replaces rows, clears legacy state arrays, and r
     assert.equal(db.prepare("SELECT count(*) AS count FROM plan_revisions WHERE athlete_key = ?").get(state.athlete_key).count, 1);
     assert.equal(db.prepare("SELECT count(*) AS count FROM plan_sets").get().count, 1);
     assert.equal(db.prepare("SELECT count(*) AS count FROM sessions WHERE athlete_key = ?").get(state.athlete_key).count, 1);
+    assert.equal(db.prepare("SELECT category FROM plan_exercises WHERE revision_key = ?").get("rev-rebuild").category, "mobility");
+    assert.equal(db.prepare("SELECT category FROM session_exercises WHERE session_key = ?").get("sess-rebuild").category, "mobility");
     assert.equal(db.prepare("SELECT count(*) AS count FROM completion_items WHERE session_key = ?").get("sess-rebuild").count, 2);
     assert.equal(db.prepare("SELECT count(*) AS count FROM set_results WHERE session_key = ?").get("sess-rebuild").count, 2);
     assert.equal(db.prepare("SELECT rollback_ref FROM workout_storage_cutover WHERE athlete_key = ?").get(state.athlete_key).rollback_ref, "workout-rollback-test");
@@ -165,4 +170,10 @@ test("canonical rebuild rejects legacy ranges and unknown Exercise IDs instead o
   const unknown = canonicalState();
   unknown.plan_revisions[0].week.wednesday.blocks[0].exercises[0].exercise_id = "not_in_registry";
   assert.throws(() => buildCanonicalRebuildSql(unknown), /inactive or unknown Exercise/);
+  const missingPlanCategory = canonicalState();
+  delete missingPlanCategory.plan_revisions[0].week.wednesday.blocks[0].exercises[0].category;
+  assert.throws(() => buildCanonicalRebuildSql(missingPlanCategory), /frozen Exercise category/);
+  const missingSessionCategory = canonicalState();
+  delete missingSessionCategory.sessions[0].snapshot.blocks[0].exercises[0].category;
+  assert.throws(() => buildCanonicalRebuildSql(missingSessionCategory), /frozen Exercise category/);
 });

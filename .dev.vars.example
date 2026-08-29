@@ -1,0 +1,12 @@
+# Copy to .dev.vars for `npx wrangler dev`. Never commit the copied file.
+LOCAL_AUTH="true"
+AUTH_A_PASSWORD="replace-with-a-local-password"
+AUTH_B_PASSWORD="replace-with-a-different-local-password"
+AUTH_SESSION_SECRET="replace-with-at-least-32-random-bytes"
+AUTH_LOGIN_LIMIT="5"
+AUTH_LOGIN_CLIENT_LIMIT="20"
+AUTH_LOGIN_WINDOW_SECONDS="600"
+# AUTH_LOGIN_RATE_LIMITER and AUTH_LOGIN_CLIENT_RATE_LIMITER are Worker bindings, not .dev.vars entries.
+AGENT_TOKEN_SECRET="replace-with-a-random-local-secret"
+COACH_LOOKUP_SECRET="replace-with-a-random-local-secret"
+COACH_ENCRYPTION_SECRET="replace-with-a-random-local-secret"

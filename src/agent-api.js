@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 
 import { WEEKDAYS, base64UrlDecode, base64UrlEncode, canonicalJson, deepClone, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
 import { appendPlanRevision, planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
@@ -8,10 +8,17 @@ import { AGENT_ARCHIVE_LIMIT, agentAerobicActivities, agentAerobicActivityDetail
 import { syncAerobicProjection } from "./training-archive-projection.js";
 import { PLAN_UPDATE_BATCH_MAX_BYTES, appendPlanUpdateBatch, parsePlanUpdateBatch, planUpdateBatchDigests, validatePlanUpdateBatchForState } from "./plan-update-batch.js";
 
+/** @typedef {import("../types/interfaces.js").AgentState} AgentState */
+/** @typedef {import("../types/interfaces.js").PlanUpdatePackage} PlanUpdatePackage */
+/** @typedef {import("../types/interfaces.js").JsonRecord} JsonRecord */
+/** @typedef {import("./types.js").PlanRevision} PlanRevision */
+/** @typedef {import("./types.js").Week} Week */
+
 const AGENT_PREFIX = "/api/agent/v1";
 
-/** @param {any} state @param {Date} now */
+/** @param {AgentState} state @param {Date} now */
 export function agentManifest(state, now) {
+  const archiveVersion = state.archive_version;
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
@@ -25,6 +32,7 @@ export function agentManifest(state, now) {
       training: state.sessions.at(-1)?.updated_at ?? null,
     },
     training_version: state.training_version,
+    archive_version: typeof archiveVersion === "number" && Number.isInteger(archiveVersion) && archiveVersion >= 0 ? archiveVersion : 0,
     query_rules: {
       timezone: state.timezone,
       date_format: "YYYY-MM-DD",
@@ -38,7 +46,9 @@ export function agentManifest(state, now) {
       aerobic_activity_limit: { minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 },
       route_limit: { minimum: 1, maximum: AGENT_ARCHIVE_LIMIT, default: 50 },
       archive_cursor_ttl_minutes: 15,
-      archive_cursor_bound_to: ["resource", "from", "to", "sport_type", "route_key", "limit", "training_version"],
+      archive_cursor_format_version: 1,
+      archive_cursor_integrity: "hmac-sha256",
+      archive_cursor_bound_to: ["athlete", "resource", "from", "to", "sport_type", "route_key", "limit", "position", "archive_version"],
       max_days: { schedule: 366, sessions: 3660, progress: 3660, exercise: 3660 },
       archive_max_days: 3660,
     },
@@ -71,7 +81,7 @@ export function agentManifest(state, now) {
       overview: { method: "GET", path: `${AGENT_PREFIX}/overview`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] } },
       plan: { method: "GET", path: `${AGENT_PREFIX}/plan`, parameters: {} },
       schedule: { method: "GET", path: `${AGENT_PREFIX}/schedule`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", expand: ["prescription"] }, rules: { from_to_required: true, max_days: 366 } },
-      sessions: { method: "GET", path: `${AGENT_PREFIX}/sessions`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string", format: "opaque" }, status: ["in_progress", "completed", "partial", "skipped"], exercise_id: "string", exercise_key: { type: "string", deprecated: true } }, rules: { max_days: 3660, date_window_optional: true, cursor_ttl_minutes: 15 } },
+      sessions: { method: "GET", path: `${AGENT_PREFIX}/sessions`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string", format: "opaque" }, status: ["in_progress", "completed", "partial", "skipped"], exercise_id: "string", exercise_key: { type: "string", deprecated: true } }, rules: { max_days: 3660, date_window_optional: true, cursor_ttl_minutes: 15, cursor_format_version: 1, cursor_integrity: "hmac-sha256", cursor_bound_to: ["athlete", "resource", "filters", "limit", "position", "issued_at", "training_version"] } },
       session_detail: { method: "GET", path: `${AGENT_PREFIX}/sessions/{session_key}`, parameters: { session_key: { type: "string", location: "path" } } },
       progress: { method: "GET", path: `${AGENT_PREFIX}/progress`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"], bucket: ["day", "week", "month"] }, rules: { max_days: 3660, date_window_optional: true } },
       exercise_history: { method: "GET", path: `${AGENT_PREFIX}/exercises/{exercise_id}`, parameters: { exercise_id: { type: "string", location: "path" }, from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] }, rules: { max_days: 3660, date_window_optional: true } },
@@ -91,19 +101,20 @@ export function agentManifest(state, now) {
   };
 }
 
-/** @param {any} state @param {URL} url @param {Date} now */
+/** @param {AgentState} state @param {URL} url @param {Date} now */
 export function agentOverview(state, url, now) {
   return { ...coachOverview(state, url, now), source_ref: "overview" };
 }
 
-/** @param {any} state @param {string} rawBody @param {Date} now */
+/** @param {AgentState} state @param {string} rawBody @param {Date} now */
 export async function agentValidatePlanUpdate(state, rawBody, now) {
   const parsed = parseAgentJson(rawBody);
   if (!parsed.ok) return parsed.error;
   const body = parsed.value;
   if (!isRecord(body) || Object.keys(body).length !== 1 || typeof body.package_text !== "string") return { error: { code: "invalid_request", message: "package_text is required and must be a string" } };
   const result = validatePlanForState(state, body.package_text, now);
-  if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
+  if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: "errors" in result ? result.errors : [] } };
+  const acceptedResult = /** @type {any} */ (result);
   const basePlan = planUpdateBaseEvidence(state, result.value);
   return {
     schema_version: 1,
@@ -115,11 +126,11 @@ export async function agentValidatePlanUpdate(state, rawBody, now) {
     package_digest: await sha256Hex(canonicalJson(result.value)),
     base_plan_digest: await sha256Hex(canonicalJson(basePlan)),
     base_plan: basePlan,
-    preview: { ...result.preview, source_ref: "plan-update:preview" },
+    preview: { ...acceptedResult.preview, source_ref: "plan-update:preview" },
   };
 }
 
-/** @param {any} state @param {string} rawBody @param {Date} now */
+/** @param {AgentState} state @param {string} rawBody @param {Date} now */
 export async function agentApplyPlanUpdate(state, rawBody, now) {
   const parsed = parseAgentJson(rawBody);
   if (!parsed.ok) return parsed.error;
@@ -128,14 +139,15 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
     return { error: { code: body?.confirmed !== true ? "confirmation_required" : "invalid_request", message: body?.confirmed !== true ? "confirmed must be true" : "package_text, package_digest, base_plan_digest, and confirmed are required" } };
   }
   const packageResult = validatePlanPackage(body.package_text, localDate(now, state.timezone));
-  if (!packageResult.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: packageResult.errors } };
+  if (!packageResult.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: "errors" in packageResult ? packageResult.errors : [] } };
   const packageDigest = await sha256Hex(canonicalJson(packageResult.value));
   if (packageDigest !== body.package_digest) return { error: { code: "package_digest_mismatch", message: "package_digest does not match package_text" } };
   const basePlan = planUpdateBaseEvidence(state, packageResult.value);
   const basePlanDigest = await sha256Hex(canonicalJson(basePlan));
   if (basePlanDigest !== body.base_plan_digest) return { error: { code: "stale_plan", message: "The Current Plan changed after this proposal was validated" } };
   const result = validatePlanForState(state, body.package_text, now);
-  if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: result.errors } };
+  if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: "errors" in result ? result.errors : [] } };
+  const acceptedResult = /** @type {any} */ (result);
   appendPlanRevision(state, result.value, now);
   state.training_version += 1;
   return {
@@ -148,11 +160,11 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
     effective_from: result.value.effective_from,
     package_digest: packageDigest,
     base_plan_digest: basePlanDigest,
-    preview: { ...result.preview, source_ref: "plan-update:preview" },
+    preview: { ...acceptedResult.preview, source_ref: "plan-update:preview" },
   };
 }
 
-/** @param {any} state @param {string} rawBody @param {Date} now */
+/** @param {AgentState} state @param {string} rawBody @param {Date} now */
 export async function agentValidatePlanUpdateBatch(state, rawBody, now) {
   const parsed = parseAgentJson(rawBody, PLAN_UPDATE_BATCH_MAX_BYTES + 64 * 1024);
   if (!parsed.ok) return parsed.error;
@@ -173,7 +185,7 @@ export async function agentValidatePlanUpdateBatch(state, rawBody, now) {
   };
 }
 
-/** @param {any} state @param {string} rawBody @param {Date} now */
+/** @param {AgentState} state @param {string} rawBody @param {Date} now */
 export async function agentApplyPlanUpdateBatch(state, rawBody, now) {
   const parsed = parseAgentJson(rawBody, PLAN_UPDATE_BATCH_MAX_BYTES + 64 * 1024);
   if (!parsed.ok) return parsed.error;
@@ -205,13 +217,13 @@ export async function agentApplyPlanUpdateBatch(state, rawBody, now) {
   };
 }
 
-/** @param {any} state @param {string} rawBody @param {Date} now */
+/** @param {AgentState} state @param {string} rawBody @param {Date} now */
 export function agentSyncAerobicProjection(state, rawBody, now) {
   const result = syncAerobicProjection(state, rawBody, now);
   return result.error ? result : result.body;
 }
 
-/** @param {any} state @param {any} packageValue */
+/** @param {AgentState} state @param {any} packageValue */
 function planUpdateBaseEvidence(state, packageValue) {
   return { ...planUpdateBase(state, packageValue), source_ref: "plan:base" };
 }
@@ -225,7 +237,7 @@ function parseAgentJson(rawBody, maxBytes = 512 * 1024) {
   catch { return { ok: false, error: { error: { code: "invalid_json", message: "Request body must be valid JSON" } } }; }
 }
 
-/** @param {any} state @param {Date} now */
+/** @param {AgentState} state @param {Date} now */
 export function agentPlan(state, now) {
   const today = localDate(now, state.timezone);
   const current = state.plan_revisions.filter((revision) => revision.effective_from <= today).sort((left, right) => right.revision_sequence - left.revision_sequence)[0] ?? null;
@@ -233,7 +245,8 @@ export function agentPlan(state, now) {
     .filter((revision) => revision.effective_from > today && state.plan_revisions.filter((candidate) => candidate.effective_from <= revision.effective_from).sort((left, right) => right.revision_sequence - left.revision_sequence)[0]?.revision_key === revision.revision_key)
     .sort((left, right) => left.effective_from.localeCompare(right.effective_from));
   const firstEffective = state.plan_revisions.slice().sort((left, right) => left.effective_from.localeCompare(right.effective_from))[0]?.effective_from ?? null;
-  const project = (revision) => ({ effective_from: revision.effective_from, week: Object.fromEntries(WEEKDAYS.map((day) => { const slot = revision.week[day] ?? null; return [day, slot?.kind === "workout" ? { kind: "workout", prescription: prescriptionProjection(slot, `plan:${revision.effective_from}:${day}`, safePrescriptionKeys(`agent_plan_${revision.effective_from}_${day}`)) } : deepClone(slot)]; })) });
+  /** @param {PlanRevision} revision */
+  const project = (revision) => ({ effective_from: revision.effective_from, week: Object.fromEntries(WEEKDAYS.map((day) => { const slot = revision.week[/** @type {keyof Week} */ (day)] ?? null; return [day, slot?.kind === "workout" ? { kind: "workout", prescription: prescriptionProjection(slot, `plan:${revision.effective_from}:${day}`, safePrescriptionKeys(`agent_plan_${revision.effective_from}_${day}`)) } : deepClone(slot)]; })) });
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
@@ -249,7 +262,7 @@ export function agentPlan(state, now) {
   };
 }
 
-/** @param {any} state @param {URL} url @param {Date} now */
+/** @param {AgentState} state @param {URL} url @param {Date} now */
 export function agentSchedule(state, url, now) {
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
@@ -260,6 +273,7 @@ export function agentSchedule(state, url, now) {
   const expandValue = url.searchParams.get("expand");
   if (url.searchParams.has("expand") && expandValue !== "prescription") return { error: { code: "invalid_request", field: "expand", message: "expand must be prescription" } };
   const expand = expandValue === "prescription";
+  /** @type {Record<string, any>} */
   const prescriptions = {};
   const entries = dateRange(from, to).map((date) => {
     const raw = scheduleEntry(state, date, now, true);
@@ -301,17 +315,17 @@ function stablePrescriptionRef(slot, weekday) { return `prescription:${weekday}:
 function stableFingerprint(value) {
   let hash = 14695981039346656037n;
   for (const character of canonicalJson(value)) {
-    hash ^= BigInt(character.codePointAt(0));
+    hash ^= BigInt(character.codePointAt(0) ?? 0);
     hash = BigInt.asUintN(64, hash * 1099511628211n);
   }
   return hash.toString(16).padStart(16, "0");
 }
 
-/** @param {any} state @param {string} pathname @param {URL} url @param {Date} now */
-export function agentResource(state, pathname, url, now) {
+/** @param {AgentState} state @param {string} pathname @param {URL} url @param {Date} now @param {string} [origin] @param {string} [cursorSecret] */
+export async function agentResource(state, pathname, url, now, origin = url.origin, cursorSecret = "") {
   if (pathname === `${AGENT_PREFIX}/schemas`) return agentSchemaCatalog(now);
-  if (pathname.startsWith(`${AGENT_PREFIX}/schemas/`)) return agentSchemaResource(pathname.slice(`${AGENT_PREFIX}/schemas/`.length), now);
-  if (pathname === `${AGENT_PREFIX}/aerobic/activities`) return agentAerobicActivities(state, url, now);
+  if (pathname.startsWith(`${AGENT_PREFIX}/schemas/`)) return agentSchemaResource(pathname.slice(`${AGENT_PREFIX}/schemas/`.length), now, origin);
+  if (pathname === `${AGENT_PREFIX}/aerobic/activities`) return agentAerobicActivities(state, url, now, cursorSecret);
   if (pathname.startsWith(`${AGENT_PREFIX}/aerobic/activities/`)) {
     const encodedActivityRef = pathname.slice(`${AGENT_PREFIX}/aerobic/activities/`.length);
     let activityRef;
@@ -326,7 +340,7 @@ export function agentResource(state, pathname, url, now) {
     if (!date || date.includes("/") || date.includes("\\")) return { error: { code: "invalid_request", field: "local_date", message: "local_date must be a single non-empty path segment" } };
     return agentDailyContext(state, date, now);
   }
-  if (pathname === `${AGENT_PREFIX}/routes`) return agentRoutes(state, url, now);
+  if (pathname === `${AGENT_PREFIX}/routes`) return agentRoutes(state, url, now, cursorSecret);
   if (pathname.startsWith(`${AGENT_PREFIX}/routes/`)) {
     const suffix = pathname.slice(`${AGENT_PREFIX}/routes/`.length);
     const isHistory = suffix.endsWith("/history");
@@ -334,27 +348,27 @@ export function agentResource(state, pathname, url, now) {
     let routeKey;
     try { routeKey = decodeURIComponent(encodedRouteKey); } catch { return { error: { code: "invalid_request", field: "route_key", message: "route_key must be a valid path segment" } }; }
     if (!routeKey || routeKey.includes("/") || routeKey.includes("\\")) return { error: { code: "invalid_request", field: "route_key", message: "route_key must be a single non-empty path segment" } };
-    return isHistory ? agentRouteHistory(state, routeKey, url, now) : agentRouteDetail(state, routeKey, url, now);
+    return isHistory ? agentRouteHistory(state, routeKey, url, now, cursorSecret) : agentRouteDetail(state, routeKey, url, now, cursorSecret);
   }
   if (pathname === `${AGENT_PREFIX}/overview`) return agentOverview(state, url, now);
   if (pathname === `${AGENT_PREFIX}/plan`) return agentPlan(state, now);
   if (pathname === `${AGENT_PREFIX}/schedule`) return agentSchedule(state, url, now);
-  if (pathname === `${AGENT_PREFIX}/sessions`) return { ...coachResource(state, pathname, url, now, undefined, { requireTrainingVersion: true }), source_ref: "sessions" };
+  if (pathname === `${AGENT_PREFIX}/sessions`) return { ...await coachResource(state, pathname, url, now, undefined, { requireTrainingVersion: true, cursor: { secret: cursorSecret, domain: "agent-sessions", subject: state.athlete_key } }), source_ref: "sessions" };
   if (pathname.startsWith(`${AGENT_PREFIX}/sessions/`)) {
-    const resource = coachResource(state, pathname, url, now);
-    return resource.error ? resource : { ...resource, training_version: state.training_version };
+    const resource = await coachResource(state, pathname, url, now);
+    return "error" in resource ? resource : { ...resource, training_version: state.training_version };
   }
   if (pathname === `${AGENT_PREFIX}/progress`) {
-    const resource = coachResource(state, pathname, url, now);
-    return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: "progress" };
+    const resource = await coachResource(state, pathname, url, now);
+    return "error" in resource ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: "progress" };
   }
   if (pathname.startsWith(`${AGENT_PREFIX}/exercises/`)) {
     const rawExerciseId = pathname.slice(`${AGENT_PREFIX}/exercises/`.length);
     let exerciseId;
     try { exerciseId = decodeURIComponent(rawExerciseId); } catch { return { error: { code: "invalid_request", field: "exercise_id", message: "exercise_id must be a valid path segment" } }; }
     if (!exerciseId || exerciseId.includes("/") || exerciseId.includes("\\")) return { error: { code: "invalid_request", field: "exercise_id", message: "exercise_id must be a single non-empty path segment" } };
-    const resource = coachResource(state, `${AGENT_PREFIX}/exercises/${encodeURIComponent(exerciseId)}`, url, now);
-    return resource.error ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: `exercise:${exerciseId}` };
+    const resource = await coachResource(state, `${AGENT_PREFIX}/exercises/${encodeURIComponent(exerciseId)}`, url, now);
+    return "error" in resource ? resource : { schema_version: 1, generated_at: now.toISOString(), ...resource, training_version: state.training_version, source_ref: `exercise:${exerciseId}` };
   }
   return { error: { code: "not_found", message: "Resource not found" } };
 }
@@ -376,8 +390,8 @@ export function agentQueryError(pathname, url) {
 /** @param {string} prefix */
 function safePrescriptionKeys(prefix) {
   return {
-    block: (blockIndex) => `${prefix}_b${blockIndex + 1}`,
-    exercise: (blockIndex, exerciseIndex) => `${prefix}_e${blockIndex + 1}_${exerciseIndex + 1}`,
-    set: (blockIndex, exerciseIndex, setIndex) => `${prefix}_s${blockIndex + 1}_${exerciseIndex + 1}_${setIndex + 1}`,
+    block: (/** @type {number} */ blockIndex) => `${prefix}_b${blockIndex + 1}`,
+    exercise: (/** @type {number} */ blockIndex, /** @type {number} */ exerciseIndex) => `${prefix}_e${blockIndex + 1}_${exerciseIndex + 1}`,
+    set: (/** @type {number} */ blockIndex, /** @type {number} */ exerciseIndex, /** @type {number} */ setIndex) => `${prefix}_s${blockIndex + 1}_${exerciseIndex + 1}_${setIndex + 1}`,
   };
 }

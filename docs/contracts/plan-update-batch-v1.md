@@ -24,8 +24,9 @@ containing one complete Weekly Template.
 ```
 
 `updates` contains two to four items. Every item is a complete, independently
-valid Plan Update Package v2. Effective dates are unique, strictly ordered,
-fall on Monday, and are exactly seven days apart. Unknown fields, duplicate
+valid Plan Update Package v2 and therefore uses the same portable structural
+definition at MCP and Worker interfaces. Effective dates are unique, strictly
+ordered, fall on Monday, and are exactly seven days apart. Unknown fields, duplicate
 JSON members, legacy package versions, gaps, overlaps, no-op members, or an
 invalid member reject the entire batch.
 

@@ -4,11 +4,15 @@ coverage/
 .wrangler/
 .dev.vars
 .dev.vars.*
+!.dev.vars.example
 .env
 .env.*
 !.env.example
+wrangler.production.toml
 *.log
 .DS_Store
+.scratch/
+.omo/
 
 # Local exports and test artifacts
 exports/
@@ -16,4 +20,5 @@ tmp/
 test-results/
 .playwright-cli/
 output/
+tests/fixtures/private/
 *.zip

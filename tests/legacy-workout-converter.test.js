@@ -90,8 +90,10 @@ test("legacy conversion keeps exact v1 archive and maps range to max", () => {
   const canonical = convertLegacyState(legacy, { rangePolicy: "max" });
   assert.equal(canonical.plan_revisions[0].week.monday.blocks[0].exercises[0].sets[0].target.value, 12);
   assert.equal(canonical.plan_revisions[0].week.monday.blocks[0].exercises[0].execution_mode, "per_side");
+  assert.equal(canonical.plan_revisions[0].week.monday.blocks[0].exercises[0].category, "strength");
   assert.equal(canonical.plan_revisions[0].week.monday.blocks[0].exercises[0].sets[0].tempo, "3-0-1-1");
   assert.equal(canonical.sessions[0].snapshot.completion_items[0].target.value, 12);
+  assert.equal(canonical.sessions[0].snapshot.blocks[0].exercises[0].category, "strength");
   assert.equal(canonical.sessions[0].completion_results[0].status, "completed");
   assert.equal(canonical.sessions[0].completion_results[0].actual.value, 10);
   assert.equal(canonical.legacy_workout_v1.plan_revisions[0].week.monday.blocks[0].exercises[0].sets[0].target.max, 12);

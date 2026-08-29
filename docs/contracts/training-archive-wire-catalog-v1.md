@@ -106,8 +106,10 @@ and `Idempotency-Key`. It rejects unknown fields, provider payloads, raw
 FIT/GPS/coordinate fields, unsupported sport types, invalid Athlete-local
 dates, and route assignments that do not reference a projected route. The
 response is a safe publication receipt with the target date, source statuses,
-published count, and aggregate read-model counts. It is a cloud stage inside
-`sync data`, not a second user-facing publish operation.
+published count, aggregate read-model counts, and the resulting
+`archive_version`. A successful publication increments `archive_version`
+exactly once and leaves Workout-owned `training_version` unchanged. It is a
+cloud stage inside `sync data`, not a second user-facing publish operation.
 
 The browser/compatibility adapter is
 `POST /api/private/records/aerobic/sync`, which accepts the same projection and

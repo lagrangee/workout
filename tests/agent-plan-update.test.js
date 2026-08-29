@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, deepClone, weekdayKey } from "../src/util.js";
-import { agentRequest, appFixture, call, createAgentToken, packageText, testAgentSecret, today, week, workout } from "./helpers.js";
+import { agentRequest, appFixture, call, createAgentToken, packageText, TEST_NOW, testAgentSecret, today, week, workout } from "./helpers.js";
 
 async function agentPost(handler, token, path, body) {
   return agentRequest(handler, token, path, {
@@ -187,7 +187,7 @@ test("Agent plan validation returns the effective plan base used by the preview"
   state.plan_revisions.push({
     revision_key: "future-revision-for-preview",
     revision_sequence: 2,
-    created_at: new Date().toISOString(),
+    created_at: TEST_NOW,
     effective_from: futureEffectiveFrom,
     week: week(workout("已有未来基线")),
   });

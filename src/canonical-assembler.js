@@ -1,16 +1,23 @@
-// @ts-nocheck
+// @ts-check
 
 import { deepClone, WEEKDAYS } from "./util.js";
 import { resolveExercise } from "./exercise-registry.js";
 
 const SIDE_ORDER = Object.freeze({ none: 0, both: 1, left: 2, right: 3 });
 const RESULT_STATUSES = new Set(["completed", "partial", "skipped"]);
+const EXERCISE_CATEGORIES = new Set(["strength", "endurance", "mobility", "recovery"]);
 
 /** @param {unknown} value @param {string} field */
 function requiredPositiveInteger(value, field) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) throw new Error(`${field} must be a positive integer`);
   return number;
+}
+
+/** @param {unknown} value @param {string} field */
+function requiredCategory(value, field) {
+  if (typeof value !== "string" || !EXERCISE_CATEGORIES.has(value)) throw new Error(`${field} must be strength, endurance, mobility, or recovery`);
+  return value;
 }
 
 /**
@@ -50,11 +57,13 @@ function assemblePlanSlot(revision, weekday, slot, exerciseRows, setRows) {
       execution_mode: exercise.execution_mode,
       name: exercise.name_snapshot,
       definition_version: Number(exercise.definition_version),
+      category: requiredCategory(exercise.category, "Plan Exercise category"),
       sets: setRows
         .filter((set) => set.revision_key === revision.revision_key && set.occurrence_key === exercise.occurrence_key)
         .sort((left, right) => left.ordinal - right.ordinal)
         .map(assemblePlanSet),
     }));
+  /** @type {any[]} */
   const blocks = [];
   for (const exerciseRow of exerciseRows.filter((candidate) => candidate.revision_key === revision.revision_key && candidate.weekday === weekday).sort((left, right) => left.block_ordinal - right.block_ordinal || left.exercise_ordinal - right.exercise_ordinal)) {
     let block = blocks.at(-1);
@@ -121,6 +130,7 @@ export function assembleCanonicalSession(rows) {
       exercise_id: exercise.exercise_id,
       name: exercise.name_snapshot,
       definition_version: Number(exercise.definition_version),
+      category: requiredCategory(exercise.category, "Session Exercise category"),
       execution_mode: exercise.execution_mode,
       sets: [...setRows.values()].sort(compareCompletionItems).map((item) => ({
         set_key: item.set_id,
@@ -135,6 +145,7 @@ export function assembleCanonicalSession(rows) {
       })),
     };
   });
+  /** @type {any[]} */
   const blocks = [];
   for (const exerciseRow of exerciseRows) {
     let block = blocks.at(-1);
@@ -256,11 +267,13 @@ export function assembleCanonicalState(base, rows) {
  */
 export function assembleExerciseHistory(sessions, exerciseId, period = {}) {
   const matching = sessions.filter((session) => (session.status === "completed" || session.status === "partial") && (!period.from || session.scheduled_date >= period.from) && (!period.to || session.scheduled_date <= period.to));
+  /** @type {Record<string, any[]>} */
   const series = { none: [], both: [], left: [], right: [] };
+  /** @type {any[]} */
   const observations = [];
   const names = new Map();
   for (const session of matching) {
-    const exercises = session.snapshot.blocks.flatMap((block) => block.exercises).filter((exercise) => exercise.exercise_id === exerciseId);
+    const exercises = /** @type {any[]} */ (session.snapshot.blocks).flatMap((block) => /** @type {any[]} */ (block.exercises)).filter((exercise) => exercise.exercise_id === exerciseId);
     for (const exercise of exercises) {
       const name = names.get(exercise.name) ?? { name: exercise.name, first_date: session.scheduled_date, last_date: session.scheduled_date, definition_versions: new Set([exercise.definition_version]) };
       name.first_date = name.first_date < session.scheduled_date ? name.first_date : session.scheduled_date;
@@ -269,7 +282,7 @@ export function assembleExerciseHistory(sessions, exerciseId, period = {}) {
       names.set(exercise.name, name);
       const sets = [];
       for (const result of session.completion_results) {
-        const item = session.snapshot.completion_items.find((candidate) => candidate.completion_item_key === result.completion_item_key && candidate.exercise_occurrence_key === exercise.exercise_occurrence_key);
+        const item = /** @type {any[]} */ (session.snapshot.completion_items).find((candidate) => candidate.completion_item_key === result.completion_item_key && candidate.exercise_occurrence_key === exercise.exercise_occurrence_key);
         if (!item) continue;
         const observation = { completion_item_key: result.completion_item_key, set_id: item.set_id ?? item.set_key, set_ordinal: item.set_ordinal ?? null, side: item.side, target: item.target, tempo: item.tempo ?? null, rest_after_sec: item.rest_after_sec ?? null, status: result.status ?? (result.completed ? "completed" : "partial"), actual: result.actual, resistance_mode: result.resistance_mode ?? result.resistance?.mode ?? null, resistance_kg: result.resistance_kg ?? result.resistance?.load_kg ?? null, resistance: result.resistance, total_external_kg: (result.resistance_mode ?? result.resistance?.mode) === "external_load" ? (result.resistance_kg ?? result.resistance?.load_kg ?? null) : null, rir: result.rir ?? null, note: result.note ?? null, completed_at: result.completed_at ?? null };
         sets.push(observation);
@@ -309,7 +322,8 @@ function groupBy(values, key) {
 
 /** @param {any} left @param {any} right */
 function compareCompletionItems(left, right) {
-  return Number(left.set_ordinal ?? 0) - Number(right.set_ordinal ?? 0) || String(left.set_id).localeCompare(String(right.set_id)) || (SIDE_ORDER[left.side] ?? 99) - (SIDE_ORDER[right.side] ?? 99) || String(left.completion_item_key).localeCompare(String(right.completion_item_key));
+  const sideOrder = /** @type {Readonly<Record<string, number>>} */ (SIDE_ORDER);
+  return Number(left.set_ordinal ?? 0) - Number(right.set_ordinal ?? 0) || String(left.set_id).localeCompare(String(right.set_id)) || (sideOrder[left.side] ?? 99) - (sideOrder[right.side] ?? 99) || String(left.completion_item_key).localeCompare(String(right.completion_item_key));
 }
 
 /** @param {any} left @param {any} right @param {Map<string, number>} exerciseOrder */

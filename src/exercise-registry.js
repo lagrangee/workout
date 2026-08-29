@@ -7,6 +7,7 @@ const METRICS = new Set(["reps", "duration_sec"]);
 const RESISTANCE_MODES = new Set(["bodyweight", "external_load"]);
 const UNITS = new Set(["kg", "lb"]);
 const STATUSES = new Set(["active", "deprecated"]);
+const CATEGORIES = new Set(["strength", "endurance", "mobility", "recovery"]);
 const KEY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const SLUG_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 
@@ -54,6 +55,7 @@ export function validateExerciseRegistryDocument(value) {
     if (!isNonEmptyString(exercise.name) || exercise.name.length > 100) errors.push(`${path}.name must be a non-empty string of at most 100 characters`);
     if (!Number.isInteger(exercise.definition_version) || exercise.definition_version < 1) errors.push(`${path}.definition_version must be a positive integer`);
     if (!STATUSES.has(exercise.status)) errors.push(`${path}.status must be active or deprecated`);
+    if (!CATEGORIES.has(exercise.category)) errors.push(`${path}.category must be strength, endurance, mobility, or recovery`);
 
     if (!isRecord(exercise.execution)) errors.push(`${path}.execution must be an object`);
     else validateEnumArray(exercise.execution.side_modes, SIDE_MODES, `${path}.execution.side_modes`, errors);

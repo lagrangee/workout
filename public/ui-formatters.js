@@ -1,3 +1,5 @@
+// @ts-check
+
 /** @param {unknown} value @returns {number|null} */
 function numericValue(value) {
   if (value === null || value === undefined || value === "") return null;

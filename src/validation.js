@@ -2,6 +2,7 @@
 
 import { isRecord, isValidLocalDate, isValidTimezone, isValidUtcInstant, trimString } from "./util.js";
 import { resolveExercise } from "./exercise-registry.js";
+import { PLAN_UPDATE_KEY_PATTERN, PLAN_UPDATE_TEMPO_PATTERN, validatePlanUpdatePackageStructure } from "./plan-update-structure.js";
 
 /** @param {string} value */
 function jsonPointerSegment(value) {
@@ -185,8 +186,8 @@ function validateSet(value, path, errors, category) {
 
 const CANONICAL_SIDE_MODES = ["none", "bilateral", "per_side", "alternating"];
 const CANONICAL_METRICS = ["reps", "duration_sec"];
-const CANONICAL_KEY = /^[a-z][a-z0-9_]{0,63}$/;
-const CANONICAL_TEMPO = /^(?:0|[1-9]\d*)(?:\.\d+)?-(?:0|[1-9]\d*)(?:\.\d+)?-(?:0|[1-9]\d*)(?:\.\d+)?-(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const CANONICAL_KEY = new RegExp(PLAN_UPDATE_KEY_PATTERN);
+const CANONICAL_TEMPO = new RegExp(PLAN_UPDATE_TEMPO_PATTERN);
 
 /** @param {number} value @param {string} unit */
 function canonicalKg(value, unit) {
@@ -302,7 +303,7 @@ function validateCanonicalSlot(value, path, errors) {
         if (normalizedSet) sets.push(normalizedSet);
         completionItems += ["per_side", "alternating"].includes(exerciseValue.execution_mode) ? 2 : 1;
       });
-      exercises.push({ occurrence_key: exerciseValue.occurrence_key, exercise_id: exerciseValue.exercise_id, execution_mode: exerciseValue.execution_mode, name: exercise?.name ?? null, definition_version: exercise?.definition_version ?? null, sets });
+      exercises.push({ occurrence_key: exerciseValue.occurrence_key, exercise_id: exerciseValue.exercise_id, execution_mode: exerciseValue.execution_mode, name: exercise?.name ?? null, definition_version: exercise?.definition_version ?? null, category: exercise?.category ?? null, sets });
     });
     blocks.push({ title: block.title, exercises });
   });
@@ -313,6 +314,13 @@ function validateCanonicalSlot(value, path, errors) {
 
 /** @param {any} packageValue @param {string} today */
 function validateCanonicalPlanPackageValue(packageValue, today) {
+  const structuralErrors = validatePlanUpdatePackageStructure(packageValue);
+  if (structuralErrors.length) {
+    return {
+      ok: false,
+      errors: structuralErrors.map(({ path, message }) => ({ path, message: `${path}: ${message}` })),
+    };
+  }
   /** @type {string[]} */
   const errors = [];
   if (!requireObject(packageValue, "", errors)) return { ok: false, errors: validationErrorDetails(errors) };

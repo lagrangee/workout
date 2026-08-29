@@ -41,7 +41,7 @@ test("route index and detail expose safe route history with direction and core m
     routes: [route],
     aerobic_activities: [
       activity(),
-      activity({ activity_ref: "coros-route-2", source_ref: "coros:activity:coros-route-2", local_date: "2026-08-07", route_direction: "reverse", source_status: "partial", summary: { distance_km: 11.8, duration_sec: 6900, average_heart_rate_bpm: null, calories_kcal: null, sport_metrics: {} } }),
+      activity({ activity_ref: "coros-route-2", source_ref: "coros:activity:coros-route-2", local_date: "2026-08-07", started_at: "2026-08-07T01:00:00.000Z", ended_at: "2026-08-07T03:00:00.000Z", route_direction: "reverse", source_status: "partial", summary: { distance_km: 11.8, duration_sec: 6900, average_heart_rate_bpm: null, calories_kcal: null, sport_metrics: {} } }),
       activity({ activity_ref: "coros-indoor", source_ref: "coros:activity:coros-indoor", sport_type: 101, sport_name: "indoor_run", route_key: null, route_direction: null }),
     ],
     aerobic_projection: { source_status: "partial", source_statuses: { workout: "none", coros: "partial" }, data_as_of: "2026-08-16T23:59:00.000Z" },

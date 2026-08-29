@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays } from "../src/util.js";
 import { createSession } from "../src/session.js";
-import { appFixture, call, post, today } from "./helpers.js";
+import { appFixture, call, post, TEST_NOW, today } from "./helpers.js";
 
 async function seedExpiredSession() {
   const fixture = appFixture();
@@ -56,7 +56,7 @@ test("expired in-progress Sessions normalize to partial, close their interval, a
 test("normalization leaves today's in-progress Session untouched", async () => {
   const fixture = await seedExpiredSession();
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
-  const todayStart = createSession(state, today, new Date(), "start");
+  const todayStart = createSession(state, today, new Date(TEST_NOW), "start");
   assert.ok(todayStart.session);
   await fixture.store.save(state);
 

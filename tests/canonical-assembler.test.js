@@ -47,6 +47,8 @@ function execMigrations(db) {
     "0008_canonical_session_read_model.sql",
     "0009_canonical_workout_cutover.sql",
     "0010_plan_recording_intent.sql",
+    "0011_mutation_owner.sql",
+    "0012_exercise_category.sql",
   ]) db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
 
@@ -59,10 +61,10 @@ function insertCanonicalRows(db, athleteKey, email, sessionKey, exerciseName) {
   db.prepare("INSERT INTO plans (plan_id, athlete_key, name, created_at) VALUES (?, ?, ?, ?)").run(`plan_${athleteKey}`, athleteKey, "Workout", "2026-08-01T00:00:00.000Z");
   db.prepare("INSERT INTO plan_revisions (plan_id, athlete_key, revision_key, revision_sequence, effective_from, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(`plan_${athleteKey}`, athleteKey, `rev-${athleteKey}`, 1, "2026-08-01", "2026-08-01T00:00:00.000Z");
   db.prepare("INSERT INTO plan_slots (revision_key, weekday, kind, title, start_time, estimated_duration_min) VALUES (?, ?, ?, ?, ?, ?)").run(`rev-${athleteKey}`, "wednesday", "workout", "核心", "21:00", 20);
-  db.prepare("INSERT INTO plan_exercises (revision_key, athlete_key, weekday, block_ordinal, block_title, exercise_ordinal, occurrence_key, exercise_id, execution_mode, name_snapshot, definition_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`rev-${athleteKey}`, athleteKey, "wednesday", 1, "核心", 1, "dead_bug_main", "dead_bug", "alternating", exerciseName, 1);
+  db.prepare("INSERT INTO plan_exercises (revision_key, athlete_key, weekday, block_ordinal, block_title, exercise_ordinal, occurrence_key, exercise_id, execution_mode, name_snapshot, definition_version, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`rev-${athleteKey}`, athleteKey, "wednesday", 1, "核心", 1, "dead_bug_main", "dead_bug", "alternating", exerciseName, 1, "strength");
   db.prepare("INSERT INTO plan_sets (revision_key, occurrence_key, set_id, ordinal, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`rev-${athleteKey}`, "dead_bug_main", "dead_bug_set_1", 1, "reps", 5, "bodyweight", null, "3-1-1-0", 45);
   db.prepare("INSERT INTO sessions (athlete_key, session_key, plan_id, plan_revision_key, scheduled_date, timezone_at_session, title, status, created_at, updated_at, scheduled_workout_key, local_date, start_time, estimated_duration_min) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(athleteKey, sessionKey, `plan_${athleteKey}`, `rev-${athleteKey}`, "2026-08-19", "Asia/Shanghai", "核心", "partial", "2026-08-19T12:00:00.000Z", "2026-08-19T12:10:00.000Z", `sw_${athleteKey}_2026-08-19`, "2026-08-19", "21:00", 20);
-  db.prepare("INSERT INTO session_exercises (session_key, occurrence_key, block_ordinal, block_title, exercise_ordinal, exercise_id, name_snapshot, definition_version, execution_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(sessionKey, "dead_bug_main", 1, "核心", 1, "dead_bug", exerciseName, 1, "alternating");
+  db.prepare("INSERT INTO session_exercises (session_key, occurrence_key, block_ordinal, block_title, exercise_ordinal, exercise_id, name_snapshot, definition_version, execution_mode, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(sessionKey, "dead_bug_main", 1, "核心", 1, "dead_bug", exerciseName, 1, "alternating", "strength");
   const item = db.prepare("INSERT INTO completion_items (session_key, completion_item_key, occurrence_key, set_id, side, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec, set_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   item.run(sessionKey, `${sessionKey}-left`, "dead_bug_main", "dead_bug_set_1", "left", "reps", 5, "bodyweight", null, "3-1-1-0", 45, 1);
   item.run(sessionKey, `${sessionKey}-right`, "dead_bug_main", "dead_bug_set_1", "right", "reps", 5, "bodyweight", null, "3-1-1-0", 45, 1);
@@ -79,13 +81,17 @@ test("D1 canonical read boundary assembles independent rows, resolves current na
     execMigrations(db);
     insertCanonicalRows(db, "athlete-a", "a@example.invalid", "sess-a", "历史死虫");
     insertCanonicalRows(db, "athlete-b", "b@example.invalid", "sess-b", "乙的死虫");
+    db.prepare("UPDATE plan_exercises SET category = ? WHERE athlete_key = ?").run("mobility", "athlete-a");
+    db.prepare("UPDATE session_exercises SET category = ? WHERE session_key = ?").run("recovery", "sess-a");
     const store = new D1Store(new D1TestDb(db), {});
     const stateA = await store.getByEmail("a@example.invalid");
     assert.equal(stateA.plan_revisions[0].week.wednesday.blocks[0].exercises[0].name, "历史死虫");
+    assert.equal(stateA.plan_revisions[0].week.wednesday.blocks[0].exercises[0].category, "mobility");
     const currentPlan = planModel(stateA, new Date("2026-08-19T13:00:00.000Z"));
     assert.equal(currentPlan.current.week.wednesday.blocks[0].exercises[0].name, "死虫");
     const session = stateA.sessions[0];
     assert.equal(session.snapshot.blocks[0].exercises[0].name, "历史死虫");
+    assert.equal(session.snapshot.blocks[0].exercises[0].category, "recovery");
     assert.equal(session.snapshot.blocks[0].exercises[0].definition_version, 1);
     assert.deepEqual(session.snapshot.completion_items.map((item) => item.side), ["left", "right"]);
     assert.equal(session.completion_results[1].status, "partial");
@@ -113,8 +119,8 @@ test("canonical Session completion items keep plan exercise groups contiguous", 
       updated_at: "2026-08-19T12:00:00.000Z",
     },
     exercises: [
-      { session_key: "sess-order", occurrence_key: "exercise-a", block_ordinal: 1, block_title: "主训练", exercise_ordinal: 1, exercise_id: "dead_bug", name_snapshot: "动作一", definition_version: 1, execution_mode: "none" },
-      { session_key: "sess-order", occurrence_key: "exercise-b", block_ordinal: 1, block_title: "主训练", exercise_ordinal: 2, exercise_id: "glute_bridge", name_snapshot: "动作二", definition_version: 1, execution_mode: "none" },
+      { session_key: "sess-order", occurrence_key: "exercise-a", block_ordinal: 1, block_title: "主训练", exercise_ordinal: 1, exercise_id: "dead_bug", name_snapshot: "动作一", definition_version: 1, category: "strength", execution_mode: "none" },
+      { session_key: "sess-order", occurrence_key: "exercise-b", block_ordinal: 1, block_title: "主训练", exercise_ordinal: 2, exercise_id: "glute_bridge", name_snapshot: "动作二", definition_version: 1, category: "strength", execution_mode: "none" },
     ],
     completionItems: [
       { session_key: "sess-order", completion_item_key: "b-set-2", occurrence_key: "exercise-b", set_id: "b-2", set_ordinal: 2, side: "none", target_metric: "reps", target_value: 8, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 30 },

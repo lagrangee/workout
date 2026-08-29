@@ -93,11 +93,17 @@ _Avoid_: Plan editor, execution surface, synthetic history
 **Exercise**:
 A global movement definition from the repository Exercise Registry. It has an
 immutable `exercise_id`, a readable slug, a formal name with its own
-`definition_version`, active/deprecated status, and validated execution,
-target, resistance, and equipment capabilities. Plans choose a registry
-Exercise by ID; the Athlete-owned occurrence, prescribed Sets, and personal
-history remain in the Plan or Session.
+`definition_version`, active/deprecated status, one Exercise Category, and
+validated execution, target, resistance, and equipment capabilities. Plans
+choose a registry Exercise by ID; the Athlete-owned occurrence, prescribed
+Sets, and personal history remain in the Plan or Session.
 _Avoid_: Athlete-scoped Exercise, database row, display name as identity
+
+**Exercise Category**:
+The controlled primary training intent of an Exercise: strength, endurance,
+mobility, or recovery. Historical planned and completed work retains the
+category it had when prescribed.
+_Avoid_: Inferred category, tag, workout type
 
 **Resistance**:
 The structured resistance for a strength prescription or result: bodyweight, external weight, or assisted weight. Numeric resistance is always kg per implement, with quantity expressing multiple equal implements.

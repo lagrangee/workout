@@ -1,3 +1,5 @@
+// @ts-check
+
 /** @typedef {{ kind: string, value: number, atMs: number }} CueEvent */
 /** @typedef {{ ok: boolean, error?: string }} AudioResult */
 /** @typedef {AudioResult | false | undefined} AudioResultLike */
@@ -70,7 +72,7 @@ function createBrowserAudioOutput({ sources, now }) {
       if (!preparedResult.ok) return preparedResult;
       if (audioContext.state !== "running") return { ok: false, error: "音频播放被浏览器拒绝" };
       return { ok: true };
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       return failure(error, "音频播放被浏览器拒绝");
     }
   }
@@ -120,7 +122,7 @@ function createBrowserAudioOutput({ sources, now }) {
         cancel();
         return failure(error, "提示音调度失败");
       });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       cancel();
       return failure(error, "提示音调度失败");
     }
@@ -145,7 +147,7 @@ export function createWorkoutTimeline({ audioOutput = null, now = () => performa
   function prepareAudio() {
     try {
       return Promise.resolve(output.prepare?.()).then((result) => normalizeResult(result, "提示音加载失败")).catch((error) => failure(error, "提示音加载失败"));
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       return Promise.resolve(failure(error, "提示音加载失败"));
     }
   }
@@ -153,7 +155,7 @@ export function createWorkoutTimeline({ audioOutput = null, now = () => performa
   function activateAudio() {
     try {
       return Promise.resolve(output.activate?.()).then((result) => normalizeResult(result, "音频播放被浏览器拒绝")).catch((error) => failure(error, "音频播放被浏览器拒绝"));
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       return Promise.resolve(failure(error, "音频播放被浏览器拒绝"));
     }
   }
@@ -162,7 +164,7 @@ export function createWorkoutTimeline({ audioOutput = null, now = () => performa
   function replace(events) {
     try {
       return output.replace?.(events) ?? { ok: false, error: "当前音频输出不支持精确调度" };
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       return failure(error, "提示音调度失败");
     }
   }

@@ -37,7 +37,7 @@ export function expandSnapshot(slot, prefix = "snap") {
       snapshot.exercise_occurrence_keys.push(exerciseOccurrenceKey);
       const canonical = Boolean(exercise.exercise_id);
       const snapshotExercise = canonical
-        ? { exercise_occurrence_key: exerciseOccurrenceKey, occurrence_key: exercise.occurrence_key ?? exerciseOccurrenceKey, exercise_id: exercise.exercise_id, name: exercise.name, definition_version: exercise.definition_version, execution_mode: exercise.execution_mode, sets: /** @type {any[]} */ ([]) }
+        ? { exercise_occurrence_key: exerciseOccurrenceKey, occurrence_key: exercise.occurrence_key ?? exerciseOccurrenceKey, exercise_id: exercise.exercise_id, name: exercise.name, definition_version: exercise.definition_version, category: exercise.category, execution_mode: exercise.execution_mode, sets: /** @type {any[]} */ ([]) }
         : { exercise_occurrence_key: exerciseOccurrenceKey, exercise_key: exercise.exercise_key, name: exercise.name, category: exercise.category, side_mode: exercise.side_mode, sets: /** @type {any[]} */ ([]) };
       exercise.sets.forEach(/** @param {any} set @param {number} setIndex */ (set, setIndex) => {
         const setKey = canonical ? set.set_id : opaqueKey(`${prefix}s${blockIndex + 1}${exerciseIndex + 1}${setIndex + 1}`);
