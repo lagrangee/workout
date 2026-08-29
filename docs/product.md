@@ -1,12 +1,7 @@
-# Product
+# Product direction
 
-## Register
-
-product
-
-## Platform
-
-web
+Workout Tracker 是一个移动优先、可自行托管的 Web 产品，用于执行训练计划、
+记录实际结果，并把当次训练连接到日历和长期进展。
 
 ## Users
 

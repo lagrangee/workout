@@ -1,5 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import { strict as assert } from "node:assert";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 // This is a source-only gate. It must remain reproducible in a clean checkout
 // without a Cloudflare account, production credentials, or private receipts.
@@ -14,12 +18,15 @@ const requiredFiles = [
   "wrangler.toml",
   "wrangler.production.toml.example",
   ".dev.vars.example",
+  "docs/README.md",
+  "docs/product.md",
+  "docs/domain-model.md",
+  "docs/design-system.md",
   "docs/architecture.md",
+  "docs/validation.md",
   "docs/deployment/self-hosting.md",
   "docs/deployment/github-actions.md",
-  "docs/deployment/cloudflare-production-checklist.md",
-  "docs/release/local-acceptance.md",
-  "docs/release/production-acceptance.md",
+  "docs/guides/agent-mcp.md",
   "scripts/operator-acceptance.mjs",
   "seed/workout-tracker-weekly-seed.json",
   ".github/workflows/ci.yml",
@@ -30,6 +37,18 @@ const requiredFiles = [
 
 const contents = new Map();
 for (const file of requiredFiles) contents.set(file, await readFile(file, "utf8"));
+
+const { stdout: trackedOutput } = await execFileAsync(
+  "git",
+  ["ls-files", "-z"],
+  { encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
+);
+const trackedPaths = trackedOutput.toString("utf8").split("\0").filter(Boolean);
+const localOnlyPrefixes = [".bearing/", ".impeccable/", ".scratch/", ".omo/", "docs/agents/"];
+const trackedLocalOnlyPaths = trackedPaths.filter(
+  (path) => path === "AGENTS.md" || localOnlyPrefixes.some((prefix) => path.startsWith(prefix)),
+);
+assert.deepEqual(trackedLocalOnlyPaths, [], "local agent and tool state must stay outside the public tree");
 
 const migrations = (await readdir("migrations")).filter((name) => /^\d+.*\.sql$/.test(name)).sort();
 assert.ok(migrations.length > 0, "at least one versioned D1 migration is required");
@@ -49,6 +68,10 @@ assert.match(productionExample, /AUTH_LOGIN_WINDOW_SECONDS\s*=\s*"600"/);
 
 const gitignore = await readFile(".gitignore", "utf8");
 assert.match(gitignore, /^\.scratch\/$/m);
+assert.match(gitignore, /^\.bearing\/$/m);
+assert.match(gitignore, /^\.impeccable\/$/m);
+assert.match(gitignore, /^AGENTS\.md$/m);
+assert.match(gitignore, /^docs\/agents\/$/m);
 assert.match(gitignore, /^wrangler\.production\.toml$/m);
 
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
@@ -76,8 +99,8 @@ assert.match(ci, /npm run audit:runtime/);
 assert.match(ci, /npm run audit:development/);
 assert.doesNotMatch(ci, /wrangler-action|wrangler deploy|operator-acceptance/);
 
-assert.match(contents.get("docs/release/production-acceptance.md"), /outside the repository/i);
-assert.match(contents.get("docs/release/local-acceptance.md"), /documentation evidence/i);
+assert.match(contents.get("docs/deployment/self-hosting.md"), /outside the repository/i);
+assert.match(contents.get("docs/validation.md"), /Documentation\s+checks prove only/i);
 assert.match(contents.get("docs/deployment/github-actions.md"), /high severity/i);
 assert.match(contents.get("docs/deployment/github-actions.md"), /critical severity/i);
 assert.match(contents.get("docs/deployment/github-actions.md"), /does not establish/i);

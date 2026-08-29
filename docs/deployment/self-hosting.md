@@ -90,11 +90,27 @@ and recovery evidence.
 
 ## 5. Verify production privately
 
-Follow the [production checklist](cloudflare-production-checklist.md), then run
-the public-boundary smoke described in
-[production acceptance](../release/production-acceptance.md). Store receipts,
-exports, bookmarks, account IDs, and command output outside the repository.
+Run the credential-free public-boundary smoke against the deployed origin:
 
-Deployment, custom-domain activation, secret presence, authenticated reads,
-and recovery are operator checks. A successful `release-check` alone proves
-none of them.
+```bash
+WORKOUT_PUBLIC_ORIGIN="https://workout.example.com" \
+  node scripts/operator-acceptance.mjs
+```
+
+Then verify the account-specific boundary without printing values:
+
+1. The production file names the intended Worker, D1 database, custom hostname,
+   and matching HTTPS `PUBLIC_ORIGIN`; `workers.dev` and preview URLs remain
+   disabled.
+2. All eight secret names are present. If distributed login limiting is used,
+   verify both identity and client rate-limiter bindings independently.
+3. Every migration is applied in order and canonical foreign keys are valid.
+4. Both configured Athletes can authenticate and remain isolated; Agent and
+   Coach capabilities rotate, revoke, and fail closed as documented.
+5. Plan and Schedule readback match the intended deployment, and a recovery
+   rehearsal succeeds using synthetic data.
+
+Keep deployment receipts, exports, D1 bookmarks, account identifiers, and
+command output outside the repository. A successful source gate does not prove
+deployment, custom-domain activation, secret presence, authenticated reads, or
+recovery.

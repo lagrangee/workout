@@ -1,4 +1,4 @@
-# Workout Tracking
+# Workout Tracker domain model
 
 This context manages current training plans, workout execution records, and training data for independently authenticated athletes. Training goals, route background, and coaching analysis are outside the context.
 

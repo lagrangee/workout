@@ -5,7 +5,8 @@ contract-aware changes with executable evidence.
 
 ## Before changing code
 
-1. Read `CONTEXT.md` and the relevant document under `docs/contracts/`.
+1. Read the [domain model](docs/domain-model.md) and the relevant document under
+   `docs/contracts/`.
 2. Search existing issues and describe the observable problem before proposing
    a broad refactor.
 3. Use synthetic fixtures. Never submit personal training data, credentials,
@@ -15,13 +16,19 @@ contract-aware changes with executable evidence.
 
 ```bash
 npm ci
+npm run check
 npm run release-check
 ```
 
+Use `kebab-case` filenames, `camelCase` variables and functions, and
+`PascalCase` exported types. Keep public schemas versioned and reject ambiguous
+or silently repaired input.
+
 Add behavior tests for valid input, invalid input, state transitions,
-cross-Athlete isolation, and boundary dates as applicable. Contract changes
-must update both code and the owning contract. Keep D1 migrations forward-only
-and compatible with the Worker deployment order documented for self-hosters.
+cross-Athlete isolation, and boundary dates as applicable. Name focused tests
+after their module and keep broader flows under `tests/`. Contract changes must
+update both code and the owning contract. Keep D1 migrations forward-only and
+compatible with the Worker deployment order documented for self-hosters.
 
 ## Pull requests
 

@@ -4,7 +4,7 @@
 
 ## Contract and domain impact
 
-<!-- Name affected CONTEXT.md terms, public contracts, migrations, or state owners. -->
+<!-- Name affected domain-model terms, public contracts, migrations, or state owners. -->
 
 ## Verification
 

@@ -12,11 +12,10 @@ public-tree privacy scan; and documentation lint. Documentation lint is
 documentation evidence only and never substitutes for runtime behavior.
 
 The committed public-tree scanner uses generic credential, personal-email,
-production-binding, archive, FIT, and binary rules. It does not embed raw or
-hashed operator-specific identifiers. Exact private-value coverage belongs to
-the repository-external pattern input required by the
-[history sanitization rehearsal](../release/history-sanitization-rehearsal.md),
-so a public fingerprint cannot become an offline identity oracle.
+production-binding, archive, FIT, and binary rules. It deliberately contains
+no operator-specific values or fingerprints. Maintainers must review private
+configuration, receipts, exports, and personal training data before staging a
+change; those materials stay outside the repository.
 
 Dependency advisory review is online-only because `npm audit` requires the npm
 registry. Runtime dependencies fail CI at high severity or above; the complete
@@ -28,7 +27,8 @@ both audit commands green. CI preserves the source gate and audit logs as one
 revision-bound artifact for 14 days.
 
 Run `npm run public:gate:online` to execute the offline source baseline and
-both registry-backed advisory policies locally.
+both registry-backed advisory policies locally. See
+[Source validation](../validation.md) for the local evidence boundary.
 
 The workflow does not deploy, read Cloudflare credentials, inspect a live D1
 database, or consume a production receipt. No Cloudflare secret is required by
