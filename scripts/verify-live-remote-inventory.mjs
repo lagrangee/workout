@@ -12,8 +12,7 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 function usage() {
   return `Usage:
   node scripts/verify-live-remote-inventory.mjs \\
-    --repository <repository-with-configured-remote> \\
-    --candidate-repository <repository-containing-candidate> \\
+    --repository <private-cutover-repository> \\
     --remote <remote-name> \\
     --expected-remote-url-sha256 <digest> \\
     --publication-target-ref <full-head-ref> \\
@@ -21,10 +20,12 @@ function usage() {
     --candidate-object <exact-candidate-commit> \\
     --dispositions-file <repo-external-json>
 
-The command is read-only. It requires one identical fetch/push identity,
-inventories that configured remote with git ls-remote --heads --tags --refs,
+The single private cutover repository must both contain the exact candidate
+commit and configure one identical fetch/push identity. The command is read-only:
+it inventories that configured remote with git ls-remote --heads --tags --refs,
 verifies an exact target lease and one disposition for every live head/tag,
-and never pushes, deletes, changes visibility, tags, releases, or deploys.`;
+and never fetches, changes Git config, pushes, deletes, changes visibility,
+tags, releases, or deploys.`;
 }
 
 function parseArgs(argv) {
@@ -38,7 +39,6 @@ function parseArgs(argv) {
     }
     index += 1;
     if (name === "--repository") options.repository = value;
-    else if (name === "--candidate-repository") options.candidateRepository = value;
     else if (name === "--remote") options.remote = value;
     else if (name === "--expected-remote-url-sha256") options.expectedRemoteUrlSha256 = value;
     else if (name === "--publication-target-ref") options.publicationTargetRef = value;
@@ -148,7 +148,6 @@ async function main() {
   }
   const required = [
     "repository",
-    "candidateRepository",
     "remote",
     "expectedRemoteUrlSha256",
     "publicationTargetRef",
@@ -175,16 +174,14 @@ async function main() {
   }
 
   const repository = await realpath(resolve(options.repository));
-  const candidateRepository = await realpath(resolve(options.candidateRepository));
   const dispositionsFile = await realpath(resolve(options.dispositionsFile));
   if (!(await stat(dispositionsFile)).isFile()) {
     throw new Error("dispositions input must be a regular file");
   }
-  if (isWithin(dispositionsFile, repository) || isWithin(dispositionsFile, candidateRepository)) {
-    throw new Error("live remote dispositions must remain outside both repositories");
+  if (isWithin(dispositionsFile, repository)) {
+    throw new Error("live remote dispositions must remain outside the cutover repository");
   }
   await git(repository, ["rev-parse", "--absolute-git-dir"]);
-  await git(candidateRepository, ["rev-parse", "--absolute-git-dir"]);
 
   const configuredUrlsBefore = (await git(repository, ["remote", "get-url", "--all", options.remote]))
     .trim()
@@ -211,9 +208,14 @@ async function main() {
     throw new Error("configured remote push identity must be the one bound fetch identity");
   }
 
-  const candidateCommit = (
-    await git(candidateRepository, ["rev-parse", "--verify", `${options.candidateObject}^{commit}`])
-  ).trim();
+  let candidateCommit;
+  try {
+    candidateCommit = (
+      await git(repository, ["rev-parse", "--verify", `${options.candidateObject}^{commit}`])
+    ).trim();
+  } catch {
+    throw new Error("candidate object is not present as a commit in the cutover repository");
+  }
   if (candidateCommit !== options.candidateObject) {
     throw new Error("candidate object does not resolve to the exact expected commit");
   }
@@ -284,6 +286,8 @@ async function main() {
       expected_object: expectedObject,
       argv: [
         "git",
+        "-C",
+        repository,
         "push",
         `--force-with-lease=${ref}:${expectedObject}`,
         options.remote,
@@ -296,6 +300,7 @@ async function main() {
     status: "passed",
     claim: "live_remote_inventory_verified_read_only",
     repository_basename: basename(repository),
+    cutover_repository: repository,
     remote: {
       name: options.remote,
       configured_url_sha256: configuredRemoteUrlSha256,
@@ -326,6 +331,8 @@ async function main() {
         candidate_object: options.candidateObject,
         argv: [
           "git",
+          "-C",
+          repository,
           "push",
           `--force-with-lease=${options.publicationTargetRef}:${options.expectedTargetObject}`,
           options.remote,

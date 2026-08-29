@@ -1019,6 +1019,7 @@ async function main() {
         verifier: "scripts/verify-live-remote-inventory.mjs",
         required_method: "git ls-remote --heads --tags --refs",
         required_bindings: [
+          "single_private_cutover_repository_containing_candidate_and_remote_config",
           "exact_remote_url_sha256",
           "single_equal_fetch_and_push_identity",
           "publication_target_ref",

@@ -111,16 +111,20 @@ the exact object observed and reviewed by the operator:
 }
 ```
 
-Then run the independent read-only verifier from a repository with the exact
-configured remote. The candidate repository may be the disposable rewrite,
-which proves that the audited candidate object is a commit. Supply the SHA-256
-of the exact configured remote URL rather than placing a credential-bearing URL
-in a transcript:
+Before verification, prepare one private cutover repository. That single
+repository must contain the audited candidate object as a local commit and have
+the exact intended remote configured with one identical fetch/push URL. Importing
+the audited object and configuring the remote are explicit operator preparation
+steps outside the verifier; review them separately. Do not split remote identity
+and candidate ownership across two repositories.
+
+Then run the independent read-only verifier against that cutover repository.
+Supply the SHA-256 of its exact configured remote URL rather than placing a
+credential-bearing URL in a transcript:
 
 ```sh
 node scripts/verify-live-remote-inventory.mjs \
-  --repository /absolute/path/to/remote-configured-checkout \
-  --candidate-repository /absolute/private/disposable-rewrite \
+  --repository /absolute/private/cutover-repository \
   --remote origin \
   --expected-remote-url-sha256 "$EXPECTED_REMOTE_URL_SHA256" \
   --publication-target-ref refs/heads/main \
@@ -129,7 +133,10 @@ node scripts/verify-live-remote-inventory.mjs \
   --dispositions-file /absolute/private/live-ref-dispositions.json
 ```
 
-The verifier uses `git ls-remote --heads --tags --refs`, checks the configured
+The verifier does not fetch, import objects, or change Git configuration. It
+first proves that the exact candidate commit resolves in the same cutover
+repository that owns the remote identity. It then uses
+`git ls-remote --heads --tags --refs`, checks the configured
 fetch identity before and after the query, requires the effective push URL to
 be the same single identity and remain stable, binds the target to its exact
 live object, verifies the candidate commit, and fails if any live ref is missing,
@@ -139,9 +146,11 @@ delete refs, change visibility, tag, release, or deploy. If any time passes or
 the remote could have changed, run it again and discard the older inventory.
 The result contains an exact, unexecuted force-with-lease argv for the target
 and one exact, unexecuted lease-bound deletion argv for every other live ref.
-Each preview remains `not_authorized` and `executed: false`. Every subsequent
-mutation and the visibility change still requires its own explicit confirmation;
-the verifier never invokes a previewed argv.
+Every argv begins with `git -C <absolute-cutover-repository> push`, so later
+execution cannot silently resolve `origin` or the candidate object from another
+working directory. Each preview remains `not_authorized` and `executed: false`.
+Every subsequent mutation and the visibility change still requires its own
+explicit confirmation; the verifier never invokes a previewed argv.
 
 The approved sanitization policy currently identifies nine independently
 sensitive scratch paths. The count is an explicit fail-closed input: a future

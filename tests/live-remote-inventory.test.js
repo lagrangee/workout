@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -55,8 +56,6 @@ function verifierArgs({
   return [
     verifierScript,
     "--repository",
-    repository,
-    "--candidate-repository",
     repository,
     "--remote",
     "origin",
@@ -148,6 +147,8 @@ test("live remote inventory discovers unseen heads and tags, fails closed, and p
 
   assert.equal(report.status, "passed");
   assert.equal(report.claim, "live_remote_inventory_verified_read_only");
+  const cutoverRepository = realpathSync(repository);
+  assert.equal(report.cutover_repository, cutoverRepository);
   assert.equal(report.remote.configured_url_sha256, remoteUrlHash);
   assert.equal(report.remote.push_identity_matches_fetch, true);
   assert.equal(report.publication.target_ref, "refs/heads/main");
@@ -166,6 +167,8 @@ test("live remote inventory discovers unseen heads and tags, fails closed, and p
   assert.equal(report.operation_boundaries.force_update.candidate_object, candidateObject);
   assert.deepEqual(report.operation_boundaries.force_update.argv, [
     "git",
+    "-C",
+    cutoverRepository,
     "push",
     `--force-with-lease=refs/heads/main:${targetObject}`,
     "origin",
@@ -180,6 +183,8 @@ test("live remote inventory discovers unseen heads and tags, fails closed, and p
       expected_object: targetObject,
       argv: [
         "git",
+        "-C",
+        cutoverRepository,
         "push",
         `--force-with-lease=refs/heads/unseen-branch:${targetObject}`,
         "origin",
@@ -192,6 +197,8 @@ test("live remote inventory discovers unseen heads and tags, fails closed, and p
       expected_object: targetObject,
       argv: [
         "git",
+        "-C",
+        cutoverRepository,
         "push",
         `--force-with-lease=refs/tags/unseen-v0:${targetObject}`,
         "origin",
@@ -217,6 +224,75 @@ test("live remote inventory discovers unseen heads and tags, fails closed, and p
   );
   assert.equal(git(repository, "for-each-ref", "--format=%(refname)%09%(objectname)"), localRefsBefore);
   assert.equal(git(repository, "status", "--porcelain=v1"), localStatusBefore);
+}));
+
+test("live remote preview requires one cutover repository containing both candidate and remote identity", () => withTemporaryRoot("workout-cutover-repo-test-", (root) => {
+  const remoteRepository = join(root, "remote-checkout");
+  const candidateRepository = join(root, "candidate-only");
+  const remote = join(root, "remote.git");
+  mkdirSync(remoteRepository);
+  git(remoteRepository, "init", "-b", "main");
+  git(remoteRepository, "config", "user.name", "Synthetic Maintainer");
+  git(remoteRepository, "config", "user.email", "maintainer@example.invalid");
+  writeFileSync(join(remoteRepository, "source.txt"), "remote source\n");
+  git(remoteRepository, "add", "source.txt");
+  git(remoteRepository, "commit", "-m", "chore: remote source");
+  const targetObject = git(remoteRepository, "rev-parse", "HEAD");
+  run("git", ["init", "--bare", remote]);
+  git(remoteRepository, "remote", "add", "origin", remote);
+  git(remoteRepository, "push", "origin", "main");
+
+  mkdirSync(candidateRepository);
+  git(candidateRepository, "init", "-b", "candidate");
+  git(candidateRepository, "config", "user.name", "Synthetic Maintainer");
+  git(candidateRepository, "config", "user.email", "maintainer@example.invalid");
+  writeFileSync(join(candidateRepository, "candidate.txt"), "candidate only\n");
+  git(candidateRepository, "add", "candidate.txt");
+  git(candidateRepository, "commit", "-m", "chore: candidate only");
+  const candidateObject = git(candidateRepository, "rev-parse", "HEAD");
+  const dispositionsFile = join(root, "live-ref-dispositions.json");
+  writeDispositions(dispositionsFile, [{
+    ref: "refs/heads/main",
+    expected_object: targetObject,
+    operation: "force_update_to_candidate",
+  }]);
+  const baseArgs = verifierArgs({
+    repository: remoteRepository,
+    remoteUrlHash: createHash("sha256").update(remote).digest("hex"),
+    targetObject,
+    candidateObject,
+    dispositionsFile,
+  });
+
+  const remoteOnly = spawnSync(process.execPath, baseArgs, { encoding: "utf8" });
+  assert.notEqual(remoteOnly.status, 0);
+  assert.match(
+    remoteOnly.stderr,
+    /candidate object is not present as a commit in the cutover repository/u,
+  );
+  assert.equal(remoteOnly.stdout, "");
+
+  const candidateOnly = spawnSync(process.execPath, verifierArgs({
+    repository: candidateRepository,
+    remoteUrlHash: createHash("sha256").update(remote).digest("hex"),
+    targetObject,
+    candidateObject,
+    dispositionsFile,
+  }), { encoding: "utf8" });
+  assert.notEqual(candidateOnly.status, 0);
+  assert.match(candidateOnly.stderr, /live remote inventory failed closed/u);
+  assert.equal(candidateOnly.stdout, "");
+
+  const oldCli = spawnSync(process.execPath, [
+    ...baseArgs.slice(0, 3),
+    "--candidate-repository",
+    candidateRepository,
+    ...baseArgs.slice(3),
+  ], { encoding: "utf8" });
+  assert.notEqual(oldCli.status, 0);
+  assert.match(oldCli.stderr, /unknown argument: --candidate-repository/u);
+  assert.equal(oldCli.stdout, "");
+  assert.equal(run("git", ["--git-dir", remote, "rev-parse", "refs/heads/main"]), targetObject);
 }));
 
 test("live remote inventory rejects a push URL that differs from the inventoried fetch identity", () => withTemporaryRoot("workout-live-pushurl-test-", (root) => {
