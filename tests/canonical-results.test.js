@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { WEEKDAYS, weekdayKey } from "../src/util.js";
 import { agentRequest, appFixture, call, createAgentToken, TEST_NOW, testInstant, today } from "./helpers.js";
 
-async function seedAlternatingSession() {
+/** @param {"start"|"skip"} [command] */
+async function seedAlternatingSession(command = "start") {
   let current = Date.parse(TEST_NOW);
   const fixture = appFixture({ clock: () => new Date(current) });
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
@@ -26,11 +27,15 @@ async function seedAlternatingSession() {
   };
   state.plan_revisions = [{ revision_key: "rev-alternating", revision_sequence: 1, created_at: TEST_NOW, effective_from: "2026-01-01", week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
   await fixture.store.save(state);
-  const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": "alternating-start" }, body: "{}" });
-  assert.equal(started.response.status, 201);
-  const detail = await call(fixture.handler, `/api/private/sessions/${started.body.session_key}`);
+  const created = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/${command}`, {
+    method: "POST",
+    headers: { "Idempotency-Key": `alternating-${command}` },
+    body: JSON.stringify(command === "skip" ? { skip_reason: "身体不适" } : {}),
+  });
+  assert.equal(created.response.status, 201);
+  const detail = await call(fixture.handler, `/api/private/sessions/${created.body.session_key}`);
   assert.equal(detail.response.status, 200);
-  return { ...fixture, sessionKey: started.body.session_key, detail: detail.body, advanceTo: (offsetMs) => { current = Date.parse(TEST_NOW) + offsetMs; } };
+  return { ...fixture, sessionKey: created.body.session_key, detail: detail.body, advanceTo: (offsetMs) => { current = Date.parse(TEST_NOW) + offsetMs; } };
 }
 
 async function seedExternalLoadSession() {
@@ -100,6 +105,7 @@ test("alternating results keep left/right facts while accepting partial status a
   const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "alternating-end" }, body: JSON.stringify({ record, ended_at: endedAt }) });
   assert.equal(ended.response.status, 200);
   assert.equal(ended.body.status, "partial");
+  assert.equal(ended.body.session_rpe, 7);
   assert.deepEqual(ended.body.set_results.map(/** @param {any} result */ (result) => result.status), ["completed", "partial"]);
   assert.equal(ended.body.set_results[0].actual.value, 5);
   assert.equal(ended.body.set_results[0].resistance_kg, null);
@@ -118,7 +124,7 @@ test("alternating results keep left/right facts while accepting partial status a
   assert.equal(history.body.series.right[0].status, "partial");
 });
 
-test("canonical Set Results can be corrected once without mutating the frozen snapshot", async () => {
+test("a canonical completed Session correction authoritatively becomes partial without reopening its interval", async () => {
   const fixture = await seedAlternatingSession();
   const beforeSnapshot = structuredClone(fixture.detail.snapshot);
   const now = TEST_NOW;
@@ -128,20 +134,100 @@ test("canonical Set Results can be corrected once without mutating the frozen sn
   fixture.advanceTo(1000);
   const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "alternating-correction-end" }, body: JSON.stringify({ record: body, ended_at: endedAt }) });
   assert.equal(ended.response.status, 200);
-  const correctedResults = results.map(/** @param {any} result */ (result) => result.completion_item_key === results[1].completion_item_key ? { ...result, actual: { metric: "reps", value: 4 }, note: "修正右侧" } : result);
+  const removed = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify({ ...body, set_results: results.slice(0, 1), training_intervals: ended.body.training_intervals }) });
+  assert.equal(removed.response.status, 200);
+  assert.equal(removed.body.status, "partial");
+  assert.equal(removed.body.completion_fraction, 0.5);
+  assert.equal(removed.body.set_results.length, 1);
+  assert.deepEqual(removed.body.training_intervals, ended.body.training_intervals);
+  assert.deepEqual(removed.body.snapshot, beforeSnapshot);
+
+  const correctedResults = results.map(/** @param {any} result */ (result) => result.completion_item_key === results[1].completion_item_key ? { ...result, status: "skipped", actual: null, resistance: null, rir: null, note: "修正为跳过右侧", completed_at: null } : result);
   const corrected = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify({ ...body, set_results: correctedResults, training_intervals: ended.body.training_intervals }) });
   assert.equal(corrected.response.status, 200);
-  assert.equal(corrected.body.status, "completed");
-  assert.equal(corrected.body.set_results[1].actual.value, 4);
-  assert.equal(corrected.body.set_results[1].note, "修正右侧");
+  assert.equal(corrected.body.status, "partial");
+  assert.equal(corrected.body.completion_fraction, 0.5);
+  assert.equal(corrected.body.set_results[1].status, "skipped");
+  assert.equal(corrected.body.set_results[1].actual, null);
+  assert.equal(corrected.body.set_results[1].completed_at, null);
+  assert.equal(corrected.body.set_results[1].note, "修正为跳过右侧");
+  assert.deepEqual(corrected.body.training_intervals, ended.body.training_intervals);
+  assert.ok(corrected.body.training_intervals.every(/** @param {any} interval */ (interval) => interval.ended_at !== null));
   assert.deepEqual(corrected.body.snapshot, beforeSnapshot);
+
+  const attemptedReopen = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, {
+    method: "PUT",
+    body: JSON.stringify({ ...body, set_results: correctedResults, training_intervals: corrected.body.training_intervals.map(/** @param {any} interval */ (interval) => ({ ...interval, ended_at: null })) }),
+  });
+  assert.equal(attemptedReopen.response.status, 400);
+  assert.equal(attemptedReopen.body.error.code, "invalid_session_record");
+  assert.match(JSON.stringify(attemptedReopen.body.error.details), /terminal record needs at least one closed interval/);
+  const readback = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}`);
+  assert.equal(readback.body.status, "partial");
+  assert.equal(readback.body.completion_fraction, 0.5);
+  assert.deepEqual(readback.body.training_intervals, ended.body.training_intervals);
 });
 
-test("canonical result validation preserves explicit skipped absence and rejects duplicate Completion Items", async () => {
+test("a canonical partial Session correction authoritatively becomes completed while preserving ended_at", async () => {
+  const fixture = await seedAlternatingSession();
+  const endedAt = testInstant(1000);
+  const [left, right] = fixture.detail.snapshot.completion_items;
+  const partialResults = [
+    { completion_item_key: left.completion_item_key, status: "completed", actual: { metric: "reps", value: 5 }, resistance: { mode: "bodyweight" }, rir: 2, note: null, completed_at: TEST_NOW },
+    { completion_item_key: right.completion_item_key, status: "partial", actual: { metric: "reps", value: 3 }, resistance: { mode: "bodyweight" }, rir: null, note: null, completed_at: TEST_NOW },
+  ];
+  const record = { record_schema_version: 2, set_results: partialResults, training_intervals: closedIntervals(fixture.detail, endedAt), session_rpe: 6, note: null, exercise_feedback: [], skip_reason: null };
+  fixture.advanceTo(1000);
+  const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "partial-correction-end" }, body: JSON.stringify({ record, ended_at: endedAt }) });
+  assert.equal(ended.response.status, 200);
+  assert.equal(ended.body.status, "partial");
+  assert.equal(ended.body.completion_fraction, 0.5);
+
+  const completedResults = partialResults.map(/** @param {any} result */ (result) => result.completion_item_key === right.completion_item_key ? { ...result, status: "completed", actual: { metric: "reps", value: 5 } } : result);
+  const corrected = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify({ ...record, set_results: completedResults, training_intervals: ended.body.training_intervals }) });
+  assert.equal(corrected.response.status, 200);
+  assert.equal(corrected.body.status, "completed");
+  assert.equal(corrected.body.completion_fraction, 1);
+  assert.equal(corrected.body.set_results[1].status, "completed");
+  assert.deepEqual(corrected.body.training_intervals, ended.body.training_intervals);
+  assert.ok(corrected.body.training_intervals.every(/** @param {any} interval */ (interval) => interval.ended_at === endedAt));
+});
+
+test("a canonical skipped Session correction stays skipped and cannot acquire results or intervals", async () => {
+  const fixture = await seedAlternatingSession("skip");
+  const correction = { record_schema_version: 2, set_results: [], training_intervals: [], session_rpe: null, note: "改为观察记录", exercise_feedback: [], skip_reason: "仍然不适" };
+  const corrected = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify(correction) });
+  assert.equal(corrected.response.status, 200);
+  assert.equal(corrected.body.status, "skipped");
+  assert.equal(corrected.body.completion_fraction, 0);
+  assert.equal(corrected.body.skip_reason, "仍然不适");
+  assert.deepEqual(corrected.body.set_results, []);
+  assert.deepEqual(corrected.body.training_intervals, []);
+
+  const [item] = corrected.body.snapshot.completion_items;
+  const invalid = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, {
+    method: "PUT",
+    body: JSON.stringify({ ...correction, set_results: [{ completion_item_key: item.completion_item_key, status: "skipped", actual: null, resistance: null, rir: null, note: null, completed_at: null }] }),
+  });
+  assert.equal(invalid.response.status, 400);
+  assert.equal(invalid.body.error.code, "invalid_skipped_record");
+  const readback = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}`);
+  assert.equal(readback.body.status, "skipped");
+  assert.deepEqual(readback.body.set_results, []);
+  assert.deepEqual(readback.body.training_intervals, []);
+});
+
+test("canonical in-progress correction preserves the server-owned open interval and explicit skipped result absence", async () => {
   const fixture = await seedAlternatingSession();
   const now = TEST_NOW;
   const [left] = fixture.detail.snapshot.completion_items;
   const base = { record_schema_version: 2, set_results: [{ completion_item_key: left.completion_item_key, status: "skipped", actual: null, resistance: null, rir: null, note: null, completed_at: null }], training_intervals: fixture.detail.training_intervals, session_rpe: null, note: null, exercise_feedback: [], skip_reason: null };
+  const tamperedInterval = { ...base, training_intervals: [{ ...base.training_intervals[0], interval_key: "ti_forged" }] };
+  const rejected = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify(tamperedInterval) });
+  assert.equal(rejected.response.status, 400);
+  assert.equal(rejected.body.error.code, "invalid_session_record");
+  assert.match(rejected.body.error.message, /server-owned/);
+
   const skipped = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify(base) });
   assert.equal(skipped.response.status, 200);
   assert.equal(skipped.body.set_results[0].status, "skipped");

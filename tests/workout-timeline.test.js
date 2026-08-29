@@ -1,8 +1,8 @@
-// @ts-nocheck
-
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createWorkoutTimeline } from "../public/workout-timeline.js";
+// The supported Node engines execute erasable TypeScript directly, so test:interfaces
+// stays on the production web module while Vitest owns the broader unit coverage.
+import { createWorkoutTimeline } from "../web/src/lib/workout-timeline.ts";
 
 function browserAudioHarness() {
   const starts = [];

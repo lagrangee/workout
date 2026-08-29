@@ -20,8 +20,9 @@ export function athleteExport(state, now) {
   const schedule = firstPlan ? dateRange(firstPlan, today).map((date) => exportSchedule(state, date, now)).filter(Boolean) : [];
   const sessions = state.sessions.slice().sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date) || a.session_key.localeCompare(b.session_key)).map(exportSession);
   const result = { athlete_export_schema_version: 1, generated_at: dataAsOf, data_as_of: dataAsOf, timezone: state.timezone, counts: { plan_revisions: revisions.length, scheduled_workouts: schedule.length, sessions: sessions.length }, athlete: { display_name: state.display_name, timezone: state.timezone, unit_conventions: { resistance: "kg_per_implement", incline: "percent" } }, plan_revisions: revisions, scheduled_workouts: schedule, sessions };
-  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 20 * 1024 * 1024) return { error: { code: "export_capacity_exceeded", message: "This export exceeds the 20 MiB delivery bound" }, status: 503 };
-  return { value: result, status: 200 };
+  const body = JSON.stringify(result, null, 2);
+  if (new TextEncoder().encode(body).byteLength > 20 * 1024 * 1024) return { error: { code: "export_capacity_exceeded", message: "This export exceeds the 20 MiB delivery bound" }, status: 503 };
+  return { value: result, body, status: 200 };
 }
 
 /** @param {AthleteState} state @param {string} date @param {Date} now */

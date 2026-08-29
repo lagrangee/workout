@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { athleteExport } from "../src/export.js";
+import { createHandler } from "../src/http.js";
 import { addDays, localDate, weekdayKey, WEEKDAYS } from "../src/util.js";
 import { scheduleEntry, todayModel } from "../src/plan.js";
-import { appFixture, call, packageText, post, today, workout } from "./helpers.js";
+import { appFixture, call, fixture, packageText, post, TEST_NOW, today, workout } from "./helpers.js";
+
+const MAX_EXPORT_BYTES = 20 * 1024 * 1024;
 
 test("ticket 25 boundaries: future and current unstarted workouts are not due", async () => {
   const { handler } = appFixture();
@@ -72,6 +76,70 @@ test("ticket 25 boundaries: each Athlete has an empty export without crossing st
   const athleteA = await call(handler, "/api/private/export", {}, "athlete-a@example.invalid"); const athleteB = await call(handler, "/api/private/export", {}, "athlete-b@example.invalid");
   assert.equal(athleteA.body.athlete.display_name, "Athlete A"); assert.equal(athleteB.body.athlete.display_name, "Athlete B"); assert.notEqual(athleteA.body.athlete.display_name, athleteB.body.athlete.display_name);
   assert.equal(athleteB.body.counts.sessions, 0); assert.deepEqual(athleteB.body.scheduled_workouts, []);
+});
+
+test("Athlete Export gates the exact HTTP attachment bytes at 20 MiB", async () => {
+  const now = new Date(TEST_NOW);
+  const encoder = new TextEncoder();
+  const { athleteA } = fixture();
+  athleteA.sessions = Array.from({ length: 10_000 }, (_, index) => {
+    const key = String(index).padStart(5, "0");
+    return {
+      session_key: `sess_export_${key}`,
+      scheduled_workout_key: `sw_export_${key}`,
+      scheduled_date: today,
+      timezone_at_session: "Asia/Shanghai",
+      title: "容量边界",
+      status: "skipped",
+      session_rpe: null,
+      note: "",
+      skip_reason: "capacity_fixture",
+      snapshot: { title: "容量边界", start_time: null, estimated_duration_min: 0, blocks: [], completion_items: [] },
+      completion_results: [],
+      training_intervals: [],
+      exercise_feedback: [],
+      created_at: TEST_NOW,
+      updated_at: TEST_NOW,
+    };
+  });
+
+  const baseline = athleteExport(athleteA, now);
+  assert.equal(baseline.status, 200);
+  const baselineBytes = encoder.encode(JSON.stringify(baseline.value, null, 2)).byteLength;
+  const paddingBytes = MAX_EXPORT_BYTES - baselineBytes;
+  assert.ok(paddingBytes > athleteA.sessions.length);
+  const noteBytes = Math.floor(paddingBytes / athleteA.sessions.length);
+  const remainder = paddingBytes % athleteA.sessions.length;
+  athleteA.sessions.forEach((session, index) => {
+    session.note = "x".repeat(noteBytes + (index < remainder ? 1 : 0));
+  });
+
+  const store = { getByEmail: async () => athleteA };
+  const handler = createHandler(
+    { STORE: store, LOCAL_AUTH: "true", DEFAULT_TIMEZONE: "Asia/Shanghai" },
+    { clock: () => now },
+  );
+  const requestExport = () => handler.fetch(new Request("https://workout.example/api/private/export", { headers: { "x-athlete-email": athleteA.email } }));
+
+  const atLimit = await requestExport();
+  const atLimitBody = await atLimit.text();
+  assert.equal(atLimit.status, 200);
+  assert.equal(encoder.encode(atLimitBody).byteLength, MAX_EXPORT_BYTES);
+  assert.match(atLimit.headers.get("content-disposition") ?? "", /^attachment;/);
+
+  athleteA.sessions[0].note += "x";
+  const oversized = await requestExport();
+  const oversizedBody = await oversized.text();
+  assert.equal(oversized.status, 503);
+  assert.equal(oversized.headers.get("content-disposition"), null);
+  assert.deepEqual(JSON.parse(oversizedBody), {
+    error: {
+      code: "export_capacity_exceeded",
+      message: "This export exceeds the 20 MiB delivery bound",
+      details: [],
+    },
+  });
+  assert.equal(oversizedBody.includes("athlete_export_schema_version"), false);
 });
 
 test("ticket 24 boundaries: unbounded analytical ranges fail before expansion", async () => {

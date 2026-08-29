@@ -1,9 +1,15 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { createHandler } from "../src/http.js";
 import { createStore, emptyAthlete } from "../src/store.js";
 import { addDays, localDate, opaqueKey, weekdayKey, WEEKDAYS } from "../src/util.js";
+
+const argumentsByName = new Map();
+for (let index = 2; index < process.argv.length; index += 2) argumentsByName.set(process.argv[index], process.argv[index + 1]);
+const port = Number(argumentsByName.get("--port") ?? 8787);
+const assetDirectory = resolve(process.cwd(), argumentsByName.get("--assets") ?? "public");
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be a valid TCP port");
 
 const store = await createStore({ DEFAULT_TIMEZONE: "Asia/Shanghai" });
 const localAthlete = await store.getByEmail("athlete-a@example.invalid");
@@ -17,7 +23,7 @@ await store.save(localAthlete);
 const localEnv = {
   STORE: store,
   LOCAL_AUTH: "true",
-  PUBLIC_ORIGIN: "http://127.0.0.1:8787",
+  PUBLIC_ORIGIN: `http://127.0.0.1:${port === 8788 ? 8787 : port}`,
   AUTH_A_PASSWORD: "local-workout",
   AUTH_B_PASSWORD: "local-workout",
   AUTH_SESSION_SECRET: "local-workout-session-secret-32-bytes",
@@ -30,14 +36,14 @@ const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
 async function assetFetch(request) {
   const path = new URL(request.url).pathname;
   const file = path === "/" || path === "/app" ? "index.html" : path.slice(1);
-  try { return new Response(await readFile(join(process.cwd(), "public", file)), { headers: { "Content-Type": mime[extname(file)] || "application/octet-stream" } }); } catch { return new Response("Not found", { status: 404 }); }
+  try { return new Response(await readFile(join(assetDirectory, file)), { headers: { "Content-Type": mime[extname(file)] || "application/octet-stream" } }); } catch { return new Response("Not found", { status: 404 }); }
 }
 const server = createServer(async (req, res) => {
   const chunks = []; for await (const chunk of req) chunks.push(chunk);
   /** @type {HeadersInit} */
   const headers = Object.entries(req.headers).flatMap(([key, value]) => typeof value === "string" ? [[key, value]] : value ? [[key, value.join(", ")]] : []);
-  const request = new Request(`http://127.0.0.1:8787${req.url}`, { method: req.method, headers, body: req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks) });
+  const request = new Request(`http://127.0.0.1:${port}${req.url}`, { method: req.method, headers, body: req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks) });
   const response = await handler.fetch(request, localEnv);
   res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer()));
 });
-server.listen(8787, "127.0.0.1", () => console.log("Workout local server listening on http://127.0.0.1:8787/app"));
+server.listen(port, "127.0.0.1", () => console.log(`Workout local API listening on http://127.0.0.1:${port}`));

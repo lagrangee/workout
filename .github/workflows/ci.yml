@@ -35,6 +35,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Chromium for browser smoke
+        run: npm run test:browser:install -- --with-deps
+
       - name: Run reproducible public source gate
         run: |
           mkdir -p artifacts

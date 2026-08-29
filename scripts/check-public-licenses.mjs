@@ -13,11 +13,14 @@ const reviewedLicenses = new Set([
   "Apache-2.0 AND LGPL-3.0-or-later",
   "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
   "BSD-3-Clause",
+  "BSD-2-Clause",
+  "BlueOak-1.0.0",
   "CC0-1.0",
   "ISC",
   "LGPL-3.0-or-later",
   "MIT",
   "MIT OR Apache-2.0",
+  "MPL-2.0",
 ]);
 
 const problems = [];

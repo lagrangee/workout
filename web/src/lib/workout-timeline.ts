@@ -1,13 +1,46 @@
-// @ts-check
+export interface CueEvent {
+  kind: string;
+  value: number;
+  atMs: number;
+}
 
-/** @typedef {{ kind: string, value: number, atMs: number }} CueEvent */
-/** @typedef {{ ok: boolean, error?: string }} AudioResult */
-/** @typedef {AudioResult | false | undefined} AudioResultLike */
-/** @typedef {AudioResultLike | Promise<AudioResultLike>} AudioResultValue */
-/** @typedef {{ prepare?: () => AudioResultValue, activate?: () => AudioResultValue, replace?: (events: CueEvent[]) => AudioResultValue, cancel?: () => void }} AudioOutput */
+export interface AudioResult {
+  ok: boolean;
+  error?: string;
+}
 
-/** @type {Record<string, string>} */
-const defaultAudioSources = {
+export type AudioResultLike = AudioResult | false | undefined;
+export type AudioResultValue = AudioResultLike | Promise<AudioResultLike>;
+
+export interface AudioOutput {
+  prepare?: () => AudioResultValue;
+  activate?: () => AudioResultValue;
+  replace?: (events: CueEvent[]) => AudioResultValue;
+  cancel?: () => void;
+}
+
+export interface WorkoutTimelineOptions {
+  audioOutput?: AudioOutput | null;
+  now?: () => number;
+  leadTimeMs?: number;
+  sources?: Record<string, string>;
+}
+
+export interface ActionSchedule {
+  startAtMs: number;
+  phaseEndsAtMs: number;
+  events: CueEvent[];
+  result: AudioResultValue;
+}
+
+export interface RestSchedule {
+  startAtMs: number;
+  endsAtMs: number;
+  events: CueEvent[];
+  result: AudioResultValue;
+}
+
+const defaultAudioSources: Record<string, string> = {
   warmup: "/audio/workout-warmup.wav",
   prepare: "/audio/workout-prepare.wav",
   tempo: "/audio/workout-tempo.wav",
@@ -17,52 +50,52 @@ const defaultAudioSources = {
   "rest-complete": "/audio/workout-complete.wav",
 };
 
-/** @param {any} error @param {string} fallback @returns {AudioResult} */
-function failure(error, fallback) {
-  return { ok: false, error: error?.message || (typeof error === "string" ? error : fallback) };
+function failure(error: unknown, fallback: string): AudioResult {
+  const message = error && typeof error === "object" && "message" in error
+    ? String((error as { message?: unknown }).message || "")
+    : "";
+  if (message) return { ok: false, error: message };
+  return { ok: false, error: typeof error === "string" ? error : fallback };
 }
 
-/** @param {{ sources: Record<string, string>, now: () => number }} options @returns {AudioOutput} */
-function createBrowserAudioOutput({ sources, now }) {
-  const audioGlobal = /** @type {typeof globalThis & { webkitAudioContext?: typeof AudioContext }} */ (globalThis);
-  const AudioContextClass = audioGlobal.AudioContext || audioGlobal.webkitAudioContext;
-  /** @type {AudioContext|null} */
-  let context = null;
-  /** @type {Promise<Map<string, AudioBuffer>>|null} */
-  let buffersPromise = null;
+function createBrowserAudioOutput({ sources, now }: { sources: Record<string, string>; now: () => number }): AudioOutput {
+  const audioGlobal = globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+  const AudioContextClass = globalThis.AudioContext || audioGlobal.webkitAudioContext;
+  let context: AudioContext | null = null;
+  let buffersPromise: Promise<Map<string, AudioBuffer>> | null = null;
   let scheduleGeneration = 0;
-  /** @type {Set<AudioBufferSourceNode>} */
-  const activeSources = new Set();
+  const activeSources = new Set<AudioBufferSourceNode>();
 
-  /** @returns {AudioContext|null} */
-  function ensureContext() {
+  function ensureContext(): AudioContext | null {
     if (!AudioContextClass) return null;
     if (!context || context.state === "closed") context = new AudioContextClass({ latencyHint: "interactive" });
     return context;
   }
 
-  function prepare() {
+  function prepare(): Promise<AudioResult> {
     const audioContext = ensureContext();
     if (!audioContext) return Promise.resolve({ ok: false, error: "当前浏览器不支持 Web Audio" });
     if (!buffersPromise) {
       const uniqueSources = [...new Set(Object.values(sources))];
-      buffersPromise = Promise.all(uniqueSources.map(async (source) => {
+      buffersPromise = Promise.all(uniqueSources.map(async (source): Promise<[string, AudioBuffer]> => {
         const response = await fetch(source);
         if (!response.ok) throw new Error(`提示音加载失败 (${response.status})`);
-        return /** @type {[string, AudioBuffer]} */ ([source, await audioContext.decodeAudioData(await response.arrayBuffer())]);
-      })).then((entries) => new Map(entries)).catch((error) => {
+        return [source, await audioContext.decodeAudioData(await response.arrayBuffer())];
+      })).then((entries) => new Map(entries)).catch((error: unknown) => {
         buffersPromise = null;
         throw error;
       });
     }
-    return buffersPromise.then(() => ({ ok: true })).catch((error) => failure(error, "提示音加载失败"));
+    return buffersPromise.then(() => ({ ok: true })).catch((error: unknown) => failure(error, "提示音加载失败"));
   }
 
-  async function activate() {
+  async function activate(): Promise<AudioResult> {
     try {
-      const audioNavigator = /** @type {Navigator & { audioSession?: { type?: string } }} */ (navigator);
+      const audioNavigator = navigator as Navigator & { audioSession?: { type?: string } };
       if (audioNavigator.audioSession && "type" in audioNavigator.audioSession) audioNavigator.audioSession.type = "playback";
-    } catch {}
+    } catch {
+      // audioSession is an optional browser extension.
+    }
     const audioContext = ensureContext();
     if (!audioContext) return { ok: false, error: "当前浏览器不支持 Web Audio" };
     const prepared = prepare();
@@ -72,21 +105,24 @@ function createBrowserAudioOutput({ sources, now }) {
       if (!preparedResult.ok) return preparedResult;
       if (audioContext.state !== "running") return { ok: false, error: "音频播放被浏览器拒绝" };
       return { ok: true };
-    } catch (/** @type {any} */ error) {
+    } catch (error: unknown) {
       return failure(error, "音频播放被浏览器拒绝");
     }
   }
 
-  function cancel() {
+  function cancel(): void {
     scheduleGeneration += 1;
     for (const source of activeSources) {
-      try { source.stop(); } catch {}
+      try {
+        source.stop();
+      } catch {
+        // A source may already have ended.
+      }
     }
     activeSources.clear();
   }
 
-  /** @param {AudioContext} audioContext @param {number} atMs */
-  function contextTimeFor(audioContext, atMs) {
+  function contextTimeFor(audioContext: AudioContext, atMs: number): number {
     const timestamp = audioContext.getOutputTimestamp?.();
     const contextTime = Number(timestamp?.contextTime);
     const performanceTime = Number(timestamp?.performanceTime);
@@ -96,8 +132,7 @@ function createBrowserAudioOutput({ sources, now }) {
     return audioContext.currentTime + (atMs - now()) / 1000;
   }
 
-  /** @param {CueEvent[]} events @returns {AudioResult|Promise<AudioResult>} */
-  function replace(events) {
+  function replace(events: CueEvent[]): AudioResult | Promise<AudioResult> {
     if (!context || context.state !== "running" || !buffersPromise) return { ok: false, error: "声音尚未准备好" };
     const audioContext = context;
     const preparedBuffers = buffersPromise;
@@ -118,11 +153,11 @@ function createBrowserAudioOutput({ sources, now }) {
           source.start(Math.max(audioContext.currentTime, contextTimeFor(audioContext, event.atMs)));
         }
         return { ok: true };
-      }).catch((error) => {
+      }).catch((error: unknown) => {
         cancel();
         return failure(error, "提示音调度失败");
       });
-    } catch (/** @type {any} */ error) {
+    } catch (error: unknown) {
       cancel();
       return failure(error, "提示音调度失败");
     }
@@ -131,52 +166,56 @@ function createBrowserAudioOutput({ sources, now }) {
   return { prepare, activate, replace, cancel };
 }
 
-/** @param {AudioResultLike} result @param {string} fallback @returns {AudioResult} */
-function normalizeResult(result, fallback) {
+function normalizeResult(result: AudioResultLike, fallback: string): AudioResult {
   if (result === false) return { ok: false, error: fallback };
   if (result && typeof result === "object" && result.ok === false) return result;
   return { ok: true };
 }
 
-/**
- * @param {{ audioOutput?: AudioOutput|null, now?: () => number, leadTimeMs?: number, sources?: Record<string, string> }} [options]
- */
-export function createWorkoutTimeline({ audioOutput = null, now = () => performance.now(), leadTimeMs = 50, sources = defaultAudioSources } = {}) {
+export function createWorkoutTimeline({
+  audioOutput = null,
+  now = () => performance.now(),
+  leadTimeMs = 50,
+  sources = defaultAudioSources,
+}: WorkoutTimelineOptions = {}) {
   const output = audioOutput || createBrowserAudioOutput({ sources, now });
 
-  function prepareAudio() {
+  function prepareAudio(): Promise<AudioResult> {
     try {
-      return Promise.resolve(output.prepare?.()).then((result) => normalizeResult(result, "提示音加载失败")).catch((error) => failure(error, "提示音加载失败"));
-    } catch (/** @type {any} */ error) {
+      return Promise.resolve(output.prepare?.()).then((result) => normalizeResult(result, "提示音加载失败")).catch((error: unknown) => failure(error, "提示音加载失败"));
+    } catch (error: unknown) {
       return Promise.resolve(failure(error, "提示音加载失败"));
     }
   }
 
-  function activateAudio() {
+  function activateAudio(): Promise<AudioResult> {
     try {
-      return Promise.resolve(output.activate?.()).then((result) => normalizeResult(result, "音频播放被浏览器拒绝")).catch((error) => failure(error, "音频播放被浏览器拒绝"));
-    } catch (/** @type {any} */ error) {
+      return Promise.resolve(output.activate?.()).then((result) => normalizeResult(result, "音频播放被浏览器拒绝")).catch((error: unknown) => failure(error, "音频播放被浏览器拒绝"));
+    } catch (error: unknown) {
       return Promise.resolve(failure(error, "音频播放被浏览器拒绝"));
     }
   }
 
-  /** @param {CueEvent[]} events @returns {AudioResultValue} */
-  function replace(events) {
+  function replace(events: CueEvent[]): AudioResultValue {
     try {
       return output.replace?.(events) ?? { ok: false, error: "当前音频输出不支持精确调度" };
-    } catch (/** @type {any} */ error) {
+    } catch (error: unknown) {
       return failure(error, "提示音调度失败");
     }
   }
 
-  /** @param {{ phase: "preparing"|"active", remainingMs: number, targetSec: number, audible?: boolean, alignPhaseEndAtMs?: number|null }} options */
-  function scheduleAction({ phase, remainingMs, targetSec, audible = true, alignPhaseEndAtMs = null }) {
+  function scheduleAction({ phase, remainingMs, targetSec, audible = true, alignPhaseEndAtMs = null }: {
+    phase: "preparing" | "active";
+    remainingMs: number;
+    targetSec: number;
+    audible?: boolean;
+    alignPhaseEndAtMs?: number | null;
+  }): ActionSchedule {
     const scheduledAtMs = now();
     const startAtMs = scheduledAtMs + leadTimeMs;
     const phaseEndsAtMs = alignPhaseEndAtMs ?? scheduledAtMs + Math.max(0, remainingMs);
     const effectiveRemainingMs = Math.max(0, phaseEndsAtMs - startAtMs);
-    /** @type {CueEvent[]} */
-    const events = [];
+    const events: CueEvent[] = [];
     if (phase === "preparing") {
       const preparationSeconds = Math.max(1, Math.ceil(effectiveRemainingMs / 1000));
       for (let value = preparationSeconds; value >= 1; value -= 1) {
@@ -198,26 +237,31 @@ export function createWorkoutTimeline({ audioOutput = null, now = () => performa
     return { startAtMs, phaseEndsAtMs, events, result };
   }
 
-  /** @param {{ remainingMs: number, audible?: boolean, alignEndAtMs?: number|null }} options */
-  function scheduleRest({ remainingMs, audible = true, alignEndAtMs = null }) {
+  function scheduleRest({ remainingMs, audible = true, alignEndAtMs = null }: {
+    remainingMs: number;
+    audible?: boolean;
+    alignEndAtMs?: number | null;
+  }): RestSchedule {
     const scheduledAtMs = now();
     const startAtMs = scheduledAtMs + leadTimeMs;
     const endsAtMs = alignEndAtMs ?? scheduledAtMs + Math.max(0, remainingMs);
     const effectiveRemainingMs = Math.max(0, endsAtMs - startAtMs);
     const currentSecond = Math.max(0, Math.ceil(effectiveRemainingMs / 1000));
-    /** @type {CueEvent[]} */
-    const events = [];
+    const events: CueEvent[] = [];
     for (let value = Math.min(5, currentSecond); value >= 1; value -= 1) {
-      const atMs = endsAtMs - value * 1000;
-      events.push({ kind: "rest-final", value, atMs });
+      events.push({ kind: "rest-final", value, atMs: endsAtMs - value * 1000 });
     }
     events.push({ kind: "rest-complete", value: 0, atMs: endsAtMs });
     const result = audible ? replace(events) : (output.cancel?.(), { ok: true });
     return { startAtMs, endsAtMs, events, result };
   }
 
-  function cancel() {
-    try { output.cancel?.(); } catch {}
+  function cancel(): void {
+    try {
+      output.cancel?.();
+    } catch {
+      // Cancellation is best-effort during navigation and lifecycle teardown.
+    }
   }
 
   return { prepareAudio, activateAudio, scheduleAction, scheduleRest, cancel };

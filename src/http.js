@@ -41,7 +41,14 @@ export function createHandler(initialEnv = {}, options = {}) {
 async function route(request, env, getStore, ctx, now, loginAttempts) {
   const url = new URL(request.url);
   if (env.ENVIRONMENT === "production" && env.PRODUCTION_HOST && url.hostname !== env.PRODUCTION_HOST) return textResponse("Not found", 404);
-  if (url.pathname === "/healthz") return jsonResponse({ ok: true, service: "workout-tracker" });
+  if (url.pathname === "/healthz") {
+    if (env.ENVIRONMENT === undefined || env.ENVIRONMENT === "development") return jsonResponse({ ok: true, service: "workout-tracker" });
+    if (env.ENVIRONMENT !== "production") return jsonResponse({ ok: false, service: "workout-tracker" }, 503);
+    const revision = typeof env.RELEASE_REVISION === "string" && /^[0-9a-f]{40}$/.test(env.RELEASE_REVISION) ? env.RELEASE_REVISION : null;
+    return revision
+      ? jsonResponse({ ok: true, service: "workout-tracker", revision })
+      : jsonResponse({ ok: false, service: "workout-tracker" }, 503);
+  }
   if (url.pathname === "/api/auth/login") return authLogin(request, env, now, loginAttempts);
   if (url.pathname === "/api/auth/logout") return authLogout(request, env, now);
   if (url.pathname === "/api/coach/v1/schemas" && (request.method === "GET" || request.method === "HEAD")) return maybeHead(jsonResponse({ schema_version: 1, generated_at: now.toISOString(), schemas: ["manifest", "overview", "weekly_template", "plan", "schedule", "session_index", "session_detail", "progress", "exercise_detail", "error", "schema_catalog"].map((name) => ({ name, href: `/api/coach/v1/schemas/${name}`, json_schema_draft: "2020-12" })) }), request);
@@ -165,7 +172,15 @@ async function agentMutationRoute({ request, env, store, authenticatedState, now
 async function staticRoute(request, env) {
   if (env.ASSETS?.fetch) {
     const response = await env.ASSETS.fetch(request);
-    return new Response(request.method === "HEAD" ? null : response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...securityHeaders(response.headers.get("content-type") ?? "text/html; charset=utf-8", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'") } });
+    const headers = new Headers(response.headers);
+    for (const [name, value] of Object.entries(securityHeaders(
+      response.headers.get("content-type") ?? "text/html; charset=utf-8",
+      "default-src 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-attr 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    ))) headers.set(name, value);
+    return new Response(request.method === "HEAD" ? null : response.body, {
+      status: response.status,
+      headers,
+    });
   }
   const path = new URL(request.url).pathname;
   if (path.endsWith(".css")) return new Response("", { headers: securityHeaders("text/css; charset=utf-8") });
@@ -527,7 +542,7 @@ function authCursorSecret(env) {
 
 /** @param {any} state @param {Date} now */
 function exportResponse(state, now) {
-  const result = athleteExport(state, now); if (result.error) return jsonError(result.error.code, result.error.message, [], result.status); const date = localDate(now, state.timezone); return new Response(JSON.stringify(result.value, null, 2), { status: 200, headers: { ...securityHeaders("application/json; charset=utf-8"), "Content-Disposition": `attachment; filename="workout-data-${date}.json"` } });
+  const result = athleteExport(state, now); if (result.error) return jsonError(result.error.code, result.error.message, [], result.status); const date = localDate(now, state.timezone); return new Response(result.body, { status: 200, headers: { ...securityHeaders("application/json; charset=utf-8"), "Content-Disposition": `attachment; filename="workout-data-${date}.json"` } });
 }
 
 /** @param {Request} request @param {HttpEnv} env @param {Date} now */

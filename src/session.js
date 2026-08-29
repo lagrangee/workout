@@ -332,11 +332,12 @@ function isCanonicalSession(session) {
 /** @param {any} state @param {any} session @param {any} record @param {Date} now @param {string} mode */
 function replaceCanonicalRecord(state, session, record, now, mode) {
   if (session.status === "skipped" && (record.set_results.length || record.training_intervals.length || record.session_rpe !== null || record.exercise_feedback.length)) return { error: { code: "invalid_skipped_record", message: "A skipped Session can only correct its note and skip reason until restart" } };
+  const targetMode = mode === "replace" ? session.status === "in_progress" ? "in_progress" : session.status === "skipped" ? "skipped" : "terminal" : mode;
   const existingOpen = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
-  if (session.status === "in_progress" && mode === "in_progress" && !existingOpen) return { error: { code: "session_state_conflict", message: "Resume the paused Session before recording a Set Result" } };
-  const errors = validateSessionRecord(record, session, now.toISOString(), mode === "replace" ? session.status === "in_progress" ? "in_progress" : session.status === "skipped" ? "skipped" : "terminal" : mode);
+  if (session.status === "in_progress" && targetMode === "in_progress" && !existingOpen) return { error: { code: "session_state_conflict", message: "Resume the paused Session before recording a Set Result" } };
+  const errors = validateSessionRecord(record, session, now.toISOString(), targetMode);
   if (errors.length) return { error: { code: "invalid_session_record", message: "The canonical Session Record is invalid", details: errors } };
-  if (session.status === "in_progress" && mode === "in_progress") {
+  if (session.status === "in_progress" && targetMode === "in_progress") {
     const submittedOpen = record.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
     if (!existingOpen || !submittedOpen || submittedOpen.interval_key !== existingOpen.interval_key) return { error: { code: "invalid_session_record", message: "The open interval is server-owned and must be preserved" } };
   }
@@ -344,11 +345,11 @@ function replaceCanonicalRecord(state, session, record, now, mode) {
   session.set_results = setResults;
   session.completion_results = deepClone(setResults);
   session.training_intervals = deepClone(record.training_intervals);
-  session.session_rpe = session.status === "in_progress" || session.status === "skipped" ? null : record.session_rpe;
+  session.session_rpe = targetMode === "in_progress" || targetMode === "skipped" ? null : record.session_rpe;
   session.note = record.note;
   session.exercise_feedback = deepClone(record.exercise_feedback);
-  session.skip_reason = session.status === "skipped" ? record.skip_reason : null;
-  if (mode === "terminal") session.status = completionFraction(session) === 1 ? "completed" : "partial";
+  session.skip_reason = targetMode === "skipped" ? record.skip_reason : null;
+  if (targetMode === "terminal") session.status = completionFraction(session) === 1 ? "completed" : "partial";
   session.updated_at = now.toISOString();
   state.training_version += 1;
   return { session };
