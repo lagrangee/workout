@@ -386,17 +386,29 @@ export async function preflightProductionDeploy({
   try {
     const secretOutput = await runCommandImpl(["secret", "list", "--name", PRODUCTION_DATABASE_NAME, "--config", configPath, "--format", "json"]);
     secrets = verifyWorkerSecretInventory(secretOutput);
+  } catch {
+    throw fixedError("Cloudflare Worker secret inventory preflight failed");
+  }
+  try {
     const inventoryOutput = await runCommandImpl(["d1", "list", "--config", configPath, "--json"]);
     verifyD1Inventory(inventoryOutput, identity.databaseId);
+  } catch {
+    throw fixedError("Cloudflare D1 identity preflight failed");
+  }
+  try {
     const schemaOutput = await runCommandImpl([
       "d1", "execute", "DB", "--remote", "--config", configPath,
       "--command", D1_READ_ONLY_PROBE, "--json",
     ]);
     migrations = verifyD1SchemaAndMigrations(schemaOutput, localMigrationNames);
+  } catch {
+    throw fixedError("Cloudflare D1 schema preflight failed");
+  }
+  try {
     const domainOutput = await fetchDomainsImpl({ accountId, apiToken });
     verifyCustomDomainInventory(domainOutput, identity.publicHost);
   } catch {
-    throw fixedError("Cloudflare production preflight command failed");
+    throw fixedError("Cloudflare custom domain preflight failed");
   }
   log(`Production preflight confirmed ${secrets.requiredSecretCount} required Worker secret names and ${migrations.migrationCount} applied D1 migrations.`);
   return { requiredSecretCount: secrets.requiredSecretCount, migrationCount: migrations.migrationCount };
