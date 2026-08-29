@@ -670,6 +670,12 @@ async function main() {
   const rewrite = join(outputRoot, "disposable-rewrite");
   await run("git", ["clone", "--no-local", "--no-hardlinks", source, rewrite]);
   await git(rewrite, ["remote", "remove", "origin"]);
+  // A clone does not inherit repository-local identity, and the isolated gate
+  // deliberately has no global Git config. filter-branch uses this identity
+  // only for its temporary state commit; rewritten publication commits retain
+  // and verify their original metadata independently below.
+  await git(rewrite, ["config", "user.name", "Workout History Rehearsal"]);
+  await git(rewrite, ["config", "user.email", "history-rehearsal@example.invalid"]);
   await git(rewrite, ["checkout", "--force", "-B", candidateBranch, sourceCommit]);
   for (const { name } of await refs(rewrite)) {
     if (name !== `refs/heads/${candidateBranch}`) await git(rewrite, ["update-ref", "-d", name]);

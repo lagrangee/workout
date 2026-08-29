@@ -189,6 +189,8 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
   const sourceStatus = git(repository, "status", "--porcelain=v1");
   const privateEmail = "synthetic.maintainer@example.invalid";
   const emailHash = createHash("sha256").update(privateEmail).digest("hex");
+  const isolatedHome = join(root, "isolated-home");
+  mkdirSync(isolatedHome);
 
   const result = JSON.parse(
     run(process.execPath, [
@@ -215,6 +217,8 @@ test("history rehearsal backs up, rewrites only a disposable clone, and proves t
       cwd: outputParent,
       env: {
         ...process.env,
+        HOME: isolatedHome,
+        XDG_CONFIG_HOME: join(isolatedHome, ".config"),
         ATHLETE_SECRET: "synthetic-private-value",
         AUTH_PRIVATE: "synthetic-private-value",
         AGENT_TOKEN: "synthetic-private-value",
