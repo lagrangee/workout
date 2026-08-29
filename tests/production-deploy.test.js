@@ -651,7 +651,7 @@ test("production preflight rejects secret, D1 identity, schema, integrity, and m
   assert.throws(() => validateLocalMigrationNames(["1_initial.sql"]), /unexpected structure/);
 });
 
-test("preflight validates local migrations before remote access and redacts injected command failures", async () => {
+test("preflight validates local migrations before remote access and reports only the failed safe stage", async () => {
   let remoteCallCount = 0;
   const sourceConfig = await readFile("wrangler.toml", "utf8");
   const productionConfig = renderProductionConfig(
@@ -676,22 +676,60 @@ test("preflight validates local migrations before remote access and redacts inje
   assert.equal(remoteCallCount, 0);
 
   const injectedPrivateValue = "injected-private-command-output";
-  await assert.rejects(
-    preflightProductionDeploy({
-      accountId: "synthetic-account-id",
-      apiToken: "synthetic-api-token",
-      readFileImpl: async () => productionConfig,
-      listMigrationsImpl: async () => ["0001_initial.sql"],
+  const inventory = JSON.stringify(REQUIRED_WORKER_SECRET_NAMES.map((name) => ({ name, type: "secret_text" })));
+  const databaseIdentity = JSON.stringify([{ name: "workout-tracker", uuid: SYNTHETIC_DATABASE_ID }]);
+  const stages = [
+    {
+      expectedMessage: "Cloudflare Worker secret inventory preflight failed",
       runCommandImpl: async () => { throw new Error(injectedPrivateValue); },
-      fetchDomainsImpl: async () => { throw new Error(injectedPrivateValue); },
-      log: () => {},
-    }),
-    (error) => {
-      assert.ok(error instanceof Error);
-      assert.doesNotMatch(error.message, new RegExp(injectedPrivateValue));
-      return true;
+      fetchDomainsImpl: async () => { throw new Error("unreachable"); },
     },
-  );
+    {
+      expectedMessage: "Cloudflare D1 identity preflight failed",
+      runCommandImpl: async (arguments_) => {
+        if (arguments_[0] === "secret") return inventory;
+        throw new Error(injectedPrivateValue);
+      },
+      fetchDomainsImpl: async () => { throw new Error("unreachable"); },
+    },
+    {
+      expectedMessage: "Cloudflare D1 schema preflight failed",
+      runCommandImpl: async (arguments_) => {
+        if (arguments_[0] === "secret") return inventory;
+        if (arguments_[1] === "list") return databaseIdentity;
+        throw new Error(injectedPrivateValue);
+      },
+      fetchDomainsImpl: async () => { throw new Error("unreachable"); },
+    },
+    {
+      expectedMessage: "Cloudflare custom domain preflight failed",
+      runCommandImpl: async (arguments_) => {
+        if (arguments_[0] === "secret") return inventory;
+        if (arguments_[1] === "list") return databaseIdentity;
+        return d1ProbeOutput(["0001_initial.sql"]);
+      },
+      fetchDomainsImpl: async () => { throw new Error(injectedPrivateValue); },
+    },
+  ];
+  for (const stage of stages) {
+    await assert.rejects(
+      preflightProductionDeploy({
+        accountId: "synthetic-account-id",
+        apiToken: "synthetic-api-token",
+        readFileImpl: async () => productionConfig,
+        listMigrationsImpl: async () => ["0001_initial.sql"],
+        runCommandImpl: stage.runCommandImpl,
+        fetchDomainsImpl: stage.fetchDomainsImpl,
+        log: () => {},
+      }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, stage.expectedMessage);
+        assert.doesNotMatch(error.message, new RegExp(injectedPrivateValue));
+        return true;
+      },
+    );
+  }
 });
 
 test("production deploy wrapper captures Wrangler output and invokes strict deploy without a shell", async () => {
