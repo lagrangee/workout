@@ -1,0 +1,33 @@
+name = "workout-tracker"
+main = "src/worker.js"
+compatibility_date = "2026-07-31"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# This committed configuration is safe for local development and source checks.
+# Copy wrangler.production.toml.example to the ignored wrangler.production.toml
+# before deploying, then replace its documented placeholders.
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "workout-tracker"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+ENVIRONMENT = "development"
+DEFAULT_TIMEZONE = "UTC"
+PUBLIC_ORIGIN = "http://127.0.0.1:8787"
+AUTH_LOGIN_LIMIT = "5"
+AUTH_LOGIN_CLIENT_LIMIT = "20"
+AUTH_LOGIN_WINDOW_SECONDS = "600"
