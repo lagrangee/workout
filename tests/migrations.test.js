@@ -11,6 +11,7 @@ const routeRecordingMigration = readFileSync(new URL("../migrations/0010_plan_re
 const mutationOwnerMigration = readFileSync(new URL("../migrations/0011_mutation_owner.sql", import.meta.url), "utf8");
 const canonicalSessionMigration = readFileSync(new URL("../migrations/0007_canonical_session_records.sql", import.meta.url), "utf8");
 const exerciseCategoryMigration = readFileSync(new URL("../migrations/0012_exercise_category.sql", import.meta.url), "utf8");
+const plannedDaysMigration = readFileSync(new URL("../migrations/0013_planned_days.sql", import.meta.url), "utf8");
 const exerciseRegistry = JSON.parse(readFileSync(new URL("../config/exercises.json", import.meta.url), "utf8"));
 
 test("ticket 24 migration restores an idempotent per-Athlete date guard", () => {
@@ -137,6 +138,38 @@ test("Exercise category migration fails closed for an unknown historical Exercis
     assert.throws(() => db.exec(exerciseCategoryMigration), /category|not null/i);
     assert.equal(db.prepare("PRAGMA table_info('plan_exercises')").all().some((column) => column.name === "category"), false);
     assert.equal(db.prepare("PRAGMA table_info('session_exercises')").all().some((column) => column.name === "category"), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("Planned Day migration materializes finite dated windows and lets the later write win overlaps", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(initialMigration);
+    db.exec(canonicalPlanMigration);
+    db.prepare("INSERT INTO athlete_state (athlete_key, email, state_json, updated_at) VALUES (?, ?, ?, ?)").run("athlete-a", "a@example.invalid", "{}", "2026-08-29T00:00:00.000Z");
+    db.prepare("INSERT INTO plans (plan_id, athlete_key, name, created_at) VALUES (?, ?, ?, ?)").run("plan-a", "athlete-a", "Workout", "2026-08-29T00:00:00.000Z");
+    const revisionInsert = db.prepare("INSERT INTO plan_revisions (plan_id, athlete_key, revision_key, revision_sequence, effective_from, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    revisionInsert.run("plan-a", "athlete-a", "revision-a", 1, "2026-08-29", "2026-08-29T00:00:00.000Z");
+    revisionInsert.run("plan-a", "athlete-a", "revision-b", 2, "2026-09-01", "2026-09-01T00:00:00.000Z");
+    const slotInsert = db.prepare("INSERT INTO plan_slots (revision_key, weekday, kind, title, start_time, estimated_duration_min) VALUES (?, ?, ?, ?, ?, ?)");
+    for (const revision of ["revision-a", "revision-b"]) {
+      for (const weekday of ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]) {
+        const workoutDay = weekday === "saturday";
+        slotInsert.run(revision, weekday, workoutDay ? "workout" : "rest", workoutDay ? revision : null, workoutDay ? "08:00" : null, workoutDay ? 60 : null);
+      }
+    }
+
+    db.exec(plannedDaysMigration);
+
+    assert.equal(db.prepare("SELECT count(*) AS count FROM plan_changes WHERE athlete_key = ?").get("athlete-a").count, 2);
+    assert.equal(db.prepare("SELECT count(*) AS count FROM planned_days WHERE athlete_key = ?").get("athlete-a").count, 10);
+    assert.equal(db.prepare("SELECT prescription_revision_key FROM planned_days WHERE athlete_key = ? AND planned_date = ?").get("athlete-a", "2026-08-29").prescription_revision_key, "revision-a");
+    assert.equal(db.prepare("SELECT change_key FROM planned_days WHERE athlete_key = ? AND planned_date = ?").get("athlete-a", "2026-09-01").change_key, "legacy_revision-b");
+    assert.equal(db.prepare("SELECT count(*) AS count FROM planned_days WHERE athlete_key = ? AND planned_date = ?").get("athlete-a", "2026-09-08").count, 0);
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally {
     db.close();
   }

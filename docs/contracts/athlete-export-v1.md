@@ -58,9 +58,9 @@ are defined by
 
 `athlete` contains the current display name, IANA timezone, and fixed unit conventions.
 
-`plan_revisions` contains every immutable revision, its stable export-safe key, monotonic `revision_sequence`, timestamps, `effective_from`, and complete Weekly Template. For any date, the highest sequence already effective wins. The infinite future schedule is represented by these templates and is never expanded indefinitely.
+`plan_revisions` contains every immutable seven-day write revision, its stable export-safe key, monotonic `revision_sequence`, timestamps, `effective_from`, and complete Weekly Template. It is prescription and write provenance, not an infinite future schedule.
 
-`scheduled_workouts` contains every dated workout and Rest Day through the Athlete's current local date. It includes overdue unstarted workouts, applicable revision reference, resolved kind and prescription, and nullable Session reference. A `null` no-plan weekday produces no record.
+`scheduled_workouts` contains every dated workout and Rest Day through the Athlete's current local date. It includes overdue unstarted workouts, nullable prescription revision, Plan Change reference, move provenance, resolved kind and prescription, and nullable Session reference. A no-plan Planned Day produces no record.
 
 `sessions` contains every Workout Session. Each Session includes:
 

@@ -5,7 +5,7 @@ import { assembleCanonicalState } from "./canonical-assembler.js";
 
 /** @typedef {Record<string, any>} StoreState */
 /** @typedef {{ email: string, displayName: string, timezone: string }} AthleteConfig */
-/** @typedef {{ now?: Date | string }} PersistenceOptions */
+/** @typedef {{ now?: Date | string, initialState?: StoreState }} PersistenceOptions */
 
 /** @param {AthleteConfig} config @returns {StoreState} */
 export function emptyAthlete({ email, displayName, timezone }) {
@@ -15,6 +15,9 @@ export function emptyAthlete({ email, displayName, timezone }) {
     display_name: displayName,
     timezone,
     plan_revisions: [],
+    plan_day_storage_version: 0,
+    planned_days: [],
+    plan_changes: [],
     sessions: [],
     aerobic_activities: [],
     routes: [],
@@ -108,6 +111,7 @@ export class D1Store {
   async saveMany(states, expectedRevisions = new Map(), options = {}) {
     if (states.length !== 1) throw storeError("D1_MULTI_ATHLETE_TRANSACTION_UNSUPPORTED", "D1 persistence supports exactly one Athlete per transaction");
     assertImmutablePlanRevisions(states[0]);
+    assertImmutablePlanChanges(states[0]);
     const now = persistenceInstant(options.now);
     const cutovers = new Map(/** @type {Array<[string, any]>} */ (await Promise.all(states.map(async (state) => [state.athlete_key, await this.readCutover(state.athlete_key)]))));
     const statements = [];
@@ -115,7 +119,7 @@ export class D1Store {
     for (const state of states) {
       const canonicalCutover = Boolean(cutovers.get(state.athlete_key));
       const timestampedState = { ...deepClone(state), updated_at: now };
-      const persistedState = canonicalCutover ? { ...timestampedState, plan_revisions: [], sessions: [] } : timestampedState;
+      const persistedState = canonicalCutover ? { ...timestampedState, plan_revisions: [], planned_days: [], plan_changes: [], sessions: [] } : timestampedState;
       const expected = expectedRevisions instanceof Map ? (expectedRevisions.get(state.email) ?? state.__d1StateRevision) : (expectedRevisions[state.email] ?? state.__d1StateRevision);
       const mutationOwner = opaqueKey("mutation");
       stateStatementIndexes.push(statements.length);
@@ -127,6 +131,7 @@ export class D1Store {
       if (!canonicalCutover) appendLegacyIndexStatements(this.db, statements, state, mutationOwner);
       appendCapabilityLookupStatements(this.db, statements, state, mutationOwner, now);
       appendCanonicalPlanDeltaStatements(this.db, statements, state, mutationOwner);
+      appendPlannedDayDeltaStatements(this.db, statements, state, mutationOwner);
       appendCanonicalSessionDeltaStatements(this.db, statements, state, mutationOwner);
     }
     const results = await this.db.batch(statements);
@@ -220,6 +225,7 @@ export class D1Store {
     // The state row is serialized as one D1 document. The Worker still uses a
     // single logical transaction boundary; D1 batch is used by the save path.
     const working = new D1TransactionStore(this, persistenceInstant(options.now));
+    if (options.initialState) working.prime(options.initialState);
     const result = await fn(working);
     await working.flush();
     return result;
@@ -240,6 +246,8 @@ function attachPersistenceBaseline(state, canonicalCutover = Boolean(state.__can
       // may predate the canonical tables. Treat its records as pending so the
       // next save performs the existing recovery dual-write.
       plan_revisions: canonicalRowsPresent ? deepClone(state.plan_revisions ?? []) : [],
+      planned_days: canonicalRowsPresent ? deepClone(state.planned_days ?? []) : [],
+      plan_changes: canonicalRowsPresent ? deepClone(state.plan_changes ?? []) : [],
       sessions: canonicalRowsPresent ? deepClone(canonicalSessionRows(state)) : [],
     },
     enumerable: false,
@@ -256,6 +264,16 @@ function assertImmutablePlanRevisions(state) {
     if (current.get(revision.revision_key) !== JSON.stringify(revision)) {
       throw storeError("IMMUTABLE_PLAN_REVISION", `Plan Revision ${revision.revision_key} is immutable`);
     }
+  }
+}
+
+/** @param {StoreState} state */
+function assertImmutablePlanChanges(state) {
+  const baseline = state.__d1PersistenceBaseline?.plan_changes;
+  if (!Array.isArray(baseline) || baseline.length === 0) return;
+  const current = new Map((state.plan_changes ?? []).map((/** @type {any} */ change) => [change.change_key, JSON.stringify(change)]));
+  for (const change of baseline) {
+    if (current.get(change.change_key) !== JSON.stringify(change)) throw storeError("IMMUTABLE_PLAN_CHANGE", `Plan Change ${change.change_key} is immutable`);
   }
 }
 
@@ -374,6 +392,43 @@ function appendCanonicalPlanDeltaStatements(db, statements, state, mutationOwner
 }
 
 /** @param {any} db @param {any[]} statements @param {StoreState} state @param {string} mutationOwner */
+function appendPlannedDayDeltaStatements(db, statements, state, mutationOwner) {
+  if (state.plan_day_storage_version !== 1) return;
+  const baselineChanges = state.__d1PersistenceBaseline?.plan_changes;
+  const changes = changedRecords(state.plan_changes ?? [], baselineChanges, "change_key");
+  const baselineDays = state.__d1PersistenceBaseline?.planned_days;
+  const days = changedRecords(state.planned_days ?? [], baselineDays, "date");
+  const ownerSql = "EXISTS (SELECT 1 FROM athlete_state WHERE athlete_key = ?2 AND mutation_owner = ?3)";
+  if (changes.length) {
+    const payload = JSON.stringify(changes);
+    statements.push(db.prepare(`INSERT INTO plan_changes (change_key, athlete_key, change_sequence, change_type, created_at, source_date, target_date)
+      SELECT json_extract(change.value, '$.change_key'), ?2, json_extract(change.value, '$.change_sequence'), json_extract(change.value, '$.change_type'),
+        json_extract(change.value, '$.created_at'), json_extract(change.value, '$.source_date'), json_extract(change.value, '$.target_date')
+      FROM json_each(?1) AS change WHERE ${ownerSql}`).bind(payload, state.athlete_key, mutationOwner));
+  }
+  if (days.length) {
+    const payload = JSON.stringify(days);
+    statements.push(db.prepare(`INSERT INTO planned_days (
+        athlete_key, planned_date, kind, prescription_revision_key, prescription_weekday,
+        change_key, version, moved_from_date, moved_to_date
+      )
+      SELECT ?2, json_extract(day.value, '$.date'), json_extract(day.value, '$.kind'),
+        json_extract(day.value, '$.prescription_revision_key'), json_extract(day.value, '$.prescription_weekday'),
+        json_extract(day.value, '$.change_key'), json_extract(day.value, '$.version'),
+        json_extract(day.value, '$.moved_from_date'), json_extract(day.value, '$.moved_to_date')
+      FROM json_each(?1) AS day WHERE ${ownerSql}
+      ON CONFLICT(athlete_key, planned_date) DO UPDATE SET
+        kind = excluded.kind,
+        prescription_revision_key = excluded.prescription_revision_key,
+        prescription_weekday = excluded.prescription_weekday,
+        change_key = excluded.change_key,
+        version = excluded.version,
+        moved_from_date = excluded.moved_from_date,
+        moved_to_date = excluded.moved_to_date`).bind(payload, state.athlete_key, mutationOwner));
+  }
+}
+
+/** @param {any} db @param {any[]} statements @param {StoreState} state @param {string} mutationOwner */
 function appendCanonicalSessionDeltaStatements(db, statements, state, mutationOwner) {
   const sessions = canonicalSessionRows(state);
   const baseline = state.__d1PersistenceBaseline?.sessions;
@@ -465,6 +520,24 @@ async function readCanonicalRows(db, athleteKey) {
     feedback: await allRows(db, "SELECT ef.* FROM exercise_feedback AS ef JOIN sessions AS s ON s.session_key = ef.session_key WHERE s.athlete_key = ?1", [athleteKey]),
   };
   try {
+    const datedPlanRows = await allRows(db, `SELECT 'day' AS row_type, planned_date AS sort_key, planned_date, kind,
+        prescription_revision_key, prescription_weekday, change_key, version, moved_from_date, moved_to_date,
+        NULL AS change_sequence, NULL AS change_type, NULL AS created_at, NULL AS source_date, NULL AS target_date
+      FROM planned_days WHERE athlete_key = ?1
+      UNION ALL
+      SELECT 'change' AS row_type, printf('%020d', change_sequence) AS sort_key, NULL, NULL,
+        NULL, NULL, change_key, NULL, NULL, NULL,
+        change_sequence, change_type, created_at, source_date, target_date
+      FROM plan_changes WHERE athlete_key = ?1
+      ORDER BY row_type, sort_key`, [athleteKey]);
+    rows.plannedDays = datedPlanRows.filter((/** @type {any} */ row) => row.row_type === "day");
+    rows.planChanges = datedPlanRows.filter((/** @type {any} */ row) => row.row_type === "change");
+  } catch (error) {
+    if (!/no such table|no such column|does not exist/i.test(String((/** @type {{ message?: unknown }} */ (error))?.message))) throw error;
+    rows.plannedDays = null;
+    rows.planChanges = [];
+  }
+  try {
     rows.intervals = await allRows(db, "SELECT si.* FROM session_intervals AS si JOIN sessions AS s ON s.session_key = si.session_key WHERE s.athlete_key = ?1", [athleteKey]);
   } catch (error) {
     if (!/no such table|no such column|does not exist/i.test(String((/** @type {{ message?: unknown }} */ (error))?.message))) throw error;
@@ -476,6 +549,17 @@ async function readCanonicalRows(db, athleteKey) {
 class D1TransactionStore {
   /** @param {D1Store} parent @param {string} now */
   constructor(parent, now) { this.parent = parent; this.now = now; this.loaded = new Map(); this.dirty = new Map(); this.revisions = new Map(); }
+  /**
+   * Reuse a state that was hydrated while authenticating the same request.
+   * The captured state_revision remains the conditional-write guard, so a
+   * concurrent mutation still fails during flush instead of being overwritten.
+   * @param {StoreState} state
+   */
+  prime(state) {
+    const normalized = normalizeEmail(state.email);
+    this.loaded.set(normalized, cloneD1State(state));
+    this.revisions.set(normalized, state.__d1StateRevision);
+  }
   /** @param {string} email */
   async getByEmail(email) {
     const normalized = normalizeEmail(email);
@@ -489,17 +573,23 @@ class D1TransactionStore {
   async save(state) {
     state.updated_at = this.now;
     this.loaded.set(state.email, state);
-    const clone = deepClone(state);
-    if (state.__d1PersistenceBaseline) Object.defineProperty(clone, "__d1PersistenceBaseline", { value: deepClone(state.__d1PersistenceBaseline), enumerable: false, writable: true });
-    if (state.__canonicalCutover !== undefined) Object.defineProperty(clone, "__canonicalCutover", { value: state.__canonicalCutover, enumerable: false, writable: true });
-    if (state.__canonicalRowsPresent !== undefined) Object.defineProperty(clone, "__canonicalRowsPresent", { value: state.__canonicalRowsPresent, enumerable: false, writable: true });
-    this.dirty.set(state.email, clone);
+    this.dirty.set(state.email, cloneD1State(state));
   }
   async all() { return this.parent.all(); }
   async flush() {
     if (this.dirty.size > 1) throw storeError("D1_MULTI_ATHLETE_TRANSACTION_UNSUPPORTED", "D1 persistence supports exactly one Athlete per transaction");
     if (this.dirty.size) await this.parent.saveMany([...this.dirty.values()], this.revisions, { now: this.now });
   }
+}
+
+/** @param {StoreState} state */
+function cloneD1State(state) {
+  const clone = deepClone(state);
+  if (state.__d1PersistenceBaseline) Object.defineProperty(clone, "__d1PersistenceBaseline", { value: deepClone(state.__d1PersistenceBaseline), enumerable: false, writable: true });
+  if (state.__canonicalCutover !== undefined) Object.defineProperty(clone, "__canonicalCutover", { value: state.__canonicalCutover, enumerable: false, writable: true });
+  if (state.__canonicalRowsPresent !== undefined) Object.defineProperty(clone, "__canonicalRowsPresent", { value: state.__canonicalRowsPresent, enumerable: false, writable: true });
+  if (state.__d1StateRevision !== undefined) Object.defineProperty(clone, "__d1StateRevision", { value: state.__d1StateRevision, enumerable: false, writable: true });
+  return clone;
 }
 
 /** @param {Record<string, any>} env @param {any} [db] */

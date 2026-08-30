@@ -3,7 +3,7 @@
 A Plan Update Batch is a transient atomic transport for two to four complete
 [Plan Update Package v2](plan-update-package-v2.md) values. It does not create
 a new plan model: each successful member remains one immutable Plan Revision
-containing one complete Weekly Template.
+containing one complete Weekly Template and writes exactly seven Planned Days.
 
 ```json
 {
@@ -40,7 +40,8 @@ Application requires the exact canonical batch, both validation digests,
 recomputes the batch and sequential base evidence, and validates every member
 inside one mutation boundary. A mismatch, stale base, invalid member, or
 concurrent state change writes no revision. Success appends every Plan Revision
-atomically and increments `training_version` exactly once.
+and all non-overlapping seven-day windows atomically, then increments
+`training_version` exactly once. No member repeats beyond its Sunday.
 
 Readback covers the Current Plan timeline and the full inclusive Schedule from
 the first effective Monday through the Sunday of the last included week.

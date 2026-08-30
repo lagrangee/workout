@@ -35,7 +35,7 @@ export function fixture(options = {}) {
   const fixtureDate = options.today ?? today;
   const athleteA = emptyAthlete({ email: "athlete-a@example.invalid", displayName: "Athlete A", timezone: "Asia/Shanghai" });
   const athleteB = emptyAthlete({ email: "athlete-b@example.invalid", displayName: "Athlete B", timezone: "Asia/Shanghai" });
-  const oldDate = addDays(fixtureDate, -7);
+  const oldDate = fixtureDate;
   /** @type {Record<string, any>} */
   const template = Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
   template[weekdayKey(fixtureDate)] = workout();

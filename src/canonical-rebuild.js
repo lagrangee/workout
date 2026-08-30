@@ -1,7 +1,8 @@
 // @ts-check
 
-import { WEEKDAYS } from "./util.js";
+import { deepClone, WEEKDAYS } from "./util.js";
 import { resolveExercise } from "./exercise-registry.js";
+import { initializePlannedDays } from "./planned-days.js";
 
 const EXERCISE_CATEGORIES = new Set(["strength", "endurance", "mobility", "recovery"]);
 
@@ -15,6 +16,8 @@ const EXERCISE_CATEGORIES = new Set(["strength", "endurance", "mobility", "recov
  */
 export function buildCanonicalRebuildSql(state, options = {}) {
   validateRebuildState(state);
+  state = deepClone(state);
+  initializePlannedDays(state);
   const now = options.now ?? new Date().toISOString();
   const rollbackRef = options.rollbackRef ?? null;
   const sourceStateRevision = options.sourceStateRevision ?? state.__d1StateRevision ?? null;
@@ -23,6 +26,8 @@ export function buildCanonicalRebuildSql(state, options = {}) {
   // rejects explicit BEGIN/COMMIT statements in imported SQL files, while
   // keeping the file execution atomic when it fails.
   const statements = [
+    `DELETE FROM planned_days WHERE athlete_key = ${sql(state.athlete_key)};`,
+    `DELETE FROM plan_changes WHERE athlete_key = ${sql(state.athlete_key)};`,
     `DELETE FROM session_intervals WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM exercise_feedback WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM session_notes WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
@@ -54,6 +59,12 @@ export function buildCanonicalRebuildSql(state, options = {}) {
       }));
     }
   }
+  for (const change of state.plan_changes ?? []) {
+    statements.push(`INSERT INTO plan_changes (change_key, athlete_key, change_sequence, change_type, created_at, source_date, target_date) VALUES (${sql(change.change_key)}, ${sql(state.athlete_key)}, ${integer(change.change_sequence)}, ${sql(change.change_type)}, ${sql(change.created_at)}, ${sql(change.source_date)}, ${sql(change.target_date)});`);
+  }
+  for (const day of state.planned_days ?? []) {
+    statements.push(`INSERT INTO planned_days (athlete_key, planned_date, kind, prescription_revision_key, prescription_weekday, change_key, version, moved_from_date, moved_to_date) VALUES (${sql(state.athlete_key)}, ${sql(day.date)}, ${sql(day.kind)}, ${sql(day.prescription_revision_key)}, ${sql(day.prescription_weekday)}, ${sql(day.change_key)}, ${integer(day.version)}, ${sql(day.moved_from_date)}, ${sql(day.moved_to_date)});`);
+  }
   for (const session of state.sessions ?? []) {
     if (!session.plan_id || !session.plan_revision_key) throw new Error(`Canonical Session ${session.session_key} requires plan_id and plan_revision_key`);
     statements.push(`INSERT INTO sessions (athlete_key, session_key, plan_id, plan_revision_key, scheduled_date, timezone_at_session, title, status, created_at, updated_at, scheduled_workout_key, local_date, start_time, estimated_duration_min) VALUES (${sql(state.athlete_key)}, ${sql(session.session_key)}, ${sql(session.plan_id)}, ${sql(session.plan_revision_key)}, ${sql(session.scheduled_date)}, ${sql(session.timezone_at_session)}, ${sql(session.title)}, ${sql(session.status)}, ${sql(session.created_at)}, ${sql(session.updated_at)}, ${sql(session.scheduled_workout_key)}, ${sql(session.local_date ?? session.scheduled_date)}, ${sql(session.snapshot.start_time)}, ${numberOrNull(session.snapshot.estimated_duration_min)});`);
@@ -68,7 +79,7 @@ export function buildCanonicalRebuildSql(state, options = {}) {
     for (const feedback of session.exercise_feedback ?? []) statements.push(`INSERT INTO exercise_feedback (session_key, occurrence_key, text) VALUES (${sql(session.session_key)}, ${sql(feedback.exercise_occurrence_key)}, ${sql(feedback.text)});`);
     statements.push(`INSERT INTO session_notes (session_key, note, skip_reason, session_rpe) VALUES (${sql(session.session_key)}, ${sql(session.note)}, ${sql(session.skip_reason)}, ${numberOrNull(session.session_rpe)});`);
   }
-  const persistedState = { ...state, plan_revisions: [], sessions: [] };
+  const persistedState = { ...state, plan_revisions: [], planned_days: [], plan_changes: [], sessions: [] };
   // The converter keeps the exact v1 document in the review artifact, and
   // --apply copies the private archive before this SQL runs. Do not embed the
   // raw duplicate in state_json: D1 limits one SQL statement to 100 KB, while

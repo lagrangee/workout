@@ -46,7 +46,7 @@ One personal, revocable bearer capability owned by an Athlete and sent in the `A
 _Avoid_: Coach Share, session token, Athlete selector
 
 **Current Plan**:
-The sole plan belonging to one Athlete, consisting of the applicable Weekly Template and internal revision history.
+The Athlete's dated Planned Days plus immutable prescription/write history. A Current Plan read may expose the active seven-day write package for compatibility, but Schedule is the date authority.
 _Avoid_: Plan library, shared plan
 
 **Plan Seed**:
@@ -54,12 +54,20 @@ An optional initial Weekly Template assigned to one specific Athlete. It contain
 _Avoid_: Global default plan, shared template
 
 **Weekly Template**:
-The seven weekday slots that repeat indefinitely for one Athlete from a Plan Revision's effective date until superseded. Each slot is explicitly a workout, Rest Day, or no-plan day.
-_Avoid_: Dated schedule, multi-week plan, progression program
+The seven weekday slots accepted by the weekly write adapter. Applying it materializes exactly seven Athlete-local Planned Days beginning at `effective_from`; it does not repeat at read time. Each slot is explicitly a workout, Rest Day, or no-plan day.
+_Avoid_: storage model, infinite repeat rule, progression program
 
 **Plan Revision**:
-An immutable, confirmed replacement of one Athlete's Weekly Template from a specified future date onward. When revision timelines overlap, the later-confirmed revision wins from its own effective date while older revisions remain internal history.
+An immutable, confirmed seven-day prescription batch written from a specified future date. It retains the full Weekly Template for provenance and Session snapshot creation. When dated write windows overlap, the later-confirmed revision wins only on the overlapping Planned Days.
 _Avoid_: Edit event, autosave, selectable plan version
+
+**Planned Day**:
+The canonical Athlete-local schedule fact for one calendar date. It is a workout referencing one immutable prescription, a Rest Day, or no-plan. Its version changes only through a confirmed dated write.
+_Avoid_: repeated template projection, Workout Session, calendar cache
+
+**Plan Change**:
+An immutable record of one confirmed weekly write, dated write, or dated move. It owns provenance for affected Planned Days but not prescription content or execution state.
+_Avoid_: mutable audit note, Session correction
 
 **Plan Update Package**:
 A schema-versioned JSON value prepared outside the App that proposes one complete Weekly Template and a future effective date. The canonical v2 shape references the global Exercise Registry by `exercise_id`, selects one `execution_mode` per occurrence, and uses exact targets, normalized resistance, tempo strings, and ordered stable Sets. It contains no conditional progression rules or coaching instructions.
@@ -71,11 +79,11 @@ Update Package v2 values on consecutive Monday effective dates. Validation
 simulates the sequence, and one confirmed application appends all included
 Plan Revisions atomically while incrementing the Athlete's training version
 once. The batch is not stored as a plan object and does not change Weekly
-Template repetition semantics.
+Template structure; each member still writes only its own seven dated days.
 _Avoid_: Multi-week plan, progression program, partial week patch
 
 **Scheduled Workout**:
-The deterministic Athlete-local date projection of the Weekly Template applicable on that date. It describes prescribed intent, may be a workout or Rest Day, and never owns execution state.
+The read projection of one Planned Day on an Athlete-local date. It describes prescribed intent, may be a workout or Rest Day, and never owns execution state.
 _Avoid_: Workout record, completed workout
 
 **Recording Intent**:

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { appFixture, call, json, post, TEST_NOW, testInstant, today } from "./helpers.js";
 import { createSession } from "../src/session.js";
 import { addDays } from "../src/util.js";
+import { appendPlanRevision } from "../src/plan.js";
 
 test("Session HTTP seam: pause and resume keep elapsed time server-authoritative", async () => {
   let current = Date.parse(TEST_NOW);
@@ -109,6 +110,7 @@ test("Session HTTP seam: normalization closes only expired active Sessions as pa
   const fixture = appFixture();
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
   const scheduledDate = addDays(today, -7);
+  appendPlanRevision(state, { effective_from: scheduledDate, week: structuredClone(state.plan_revisions[0].week) }, new Date(`${scheduledDate}T01:00:00.000Z`));
   const startedAt = new Date(`${scheduledDate}T02:00:00.000Z`);
   const created = createSession(state, scheduledDate, startedAt, "start");
   assert.ok(created.session);

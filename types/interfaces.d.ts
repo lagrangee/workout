@@ -57,6 +57,8 @@ export type PlanUpdateBatch = {
   updates: PlanUpdatePackage[];
 };
 
+export type PlannedDayMove = { source_date: string; target_date: string };
+
 export type WorkoutToolArguments = {
   workout_get_overview: { from?: string; to?: string; preset?: "7d" | "30d" | "12w" | "all"; range?: "7d" | "30d" | "12w" | "all" };
   workout_get_plan: Record<string, never>;
@@ -69,6 +71,8 @@ export type WorkoutToolArguments = {
   workout_apply_plan_update: { package: PlanUpdatePackage; package_digest: string; base_plan_digest: string; confirmed: true; idempotency_key: string };
   workout_validate_plan_update_batch: { batch: PlanUpdateBatch };
   workout_apply_plan_update_batch: { batch: PlanUpdateBatch; batch_digest: string; base_plan_digest: string; confirmed: true; idempotency_key: string };
+  workout_validate_planned_day_move: { move: PlannedDayMove };
+  workout_apply_planned_day_move: { move: PlannedDayMove; move_digest: string; base_plan_digest: string; confirmed: true; idempotency_key: string };
 };
 
 export type WorkoutToolName = keyof WorkoutToolArguments;

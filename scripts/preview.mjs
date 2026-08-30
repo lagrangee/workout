@@ -113,14 +113,14 @@ function previewAthlete(displayName, email, suffix, startedAt, previewDate) {
     revision_key: `preview-revision-${suffix}`,
     revision_sequence: 1,
     created_at: startedAt.toISOString(),
-    effective_from: addDays(previewDate, -7),
+    effective_from: previewDate,
     week,
   });
   return athlete;
 }
 
 /** @param {Date} startedAt */
-function createPreviewStore(startedAt) {
+export function createPreviewStore(startedAt) {
   const previewDate = localDate(startedAt, PREVIEW_TIMEZONE);
   return new MemoryStore([
     previewAthlete("Preview Athlete A", "athlete-a@example.invalid", "a", startedAt, previewDate),

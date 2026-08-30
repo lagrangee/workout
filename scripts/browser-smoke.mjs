@@ -50,23 +50,26 @@ async function waitForPreview(preview, output) {
   throw new SmokeFailure("preview", "the preview health endpoint did not become ready");
 }
 
-function waitForExit(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolveExit) => child.once("exit", () => resolveExit()));
+function waitForClose(child) {
+  return new Promise((resolveClose) => child.once("close", () => resolveClose()));
 }
 
 async function stopPreview(preview) {
-  if (!preview || preview.exitCode !== null || preview.signalCode !== null) return;
-  const exited = waitForExit(preview);
-  preview.kill("SIGTERM");
-  const graceful = await Promise.race([
-    exited.then(() => true),
-    delay(5_000).then(() => false),
-  ]);
-  if (!graceful) {
-    preview.kill("SIGKILL");
-    await exited;
+  if (!preview) return;
+  if (preview.exitCode === null && preview.signalCode === null) {
+    const closed = waitForClose(preview);
+    preview.kill("SIGTERM");
+    const graceful = await Promise.race([
+      closed.then(() => true),
+      delay(5_000).then(() => false),
+    ]);
+    if (!graceful) {
+      preview.kill("SIGKILL");
+      await closed;
+    }
   }
+  preview.stdout?.destroy();
+  preview.stderr?.destroy();
 }
 
 async function run() {
@@ -122,3 +125,8 @@ try {
   console.error(`Workout browser smoke failed during ${phase}: ${message}`);
   process.exitCode = 1;
 }
+
+// This file is a process-owning CLI. Node 26 can retain an already-closed
+// ChildProcess handle after Playwright and the preview have both shut down.
+// All cleanup above is awaited, so exit explicitly with the established result.
+process.exit(process.exitCode ?? 0);

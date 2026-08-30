@@ -69,7 +69,7 @@ export function validatePlanUpdateBatchForState(state, text, now = new Date()) {
   for (let index = 0; index < parsed.value.updates.length; index += 1) {
     const update = parsed.value.updates[index];
     const baseline = planUpdateBase(simulated, update).week ?? Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
-    if (canonicalJson(baseline) === canonicalJson(update.week)) return { ok: false, errors: [{ path: `/updates/${index}/week`, message: "This update does not change the effective template" }] };
+    if (canonicalJson(baseline) === canonicalJson(update.week)) return { ok: false, errors: [{ path: `/updates/${index}/week`, message: "This update does not change the dated seven-day window" }] };
     previews.push({ ...packagePreview(simulated, update, now), source_ref: `plan-update-batch:preview:${index + 1}` });
     appendPlanRevision(simulated, update, now);
   }
@@ -102,7 +102,7 @@ export async function planUpdateBatchDigests(state, batchValue, now = new Date()
   const basePlan = planUpdateBatchBaseEvidence(state, batchValue, now);
   return {
     batch_digest: await sha256Hex(canonicalJson(batchValue)),
-    base_plan_digest: await sha256Hex(canonicalJson(basePlan)),
+    base_plan_digest: await sha256Hex(canonicalJson({ owner: state.athlete_key, base_plan: basePlan })),
     base_plan: basePlan,
   };
 }

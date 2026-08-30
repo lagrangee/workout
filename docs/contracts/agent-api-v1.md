@@ -68,6 +68,8 @@ POST /api/agent/v1/plan-updates/validate
 POST /api/agent/v1/plan-updates/apply
 POST /api/agent/v1/plan-update-batches/validate
 POST /api/agent/v1/plan-update-batches/apply
+POST /api/agent/v1/planned-day-moves/validate
+POST /api/agent/v1/planned-day-moves/apply
 POST /api/agent/v1/aerobic/sync
 ```
 
@@ -87,8 +89,9 @@ bounded to 3660 days. Invalid selectors are rejected rather than ignored.
 `schedule` requires `from` and `to` as inclusive Athlete-local dates and is
 bounded to 366 days. `expand=prescription` adds deduplicated typed
 prescriptions keyed by the stable `prescription_ref` already present on each
-workout entry. The same plan revision and weekday therefore share one
-prescription object across multiple dates.
+workout entry. Every entry is resolved from its exact Planned Day; there is no
+Weekly Template repetition at read time. A moved entry exposes
+`moved_from_date` or `moved_to_date`.
 
 Workout-owned resources preserve `data_as_of`, `training_version`, the relevant
 Athlete-local period, and token-free `source_ref` values. Training Archive
@@ -98,9 +101,11 @@ Archive publication does. Schedule expansion uses the public prescription
 shape from the wire catalog; it never returns a raw internal plan slot or
 revision identity.
 
-Plan responses use the same typed Weekly Template projection: a workout slot
+Plan responses expose immutable seven-day write packages using the same typed Weekly Template projection: a workout slot
 contains a `prescription`, a Rest Day remains `{ kind: "rest" }`, and an empty
-slot remains `null`. Plan `source_ref` values are scoped to the Agent resource
+slot remains `null`. Each package includes `effective_from` and
+`through_date`; it is authoring/provenance history, while Schedule is dated
+truth. Plan `source_ref` values are scoped to the Agent resource
 and do not expose internal Plan Revision keys.
 
 `sessions` accepts optional inclusive local-date bounds, a status enum, a
@@ -161,9 +166,9 @@ The Agent/MCP layer does not parse natural-language coaching requests and does
 not fill missing package fields. A valid response includes the complete
 resulting week, changed weekday count, `package_digest`, `base_plan_digest`, explicit current-plan base
 evidence, `training_version`, and safe `source_ref` values; `base_plan` is the
-effective plan template selected for the package's future date, so the preview
-and base digest refer to the same template even when another future revision is
-already scheduled. An invalid outer request body returns `invalid_json` or
+exact dated seven-day window beginning at the package's `effective_from`, with
+an explicit `through_date`. The digest also binds the bearer Athlete without
+exposing its identity. An invalid outer request body returns `invalid_json` or
 `invalid_request`; malformed `package_text`, unknown fields, missing values,
 past/current effective dates, duplicate members, and semantic no-ops return
 field-addressed `invalid_plan_package` errors without changing Plan Revision
@@ -175,7 +180,8 @@ exactly `{ "package_text": string, "package_digest": string,
 requires a non-empty `Idempotency-Key` header. Idempotency records are retained
 for 24 hours, matching the existing mutation boundary. The Agent revalidates the
 package, package digest, and effective base inside one mutation boundary
-before appending exactly one immutable Plan Revision. A missing confirmation
+before appending exactly one immutable Plan Revision and writing exactly seven
+Planned Days. A missing confirmation
 or key returns `confirmation_required` or `idempotency_key_required`; an
 invalid package returns `invalid_plan_package`; changed package identity,
 stale base evidence, or a concurrent state change returns
@@ -200,6 +206,22 @@ weeks, full Schedule window, `batch_digest`, sequential `base_plan_digest`, and
 base evidence. Apply requires both digests, `confirmed: true`, and one
 `Idempotency-Key`; it commits every included Plan Revision atomically and
 increments `training_version` once. An invalid or stale member writes nothing.
+
+`planned-day-moves/validate` and `planned-day-moves/apply` provide the narrow
+dated-edit capability. The request move is exactly
+`{ "source_date": LocalDate, "target_date": LocalDate }`. Source may be
+yesterday, today, or future and must be an unstarted workout. Target must be
+today or future and must be Rest/no-plan. Neither date may own a Session.
+Validation returns full before/after evidence, `move_digest`, and an
+Athlete-bound `base_plan_digest` without mutation.
+
+Apply requires both digests, `confirmed: true`, and one `Idempotency-Key`. It
+atomically swaps the two Planned Days, preserves the complete prescription,
+appends one immutable `day_move` Plan Change, and increments
+`training_version` once. The typed MCP readback requires the source to be
+non-workout and non-overdue, the target to be workout, both move-provenance
+dates to match, and the complete expanded target prescription to equal the
+validated source prescription. It never rewrites a Plan Revision or Session.
 
 `aerobic/sync` is the mutating Agent operation for the safe Training Archive
 projection. Its request body is exactly `{ "projection": AerobicProjectionV1 }`

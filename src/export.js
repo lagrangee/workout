@@ -1,7 +1,7 @@
 // @ts-check
 
 import { deepClone, localDate, dateRange } from "./util.js";
-import { resolveSlot, scheduleEntry, effectiveRevision, trainingDuration, completionFraction } from "./plan.js";
+import { resolveSlot, scheduleEntry, trainingDuration, completionFraction } from "./plan.js";
 
 /** @typedef {import("./types.js").AthleteState} AthleteState */
 /** @typedef {import("./types.js").PlanRevision} PlanRevision */
@@ -29,8 +29,19 @@ export function athleteExport(state, now) {
 function exportSchedule(state, date, now) {
   const entry = scheduleEntry(state, date, now);
   if (entry.kind === "no_plan") return null;
-  const revision = effectiveRevision(state, date);
-  return { scheduled_workout_key: entry.scheduled_workout_key ?? `sw_${state.athlete_key}_${date}`, scheduled_date: date, kind: entry.kind, revision_key: revision.revision_key, prescription: entry.kind === "workout" ? deepClone(entry.prescription) : null, session_key: entry.session_key, is_overdue_unstarted: entry.is_overdue_unstarted };
+  const { day, revision } = resolveSlot(state, date);
+  return {
+    scheduled_workout_key: entry.scheduled_workout_key ?? `sw_${state.athlete_key}_${date}`,
+    scheduled_date: date,
+    kind: entry.kind,
+    revision_key: revision?.revision_key ?? null,
+    plan_change_key: day?.change_key ?? null,
+    prescription: entry.kind === "workout" ? deepClone(entry.prescription) : null,
+    session_key: entry.session_key,
+    is_overdue_unstarted: entry.is_overdue_unstarted,
+    ...(entry.moved_from_date ? { moved_from_date: entry.moved_from_date } : {}),
+    ...(entry.moved_to_date ? { moved_to_date: entry.moved_to_date } : {}),
+  };
 }
 
 /** @param {WorkoutSession} session */

@@ -11,11 +11,12 @@ test("workout MCP exposes exactly the typed tools", async () => {
   await assert.rejects(() => client.getSchedule({ expand: "" }), /** @param {any} error */ (error) => error.code === "invalid_arguments");
   const bridge = new McpBridge({ client });
   const listed = await bridge.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" });
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update", "workout_apply_plan_update", "workout_validate_plan_update_batch", "workout_apply_plan_update_batch"]);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update", "workout_apply_plan_update", "workout_validate_plan_update_batch", "workout_apply_plan_update_batch", "workout_validate_planned_day_move", "workout_apply_planned_day_move"]);
   assert.equal(listed.result.tools.some((tool) => tool.name === "http_request"), false);
   assert.equal(listed.result.tools.filter((tool) => !tool.name.startsWith("workout_apply_")).every((tool) => tool.annotations.readOnlyHint === true), true);
   assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_plan_update").annotations.readOnlyHint, false);
   assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_plan_update_batch").annotations.readOnlyHint, false);
+  assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_planned_day_move").annotations.readOnlyHint, false);
 });
 
 test("workout MCP maps typed calls to authenticated Agent API reads and preserves errors", async () => {
@@ -274,6 +275,57 @@ test("workout MCP validates and atomically applies a typed four-week batch with 
   assert.equal(requests[1].url, "https://workout.example/api/agent/v1/plan-update-batches/apply");
   assert.equal(requests[1].options.headers["Idempotency-Key"], "batch-apply-1");
   assert.equal(requests[3].url, "https://workout.example/api/agent/v1/schedule?from=2026-08-10&to=2026-09-06&expand=prescription");
+});
+
+test("workout MCP applies a Planned Day move and verifies provenance plus the full prescription", async () => {
+  const move = { source_date: "2026-08-29", target_date: "2026-08-30" };
+  const prescription = {
+    kind: "workout",
+    title: "下肢力量与下坡耐受",
+    start_time: "18:30",
+    estimated_duration_min: 60,
+    blocks: [{
+      title: "主训练",
+      exercises: [{
+        occurrence_key: "split_squat_main",
+        exercise_id: "split_squat",
+        execution_mode: "per_side",
+        sets: [{ set_id: "split_squat_1", ordinal: 1, target: { metric: "reps", value: 8 }, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 60 }],
+      }],
+    }],
+  };
+  const preview = {
+    operation: "move",
+    before: { source: { date: move.source_date, kind: "workout", prescription }, target: { date: move.target_date, kind: "rest", prescription: null } },
+    after: { source: { date: move.source_date, kind: "rest" }, target: { date: move.target_date, kind: "workout", prescription } },
+  };
+  const requests = [];
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), options });
+      if (String(url).endsWith("/planned-day-moves/validate")) return new Response(JSON.stringify({ valid: true, preview, move_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
+      if (String(url).endsWith("/planned-day-moves/apply")) return new Response(JSON.stringify({ applied: true, preview, source_date: move.source_date, target_date: move.target_date }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({
+        from: move.source_date,
+        to: move.target_date,
+        entries: [
+          { date: move.source_date, kind: "rest", is_overdue_unstarted: false, moved_to_date: move.target_date, prescription_ref: null },
+          { date: move.target_date, kind: "workout", is_overdue_unstarted: false, moved_from_date: move.source_date, prescription_ref: "prescription:moved" },
+        ],
+        prescriptions: { "prescription:moved": { prescription_ref: "prescription:moved", ...prescription } },
+      }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const bridge = new McpBridge({ client });
+  const validation = await bridge.handleMessage({ jsonrpc: "2.0", id: 27, method: "tools/call", params: { name: "workout_validate_planned_day_move", arguments: { move } } });
+  assert.equal(validation.result.structuredContent.valid, true);
+  const applied = await bridge.handleMessage({ jsonrpc: "2.0", id: 28, method: "tools/call", params: { name: "workout_apply_planned_day_move", arguments: { move, move_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "move-2026-08-29-to-30" } } });
+  assert.equal(applied.result.structuredContent.readback.status, "verified");
+  assert.equal(applied.result.structuredContent.readback.source.moved_to_date, move.target_date);
+  assert.equal(applied.result.structuredContent.readback.target.moved_from_date, move.source_date);
+  assert.equal(requests[1].options.headers["Idempotency-Key"], "move-2026-08-29-to-30");
 });
 
 test("workout MCP accepts an applied revision when it is now the Current Plan", async () => {

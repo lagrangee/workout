@@ -25,7 +25,7 @@ async function seedAlternatingSession(command = "start") {
       }],
     }],
   };
-  state.plan_revisions = [{ revision_key: "rev-alternating", revision_sequence: 1, created_at: TEST_NOW, effective_from: "2026-01-01", week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
+  state.plan_revisions = [{ revision_key: "rev-alternating", revision_sequence: 1, created_at: TEST_NOW, effective_from: today, week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
   await fixture.store.save(state);
   const created = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/${command}`, {
     method: "POST",
@@ -59,7 +59,7 @@ async function seedExternalLoadSession() {
       }],
     }],
   };
-  state.plan_revisions = [{ revision_key: "rev-external", revision_sequence: 1, created_at: TEST_NOW, effective_from: "2026-01-01", week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
+  state.plan_revisions = [{ revision_key: "rev-external", revision_sequence: 1, created_at: TEST_NOW, effective_from: today, week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? slot : null])) }];
   await fixture.store.save(state);
   const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": "external-start" }, body: "{}" });
   assert.equal(started.response.status, 201);

@@ -95,6 +95,8 @@ interface ScheduleEntry {
   estimated_duration_min?: number | null;
   session_key?: string | null;
   is_overdue_unstarted?: boolean;
+  moved_from_date?: string;
+  moved_to_date?: string;
   recording_intent?: unknown;
   recording_evidence?: RecordingEvidence | null;
   aerobic_summary?: AerobicSummary | null;
@@ -358,9 +360,10 @@ function dateMeta(row: CalendarRow): string {
   const { entry, status, beforePlan, aerobicMeta } = row;
   if (entry.kind === "workout") {
     const modules = entry.recording_intent ? "" : `${entry.module_count ?? 0} 个模块 · `;
-    return `${modules}${entry.estimated_duration_min ?? 0} 分钟 · ${status.label}${aerobicMeta}`;
+    const moved = entry.moved_from_date ? ` · 从 ${entry.moved_from_date} 调整` : "";
+    return `${modules}${entry.estimated_duration_min ?? 0} 分钟 · ${status.label}${moved}${aerobicMeta}`;
   }
-  if (entry.kind === "rest") return `恢复，不创建训练记录${aerobicMeta}`;
+  if (entry.kind === "rest") return entry.moved_to_date ? `训练已移至 ${entry.moved_to_date}${aerobicMeta}` : `恢复，不创建训练记录${aerobicMeta}`;
   return beforePlan ? "" : `未安排内容${aerobicMeta}`;
 }
 

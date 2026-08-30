@@ -5,7 +5,8 @@ boundaries. Repository location does not change semantic ownership.
 
 ## Authoritative Workout state
 
-Cloudflare D1 owns Athlete identity mappings, current Plan revisions, immutable
+Cloudflare D1 owns Athlete identity mappings, date-canonical Planned Days,
+immutable Plan Changes and Plan Revisions, immutable
 Workout Session snapshots, confirmed results, and access-capability records.
 Mutations go through authenticated application or Agent interfaces and update
 their canonical records atomically. Public schemas and contracts describe the

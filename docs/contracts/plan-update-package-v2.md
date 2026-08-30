@@ -1,7 +1,9 @@
 # Canonical Plan Update Package v2
 
-The canonical Workout Plan Update Package is a strict future-effective
-replacement for one Athlete's complete Weekly Template. It resolves every
+The canonical Workout Plan Update Package is a strict future-dated seven-day
+write for one Athlete. `effective_from` is the first date in the inclusive
+seven-day window; the weekday members supply the slot for each date's actual
+weekday. The package is a write adapter, not a repeating storage object. It resolves every
 Exercise through the global repository registry and contains no copied
 Athlete-local ID-to-name map.
 
@@ -122,7 +124,8 @@ again in its Training Plan Snapshot. A later registry rename may change the
 Current Plan read name, but neither a rename nor a category change can mutate
 an existing Plan Revision or Session.
 
-The Worker validates and applies this package atomically. D1 stores the
-Athlete-owned Plan, immutable revision, weekday slot, occurrence, and Set
-records in independent canonical tables; the repository registry is not a D1
-table.
+The Worker validates and applies this package atomically. D1 stores one
+immutable Plan Revision and exactly seven date-canonical Planned Days. A later
+package replaces only overlapping dates; dates after the seven-day window are
+unchanged. D1 also stores weekday prescription, occurrence, and Set records in
+independent canonical tables; the repository registry is not a D1 table.

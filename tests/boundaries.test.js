@@ -15,14 +15,27 @@ test("ticket 25 boundaries: future and current unstarted workouts are not due", 
   const current = await call(handler, `/api/private/today`); assert.equal(current.body.entry.is_due, false); assert.equal(current.body.entry.is_overdue_unstarted, false); assert.ok(current.body.entry.prescription?.blocks?.length);
 });
 
-test("ticket 25 boundaries: later-confirmed earlier revision masks older future revision", async () => {
+test("finite future writes retain provenance while later revisions win only overlapping dates", async () => {
   const { handler } = appFixture();
-  const oldFuture = packageText(addDays(today, 4), workout("旧未来计划"));
-  const earlier = packageText(addDays(today, 2), workout("较早生效的新计划"));
+  const oldWeek = Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
+  oldWeek.friday = workout("旧重叠计划");
+  oldWeek.monday = workout("旧尾部计划");
+  const newWeek = Object.fromEntries(WEEKDAYS.map((day) => [day, null]));
+  newWeek.friday = workout("新重叠计划");
+  const oldFuture = JSON.stringify({ schema_version: 1, effective_from: addDays(today, 4), week: oldWeek });
+  const earlier = JSON.stringify({ schema_version: 1, effective_from: addDays(today, 2), week: newWeek });
   assert.equal((await call(handler, "/api/private/plan-updates/apply", post({ package_text: oldFuture }, "future-old"))).response.status, 201);
   assert.equal((await call(handler, "/api/private/plan-updates/apply", post({ package_text: earlier }, "future-new"))).response.status, 201);
   const plan = await call(handler, "/api/private/plan");
-  assert.equal(plan.body.future.length, 1); assert.equal(plan.body.future[0].effective_from, addDays(today, 2));
+  assert.equal(plan.body.future.length, 2);
+  assert.equal(plan.body.future[0].effective_from, addDays(today, 2));
+  assert.equal(plan.body.future[1].effective_from, addDays(today, 4));
+  assert.equal(plan.body.future[1].through_date, addDays(today, 10));
+
+  const overlap = await call(handler, `/api/private/schedule?from=${addDays(today, 6)}&to=${addDays(today, 6)}`);
+  const oldWriteTail = await call(handler, `/api/private/schedule?from=${addDays(today, 9)}&to=${addDays(today, 9)}`);
+  assert.equal(overlap.body.entries[0].title, "新重叠计划");
+  assert.equal(oldWriteTail.body.entries[0].title, "旧尾部计划");
 });
 
 test("Calendar boundaries: pre-plan dates stay no-plan and midweek revisions win on their effective date", async () => {
