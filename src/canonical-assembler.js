@@ -236,7 +236,7 @@ export function resistanceProjection(mode, load) {
  * caller can distinguish an empty canonical dataset from a missing migration.
  *
  * @param {any} base
- * @param {{ plan?: any, revisions?: any[], slots?: any[], exercises?: any[], sets?: any[], sessions?: any[], sessionExercises?: any[], completionItems?: any[], results?: any[], intervals?: any[], notes?: any[], feedback?: any[] }} rows
+ * @param {{ plan?: any, revisions?: any[], slots?: any[], exercises?: any[], sets?: any[], plannedDays?: any[]|null, planChanges?: any[], sessions?: any[], sessionExercises?: any[], completionItems?: any[], results?: any[], intervals?: any[], notes?: any[], feedback?: any[] }} rows
  */
 export function assembleCanonicalState(base, rows) {
   const planRows = rows.revisions?.length || rows.sessions?.length || rows.plan ? rows : null;
@@ -254,6 +254,27 @@ export function assembleCanonicalState(base, rows) {
   }));
   const state = deepClone(base);
   state.plan_revisions = plan.revisions;
+  if (Array.isArray(rows.plannedDays)) {
+    state.plan_day_storage_version = 1;
+    state.planned_days = rows.plannedDays.map((day) => ({
+      date: day.planned_date,
+      kind: day.kind,
+      prescription_revision_key: day.prescription_revision_key ?? null,
+      prescription_weekday: day.prescription_weekday ?? null,
+      change_key: day.change_key,
+      version: Number(day.version),
+      moved_from_date: day.moved_from_date ?? null,
+      moved_to_date: day.moved_to_date ?? null,
+    }));
+    state.plan_changes = (rows.planChanges ?? []).map((change) => ({
+      change_key: change.change_key,
+      change_sequence: Number(change.change_sequence),
+      change_type: change.change_type,
+      created_at: change.created_at,
+      source_date: change.source_date ?? null,
+      target_date: change.target_date ?? null,
+    }));
+  }
   state.sessions = sessions;
   return { state, canonical_present: true, plan: plan.plan };
 }

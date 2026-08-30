@@ -49,6 +49,7 @@ function execMigrations(db) {
     "0010_plan_recording_intent.sql",
     "0011_mutation_owner.sql",
     "0012_exercise_category.sql",
+    "0013_planned_days.sql",
   ]) db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
 
@@ -59,7 +60,7 @@ function baseState(athleteKey, email) {
 function insertCanonicalRows(db, athleteKey, email, sessionKey, exerciseName) {
   db.prepare("INSERT INTO athlete_state (athlete_key, email, state_json, updated_at, state_revision) VALUES (?, ?, ?, ?, 0)").run(athleteKey, email, JSON.stringify(baseState(athleteKey, email)), "2026-08-19T00:00:00.000Z");
   db.prepare("INSERT INTO plans (plan_id, athlete_key, name, created_at) VALUES (?, ?, ?, ?)").run(`plan_${athleteKey}`, athleteKey, "Workout", "2026-08-01T00:00:00.000Z");
-  db.prepare("INSERT INTO plan_revisions (plan_id, athlete_key, revision_key, revision_sequence, effective_from, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(`plan_${athleteKey}`, athleteKey, `rev-${athleteKey}`, 1, "2026-08-01", "2026-08-01T00:00:00.000Z");
+  db.prepare("INSERT INTO plan_revisions (plan_id, athlete_key, revision_key, revision_sequence, effective_from, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(`plan_${athleteKey}`, athleteKey, `rev-${athleteKey}`, 1, "2026-08-19", "2026-08-19T00:00:00.000Z");
   db.prepare("INSERT INTO plan_slots (revision_key, weekday, kind, title, start_time, estimated_duration_min) VALUES (?, ?, ?, ?, ?, ?)").run(`rev-${athleteKey}`, "wednesday", "workout", "核心", "21:00", 20);
   db.prepare("INSERT INTO plan_exercises (revision_key, athlete_key, weekday, block_ordinal, block_title, exercise_ordinal, occurrence_key, exercise_id, execution_mode, name_snapshot, definition_version, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`rev-${athleteKey}`, athleteKey, "wednesday", 1, "核心", 1, "dead_bug_main", "dead_bug", "alternating", exerciseName, 1, "strength");
   db.prepare("INSERT INTO plan_sets (revision_key, occurrence_key, set_id, ordinal, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`rev-${athleteKey}`, "dead_bug_main", "dead_bug_set_1", 1, "reps", 5, "bodyweight", null, "3-1-1-0", 45);

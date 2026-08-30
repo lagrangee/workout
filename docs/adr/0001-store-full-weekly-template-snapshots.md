@@ -1,3 +1,5 @@
 # Store Full Weekly-Template Snapshots in Plan Revisions
 
-Each confirmed Plan Revision stores one complete Monday-through-Sunday Weekly Template that repeats from its effective date until superseded. Already started or terminal workouts remain unchanged. Revisions are immutable and retained internally; the small, low-frequency workload makes full template snapshots preferable to brittle incremental patch chains because they simplify schedule derivation and diff generation.
+Status: superseded by [ADR 0004](0004-store-date-canonical-planned-days.md).
+
+Each confirmed Plan Revision stores one complete Monday-through-Sunday Weekly Template. The original decision treated that template as repeating until superseded. ADR 0004 retains the immutable full snapshot as prescription provenance but replaces repetition-at-read-time with finite dated Planned Day writes.

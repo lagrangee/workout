@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Plan Update Package v1 is the strict authenticated input used to create an Athlete's first Plan Revision or replace the complete repeating Weekly Template from a future date. It is prepared outside the App, pasted as text, validated without repair, previewed in human-readable form, and applied atomically.
+Plan Update Package v1 is the legacy strict authenticated input used to create an Athlete's first Plan Revision or write one complete seven-day Weekly Template from a future date. It is prepared outside the App, pasted as text, validated without repair, previewed in human-readable form, and applied atomically. Schedule storage follows ADR 0004 and does not repeat this package indefinitely.
 
 It is independently versioned from Coach API and Athlete Export schemas.
 
@@ -217,7 +217,7 @@ Validation reports all discoverable errors with JSON Pointer paths. Parse failur
 
 Successful application writes one immutable Plan Revision, its next revision sequence, and its complete Weekly Template in one D1 transaction. Failure writes nothing. A first revision is allowed only when the Athlete has no revision; later packages always append a new revision.
 
-For any date, the highest revision sequence whose `effective_from` is on or before that date wins. Therefore a later-confirmed package replaces every earlier revision's timeline from its own effective date onward, including an older revision that had been scheduled for a later future date.
+Application materializes exactly seven Planned Days beginning at `effective_from`. When two writes overlap, the higher revision sequence wins only on their shared dates; non-overlapping dates from either write remain unchanged. Plan resources retain every finite write for provenance, while Schedule resolves the final per-date result.
 
 The preview shows `effective_from`, the count of weekday slots whose semantics changed, and the complete resulting week in normal plan language. It never shows technical line diffs.
 

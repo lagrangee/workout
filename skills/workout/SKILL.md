@@ -262,7 +262,20 @@ snapshot without rereading live sources. Cloud publication uses a 30-second
 per-attempt deadline and at most three attempts; local success remains visible
 when cloud publication is pending.
 
-5. **Build a future change from the Current Plan.** When the user asks to
+5. **Move one dated Planned Day through the narrow move tools.** When the user
+   asks to move yesterday's, today's, or a future unstarted workout to today
+   or a future Rest/no-plan date, read the exact source and target dates, then
+   call `workout_validate_planned_day_move`. Show the full before/after preview
+   and both digests. After explicit confirmation, call
+   `workout_apply_planned_day_move` with the exact move, digests,
+   `confirmed: true`, and a fresh idempotency key. Accept success only when
+   readback verifies both provenance dates and the complete prescription.
+   Never use a weekly package to simulate this move, and never move a date
+   that owns a Session.
+   Completion: both affected dates are verified, or the flow stops with the
+   structured validation/readback failure.
+
+6. **Build a future change from the Current Plan.** When the user asks to
    change a future plan, read `workout_get_plan` first. Preserve existing
    values deliberately for unspecified slots and ask a clarifying question
    for any value required by a new or changed prescription. Construct a
@@ -273,7 +286,7 @@ when cloud publication is pending.
    Completion: a complete package exists, or the missing user decision is
    explicit and the flow remains at clarification.
 
-6. **Validate before showing a proposal.** Call
+7. **Validate before showing a proposal.** Call
    `workout_validate_plan_update` with the complete package, or
    `workout_validate_plan_update_batch` with the complete batch. For a valid
    result, show the effective date, changed-slot summary, complete resulting
@@ -282,7 +295,7 @@ when cloud publication is pending.
    user review, or the structured validation errors identify what must be
    repaired.
 
-7. **Separate confirmation from application.** Show the validated preview
+8. **Separate confirmation from application.** Show the validated preview
    before asking for confirmation. A separate, explicit confirmation that
    refers to that preview is the gate; then call `workout_apply_plan_update`
    with the exact validated package and digests, or
@@ -292,7 +305,7 @@ when cloud publication is pending.
    Completion: the user has either confirmed the exact preview or declined or
    changed it, in which case the package returns to validation.
 
-8. **Verify the write.** After an application response, inspect its readback.
+9. **Verify the write.** After an application response, inspect its readback.
    Treat the change as verified only when the readback status is verified and
    the returned Current Plan and inclusive seven-day Schedule correspond to
    the applied effective date and package; batch readback must cover every

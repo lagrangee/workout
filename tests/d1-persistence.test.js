@@ -7,6 +7,7 @@ import test from "node:test";
 import { createHandler } from "../src/http.js";
 import { D1Store, MemoryStore, emptyAthlete } from "../src/store.js";
 import { WEEKDAYS, addDays } from "../src/util.js";
+import { appendPlanRevision } from "../src/plan.js";
 
 const MIGRATIONS = [
   "0001_initial.sql",
@@ -21,6 +22,7 @@ const MIGRATIONS = [
   "0010_plan_recording_intent.sql",
   "0011_mutation_owner.sql",
   "0012_exercise_category.sql",
+  "0013_planned_days.sql",
 ];
 const D1_MUTATION_STATEMENT_BUDGET = 40;
 const D1_WORKER_QUERY_BUDGET = 45;
@@ -576,6 +578,66 @@ test("a cold private mutation with 201 Sessions stays below the whole Worker inv
     assert.ok(db.queryExecutionCount <= D1_WORKER_QUERY_BUDGET, `cold private mutation used ${db.queryExecutionCount} D1 queries`);
     assert.ok(db.queryExecutionCount < D1_INVOCATION_LIMIT, `cold private mutation exceeded the D1 limit with ${db.queryExecutionCount} queries`);
     t.diagnostic(`cold private mutation query count with 201 Sessions = ${db.queryExecutionCount}, Worker budget = ${D1_WORKER_QUERY_BUDGET}, D1 limit = ${D1_INVOCATION_LIMIT}`);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("a cold Agent Planned Day move reuses authenticated D1 state and stays below the Worker query budget", async (t) => {
+  const { sqlite, db, store } = createDatabase();
+  try {
+    const seeded = await seedCanonicalHistory(store, 201);
+    const state = await store.getByEmail(seeded.email);
+    const plan = {
+      schema_version: 2,
+      effective_from: "2026-08-24",
+      week: Object.fromEntries(WEEKDAYS.map((weekday) => [weekday, null])),
+    };
+    plan.week.saturday = { ...structuredClone(canonicalPlan().week.monday), title: "下肢力量与下坡耐受" };
+    plan.week.sunday = { kind: "rest" };
+    appendPlanRevision(state, plan, new Date("2026-08-23T04:00:00.000Z"));
+    await store.save(state, { now: "2026-08-23T04:00:00.000Z" });
+
+    const env = {
+      DB: db,
+      LOCAL_AUTH: "true",
+      PUBLIC_ORIGIN: "https://workout.example",
+      ATHLETE_A_EMAIL: "athlete-a@example.invalid",
+      ATHLETE_B_EMAIL: "athlete-b@example.invalid",
+      DEFAULT_TIMEZONE: "Asia/Shanghai",
+      AGENT_TOKEN_SECRET: "test-only-agent-token-secret",
+    };
+    const handler = createHandler(env, { clock: () => new Date("2026-08-30T04:00:00.000Z") });
+    const accessResponse = await handler.fetch(new Request("https://workout.example/api/private/agent-access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://workout.example", "x-athlete-email": state.email },
+      body: "{}",
+    }), env);
+    assert.equal(accessResponse.status, 201);
+    const token = (await accessResponse.json()).token;
+    const move = { source_date: "2026-08-29", target_date: "2026-08-30" };
+    const validateResponse = await handler.fetch(new Request("https://workout.example/api/agent/v1/planned-day-moves/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ move }),
+    }), env);
+    assert.equal(validateResponse.status, 200);
+    const preview = await validateResponse.json();
+
+    db.queryExecutionCount = 0;
+    const applyResponse = await handler.fetch(new Request("https://workout.example/api/agent/v1/planned-day-moves/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, "Idempotency-Key": "d1-planned-day-move" },
+      body: JSON.stringify({ move, move_digest: preview.move_digest, base_plan_digest: preview.base_plan_digest, confirmed: true }),
+    }), env);
+    assert.equal(applyResponse.status, 201);
+    assert.ok(db.queryExecutionCount <= D1_WORKER_QUERY_BUDGET, `Agent Planned Day move used ${db.queryExecutionCount} D1 queries`);
+    assert.ok(db.queryExecutionCount < D1_INVOCATION_LIMIT, `Agent Planned Day move exceeded the D1 limit with ${db.queryExecutionCount} queries`);
+    t.diagnostic(`Agent Planned Day move query count with 201 Sessions = ${db.queryExecutionCount}, Worker budget = ${D1_WORKER_QUERY_BUDGET}, D1 limit = ${D1_INVOCATION_LIMIT}`);
+
+    const readback = await store.getByEmail(state.email);
+    assert.equal(readback.planned_days.find((day) => day.date === "2026-08-29").kind, "rest");
+    assert.equal(readback.planned_days.find((day) => day.date === "2026-08-30").kind, "workout");
   } finally {
     sqlite.close();
   }

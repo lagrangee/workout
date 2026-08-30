@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays, base64UrlDecode, base64UrlEncode } from "../src/util.js";
 import { createSession } from "../src/session.js";
+import { appendPlanRevision } from "../src/plan.js";
 import { appFixture, call, post, testAgentSecret, TEST_NOW, testInstant, today } from "./helpers.js";
 
 async function createToken(handler) {
@@ -26,6 +27,7 @@ async function agentGet(handler, token, path, headers = {}) {
 
 async function seedHistoricalSession(store, date) {
   const state = await store.getByEmail("athlete-a@example.invalid");
+  appendPlanRevision(state, { effective_from: date, week: structuredClone(state.plan_revisions[0].week) }, new Date(`${date}T03:00:00.000Z`));
   const result = createSession(state, date, new Date(`${date}T04:00:00.000Z`), "start");
   assert.equal(result.error, undefined);
   await store.save(state);

@@ -3,18 +3,18 @@
 import { addDays, canonicalJson, dateRange, dateSpan, deepClone, localDate, opaqueKey, WEEKDAYS, weekdayKey } from "./util.js";
 import { validatePlanPackage } from "./validation.js";
 import { resolveExercise } from "./exercise-registry.js";
+import { appendWeeklyPlannedDays, initializePlannedDays, plannedDayRecord, resolvePlannedDay } from "./planned-days.js";
 
 /** @param {any} state @param {string} date */
 export function effectiveRevision(state, date) {
   return state.plan_revisions
-    .filter(/** @param {any} revision */ (revision) => revision.effective_from <= date)
+    .filter(/** @param {any} revision */ (revision) => revision.effective_from <= date && addDays(revision.effective_from, 6) >= date)
     .sort(/** @param {any} left @param {any} right */ (left, right) => right.revision_sequence - left.revision_sequence)[0] ?? null;
 }
 
 /** @param {any} state @param {string} date */
 export function resolveSlot(state, date) {
-  const revision = effectiveRevision(state, date);
-  return { revision, slot: revision ? revision.week[weekdayKey(date)] : null };
+  return resolvePlannedDay(state, date);
 }
 
 /** @param {any} slot @param {string} prefix */
@@ -69,17 +69,18 @@ export function scheduledWorkoutKey(state, date) {
 
 /** @param {any} state @param {string} date @param {Date} now @param {boolean} includePrescription @returns {any} */
 export function scheduleEntry(state, date, now = new Date(), includePrescription = true) {
-  const { revision, slot } = resolveSlot(state, date);
+  const { day, revision, slot } = resolveSlot(state, date);
   const session = state.sessions.find(/** @param {any} item */ (item) => item.scheduled_date === date) ?? null;
-  if (!revision || slot === null) return {
+  if (!day || day.kind === "no_plan" || slot === null) return {
     date, weekday: weekdayKey(date), kind: "no_plan", title: null, module_count: null, estimated_duration_min: null,
     prescription_ref: null, scheduled_workout_key: null, session_key: null,
     is_due: false, is_overdue_unstarted: false, source_ref: `schedule:${date}:no_plan`, revision_key: null,
   };
-  if (slot.kind === "rest") return {
+  if (day.kind === "rest" || slot.kind === "rest") return {
     date, weekday: weekdayKey(date), kind: "rest", title: null, module_count: null, estimated_duration_min: null,
     prescription_ref: null, scheduled_workout_key: null, session_key: null,
-    is_due: false, is_overdue_unstarted: false, source_ref: `schedule:${date}:rest`, revision_key: revision.revision_key,
+    is_due: false, is_overdue_unstarted: false, source_ref: `schedule:${date}:rest`, revision_key: null,
+    ...(day.moved_to_date ? { moved_to_date: day.moved_to_date } : {}),
   };
   const currentDate = localDate(now, state.timezone);
   const isToday = date === currentDate;
@@ -93,6 +94,7 @@ export function scheduleEntry(state, date, now = new Date(), includePrescription
     is_due: isDue, is_overdue_unstarted: isPast && !session,
     source_ref: `schedule:${date}:${revision.revision_key}`, revision_key: revision.revision_key,
     ...(slot.recording_intent ? { recording_intent: deepClone(slot.recording_intent) } : {}),
+    ...(day.moved_from_date ? { moved_from_date: day.moved_from_date } : {}),
   };
   if (includePrescription) entry.prescription = planSlotProjection(slot);
   return entry;
@@ -143,11 +145,11 @@ export function planModel(state, now = new Date()) {
   const current = effectiveRevision(state, today);
   const firstEffective = state.plan_revisions.slice().sort(/** @param {any} left @param {any} right */ (left, right) => left.effective_from.localeCompare(right.effective_from))[0] ?? null;
   const future = state.plan_revisions
-    .filter(/** @param {any} revision */ (revision) => revision.effective_from > today && effectiveRevision(state, revision.effective_from)?.revision_key === revision.revision_key)
+    .filter(/** @param {any} revision */ (revision) => revision.effective_from > today)
     .sort(/** @param {any} left @param {any} right */ (left, right) => left.effective_from.localeCompare(right.effective_from))
-    .map(/** @param {any} revision */ (revision) => ({ effective_from: revision.effective_from, week: planWeekProjection(revision.week) }));
+    .map(/** @param {any} revision */ (revision) => ({ effective_from: revision.effective_from, through_date: addDays(revision.effective_from, 6), week: planWeekProjection(revision.week) }));
   return {
-    current: current ? { effective_from: current.effective_from, week: planWeekProjection(current.week) } : null,
+    current: current ? { effective_from: current.effective_from, through_date: addDays(current.effective_from, 6), week: planWeekProjection(current.week) } : null,
     future,
     next_effective_from: future[0]?.effective_from ?? null,
     first_effective_from: firstEffective?.effective_from ?? null,
@@ -233,8 +235,19 @@ function planSlotProjection(slot) {
 
 /** @param {any} state @param {any} packageValue */
 export function planUpdateBase(state, packageValue) {
-  const revision = effectiveRevision(state, packageValue.effective_from);
-  return revision ? { effective_from: revision.effective_from, week: deepClone(revision.week) } : { effective_from: null, week: null };
+  initializePlannedDays(state);
+  const week = emptyWeek();
+  let hasPlannedDay = false;
+  for (let offset = 0; offset < 7; offset += 1) {
+    const date = addDays(packageValue.effective_from, offset);
+    if (!plannedDayRecord(state, date)) continue;
+    hasPlannedDay = true;
+    const resolved = resolvePlannedDay(state, date);
+    week[weekdayKey(date)] = deepClone(resolved.slot);
+  }
+  return hasPlannedDay
+    ? { effective_from: packageValue.effective_from, through_date: addDays(packageValue.effective_from, 6), week }
+    : { effective_from: null, through_date: null, week: null };
 }
 
 /** @param {any} state @param {any} packageValue @param {Date} now */
@@ -253,12 +266,13 @@ export function validatePlanForState(state, text, now = new Date()) {
   const value = result.value;
   if (state.__canonicalCutover && value.schema_version !== 2) return { ok: false, errors: [{ path: "/schema_version", message: "Canonical D1 cutover requires Plan Update Package schema_version 2" }] };
   const baselineWeek = planUpdateBase(state, value).week ?? emptyWeek();
-  if (canonicalJson(baselineWeek) === canonicalJson(value.week)) return { ok: false, errors: [{ path: "/week", message: "This package does not change the effective template" }] };
+  if (canonicalJson(baselineWeek) === canonicalJson(value.week)) return { ok: false, errors: [{ path: "/week", message: "This package does not change the dated seven-day window" }] };
   return { ok: true, value, preview: packagePreview(state, value, now) };
 }
 
 /** @param {any} state @param {any} packageValue @param {Date} now */
 export function appendPlanRevision(state, packageValue, now = new Date()) {
+  initializePlannedDays(state);
   const revision = {
     revision_key: opaqueKey("rev"),
     revision_sequence: Math.max(0, ...state.plan_revisions.map(/** @param {any} item */ (item) => item.revision_sequence)) + 1,
@@ -268,5 +282,6 @@ export function appendPlanRevision(state, packageValue, now = new Date()) {
   };
   state.plan_revisions.push(revision);
   state.plan_revisions.sort(/** @param {any} left @param {any} right */ (left, right) => left.revision_sequence - right.revision_sequence);
+  appendWeeklyPlannedDays(state, revision, now);
   return revision;
 }

@@ -35,6 +35,17 @@ const PLAN_UPDATE_BATCH_APPLY_SCHEMA = exactObject({
   confirmed: { type: "boolean", const: true },
   idempotency_key: { type: "string", minLength: 1, maxLength: 200 },
 });
+const PLANNED_DAY_MOVE_SCHEMA = exactObject({
+  source_date: { type: "string", format: "date" },
+  target_date: { type: "string", format: "date" },
+});
+const PLANNED_DAY_MOVE_APPLY_SCHEMA = exactObject({
+  move: PLANNED_DAY_MOVE_SCHEMA,
+  move_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  base_plan_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  confirmed: { type: "boolean", const: true },
+  idempotency_key: { type: "string", minLength: 1, maxLength: 200 },
+});
 
 /** @type {ToolDefinition[]} */
 const TOOL_DEFINITIONS = [
@@ -104,6 +115,18 @@ const TOOL_DEFINITIONS = [
     inputSchema: PLAN_UPDATE_BATCH_APPLY_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
+  {
+    name: "workout_validate_planned_day_move",
+    description: "Validate one atomic move of an unstarted Planned Day to today or a future Rest/no-plan date.",
+    inputSchema: { type: "object", properties: { move: PLANNED_DAY_MOVE_SCHEMA }, required: ["move"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "workout_apply_planned_day_move",
+    description: "Apply one validated Planned Day move after confirmation and read back both affected dates.",
+    inputSchema: PLANNED_DAY_MOVE_APPLY_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
 ];
 
 export class WorkoutApiError extends Error {
@@ -147,6 +170,8 @@ export class WorkoutApiClient {
     if (name === "workout_apply_plan_update") return this.applyPlanUpdate(input);
     if (name === "workout_validate_plan_update_batch") return this.validatePlanUpdateBatch(input);
     if (name === "workout_apply_plan_update_batch") return this.applyPlanUpdateBatch(input);
+    if (name === "workout_validate_planned_day_move") return this.validatePlannedDayMove(input);
+    if (name === "workout_apply_planned_day_move") return this.applyPlannedDayMove(input);
     throw new WorkoutApiError("tool_not_found", `Tool is not available: ${name}`, 0);
   }
 
@@ -280,6 +305,41 @@ export class WorkoutApiClient {
           },
         },
       };
+    }
+  }
+
+  /** @param {WorkoutToolArguments["workout_validate_planned_day_move"]} args */
+  async validatePlannedDayMove(args) {
+    assertToolArguments("workout_validate_planned_day_move", args);
+    return this.post("/planned-day-moves/validate", { move: args.move });
+  }
+
+  /** @param {WorkoutToolArguments["workout_apply_planned_day_move"]} args */
+  async applyPlannedDayMove(args) {
+    assertToolArguments("workout_apply_planned_day_move", args);
+    const applied = await this.post("/planned-day-moves/apply", {
+      move: args.move,
+      move_digest: args.move_digest,
+      base_plan_digest: args.base_plan_digest,
+      confirmed: args.confirmed,
+    }, { "Idempotency-Key": args.idempotency_key });
+    const from = args.move.source_date < args.move.target_date ? args.move.source_date : args.move.target_date;
+    const to = args.move.source_date > args.move.target_date ? args.move.source_date : args.move.target_date;
+    try {
+      const schedule = await this.getSchedule({ from, to, expand: true });
+      const source = schedule?.entries?.find((/** @type {any} */ entry) => entry.date === args.move.source_date);
+      const target = schedule?.entries?.find((/** @type {any} */ entry) => entry.date === args.move.target_date);
+      const targetPrescription = target?.prescription_ref ? schedule?.prescriptions?.[target.prescription_ref] : null;
+      const expectedPrescription = applied?.preview?.before?.source?.prescription;
+      const prescriptionMatches = expectedPrescription && targetPrescription
+        && JSON.stringify(comparablePlanSlot({ kind: "workout", ...targetPrescription })) === JSON.stringify(comparablePlanSlot(expectedPrescription));
+      if (!source || !target || source.kind === "workout" || source.is_overdue_unstarted !== false || target.kind !== "workout"
+        || source.moved_to_date !== args.move.target_date || target.moved_from_date !== args.move.source_date || !prescriptionMatches) {
+        throw new WorkoutApiError("readback_mismatch", "Schedule readback does not exactly reflect the Planned Day move");
+      }
+      return { ...applied, readback: { status: "verified", schedule, source, target } };
+    } catch (/** @type {any} */ error) {
+      return { ...applied, readback: { status: "failed", error: { code: error.code ?? "readback_failed", message: error.message ?? String(error), status: error.status ?? 0, details: error.details ?? [] } } };
     }
   }
 

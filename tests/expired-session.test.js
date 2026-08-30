@@ -4,12 +4,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays } from "../src/util.js";
 import { createSession } from "../src/session.js";
+import { appendPlanRevision } from "../src/plan.js";
 import { appFixture, call, post, TEST_NOW, today } from "./helpers.js";
 
 async function seedExpiredSession() {
   const fixture = appFixture();
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
   const scheduledDate = addDays(today, -7);
+  appendPlanRevision(state, { effective_from: scheduledDate, week: structuredClone(state.plan_revisions[0].week) }, new Date(`${scheduledDate}T01:00:00.000Z`));
   const startedAt = new Date(`${scheduledDate}T02:00:00.000Z`);
   const created = createSession(state, scheduledDate, startedAt, "start");
   assert.ok(created.session);

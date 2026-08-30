@@ -33,6 +33,8 @@ test("Workout Agent Skill maps bounded questions to typed MCP tools", async () =
     "workout_apply_plan_update",
     "workout_validate_plan_update_batch",
     "workout_apply_plan_update_batch",
+    "workout_validate_planned_day_move",
+    "workout_apply_planned_day_move",
   ]) {
     assert.match(skill, new RegExp(`\\b${tool}\\b`));
   }
@@ -66,7 +68,7 @@ test("Workout Agent Skill makes plan writes a validate-confirm-apply-readback fl
   assert.match(skill, /account-settings/i);
   assert.match(skill, /share-management/i);
   assert.match(skill, /authentication/i);
-  assert.equal((skill.match(/Completion:/g) ?? []).length, 8);
+  assert.equal((skill.match(/Completion:/g) ?? []).length, 9);
 });
 
 test("Workout Agent Skill keeps credentials and analysis ownership outside the integration", async () => {

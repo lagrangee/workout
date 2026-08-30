@@ -52,12 +52,13 @@ AgentManifest = {
   links: { overview: string, plan: string, schedule: string, sessions: string,
            progress: string, exercise: string, plan_update_validate: string,
            plan_update_apply: string, plan_update_batch_validate: string,
-           plan_update_batch_apply: string, aerobic_sync: string, schemas: string,
+           plan_update_batch_apply: string, planned_day_move_validate: string,
+           planned_day_move_apply: string, aerobic_sync: string, schemas: string,
            aerobic_activities: string, aerobic_activity: string,
            daily_context: string, routes: string, route: string,
            route_history: string },
   endpoints: object,
-  capabilities: ["read", "plan:write", "plan-batch:write", "aerobic:write"]
+  capabilities: ["read", "plan:write", "plan-batch:write", "planned-day:move", "aerobic:write"]
 }
 ```
 
@@ -287,7 +288,8 @@ AgentPlanUpdateValidation = {
   valid: true,
   package_digest: string,
   base_plan_digest: string,
-  base_plan: { effective_from: LocalDate|null, week: object|null, source_ref: "plan:base" },
+  base_plan: { effective_from: LocalDate|null, through_date: LocalDate|null,
+               week: object|null, source_ref: "plan:base" },
   preview: {
     effective_from: LocalDate,
     week: object,
@@ -341,6 +343,26 @@ AgentPlanUpdateBatchApplication = {
   update_count: integer,
   batch_digest: string,
   base_plan_digest: string,
+  preview: object
+}
+
+PlannedDayMove = { source_date: LocalDate, target_date: LocalDate }
+
+AgentPlannedDayMoveValidation = {
+  schema_version: 1, generated_at: Instant, data_as_of: Instant,
+  training_version: integer, source_ref: "planned-day-move:validation",
+  valid: true, move_digest: string, base_plan_digest: string,
+  base_plan: object,
+  preview: { operation: "move", source_date: LocalDate, target_date: LocalDate,
+             before: object, after: object, affected_dates: LocalDate[],
+             source_ref: "planned-day-move:preview" }
+}
+
+AgentPlannedDayMoveApplication = {
+  schema_version: 1, generated_at: Instant, data_as_of: Instant,
+  training_version: integer, source_ref: "planned-day-move:application",
+  applied: true, source_date: LocalDate, target_date: LocalDate,
+  change_key: string, move_digest: string, base_plan_digest: string,
   preview: object
 }
 

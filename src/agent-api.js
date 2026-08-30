@@ -1,11 +1,12 @@
 // @ts-check
 
-import { WEEKDAYS, base64UrlDecode, base64UrlEncode, canonicalJson, deepClone, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
-import { appendPlanRevision, planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
+import { WEEKDAYS, addDays, base64UrlDecode, base64UrlEncode, canonicalJson, deepClone, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
+import { appendPlanRevision, effectiveRevision, planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
 import { coachOverview, coachResource, prescriptionProjection } from "./coach.js";
 import { parseStrictJson, validatePlanPackage } from "./validation.js";
 import { AGENT_ARCHIVE_LIMIT, agentAerobicActivities, agentAerobicActivityDetail, agentDailyContext, agentRouteDetail, agentRouteHistory, agentRoutes, agentSchemaCatalog, agentSchemaResource } from "./agent-archive-api.js";
 import { syncAerobicProjection } from "./training-archive-projection.js";
+import { applyPlannedDayMove, plannedDayMoveDigests } from "./planned-days.js";
 import { PLAN_UPDATE_BATCH_MAX_BYTES, appendPlanUpdateBatch, parsePlanUpdateBatch, planUpdateBatchDigests, validatePlanUpdateBatchForState } from "./plan-update-batch.js";
 
 /** @typedef {import("../types/interfaces.js").AgentState} AgentState */
@@ -63,6 +64,8 @@ export function agentManifest(state, now) {
       plan_update_apply: `${AGENT_PREFIX}/plan-updates/apply`,
       plan_update_batch_validate: `${AGENT_PREFIX}/plan-update-batches/validate`,
       plan_update_batch_apply: `${AGENT_PREFIX}/plan-update-batches/apply`,
+      planned_day_move_validate: `${AGENT_PREFIX}/planned-day-moves/validate`,
+      planned_day_move_apply: `${AGENT_PREFIX}/planned-day-moves/apply`,
       aerobic_sync: `${AGENT_PREFIX}/aerobic/sync`,
       schemas: `${AGENT_PREFIX}/schemas`,
       aerobic_activities: `${AGENT_PREFIX}/aerobic/activities`,
@@ -96,6 +99,8 @@ export function agentManifest(state, now) {
       plan_update_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-updates/apply`, parameters: { package_text: { type: "string", content: "Plan Update Package v2 JSON" }, package_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_package: true } },
       plan_update_batch_validate: { method: "POST", path: `${AGENT_PREFIX}/plan-update-batches/validate`, parameters: { batch_text: { type: "string", content: "Plan Update Batch v1 JSON" } }, rules: { mutates: false, strict_batch: true, minimum_updates: 2, maximum_updates: 4 } },
       plan_update_batch_apply: { method: "POST", path: `${AGENT_PREFIX}/plan-update-batches/apply`, parameters: { batch_text: { type: "string", content: "Plan Update Batch v1 JSON" }, batch_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, strict_batch: true, atomic: true } },
+      planned_day_move_validate: { method: "POST", path: `${AGENT_PREFIX}/planned-day-moves/validate`, parameters: { move: { type: "object", required: ["source_date", "target_date"] } }, rules: { mutates: false, dated_plan: true } },
+      planned_day_move_apply: { method: "POST", path: `${AGENT_PREFIX}/planned-day-moves/apply`, parameters: { move: { type: "object", required: ["source_date", "target_date"] }, move_digest: { type: "string", format: "sha256" }, base_plan_digest: { type: "string", format: "sha256" }, confirmed: { type: "boolean", const: true }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, requires_confirmation: true, idempotent: true, idempotency_window_hours: 24, atomic: true, dated_plan: true } },
       aerobic_sync: { method: "POST", path: `${AGENT_PREFIX}/aerobic/sync`, parameters: { projection: { type: "object", content: "AerobicProjectionV1" }, idempotency_key: { type: "string", location: "header", name: "Idempotency-Key" } }, rules: { mutates: true, idempotent: true, idempotency_window_hours: 24, strict_projection: true, excludes_raw_fit_gps: true } },
     },
   };
@@ -124,7 +129,7 @@ export async function agentValidatePlanUpdate(state, rawBody, now) {
     source_ref: "plan-update:validation",
     valid: true,
     package_digest: await sha256Hex(canonicalJson(result.value)),
-    base_plan_digest: await sha256Hex(canonicalJson(basePlan)),
+    base_plan_digest: await sha256Hex(canonicalJson({ owner: state.athlete_key, base_plan: basePlan })),
     base_plan: basePlan,
     preview: { ...acceptedResult.preview, source_ref: "plan-update:preview" },
   };
@@ -143,7 +148,7 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
   const packageDigest = await sha256Hex(canonicalJson(packageResult.value));
   if (packageDigest !== body.package_digest) return { error: { code: "package_digest_mismatch", message: "package_digest does not match package_text" } };
   const basePlan = planUpdateBaseEvidence(state, packageResult.value);
-  const basePlanDigest = await sha256Hex(canonicalJson(basePlan));
+  const basePlanDigest = await sha256Hex(canonicalJson({ owner: state.athlete_key, base_plan: basePlan }));
   if (basePlanDigest !== body.base_plan_digest) return { error: { code: "stale_plan", message: "The Current Plan changed after this proposal was validated" } };
   const result = validatePlanForState(state, body.package_text, now);
   if (!result.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: "errors" in result ? result.errors : [] } };
@@ -161,6 +166,58 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
     package_digest: packageDigest,
     base_plan_digest: basePlanDigest,
     preview: { ...acceptedResult.preview, source_ref: "plan-update:preview" },
+  };
+}
+
+/** @param {AgentState} state @param {string} rawBody @param {Date} now */
+export async function agentValidatePlannedDayMove(state, rawBody, now) {
+  const parsed = parseAgentJson(rawBody);
+  if (!parsed.ok) return parsed.error;
+  const body = parsed.value;
+  if (!isRecord(body) || Object.keys(body).length !== 1 || !isRecord(body.move)) return { error: { code: "invalid_request", message: "move is required" } };
+  const result = /** @type {any} */ (await plannedDayMoveDigests(state, /** @type {{source_date:string,target_date:string}} */ (body.move), now));
+  if (!result.ok) return { error: { code: "invalid_planned_day_move", message: "The Planned Day move needs repair", details: result.errors } };
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    data_as_of: now.toISOString(),
+    training_version: state.training_version,
+    source_ref: "planned-day-move:validation",
+    valid: true,
+    move_digest: result.move_digest,
+    base_plan_digest: result.base_plan_digest,
+    base_plan: result.base,
+    preview: { ...result.preview, source_ref: "planned-day-move:preview" },
+  };
+}
+
+/** @param {AgentState} state @param {string} rawBody @param {Date} now */
+export async function agentApplyPlannedDayMove(state, rawBody, now) {
+  const parsed = parseAgentJson(rawBody);
+  if (!parsed.ok) return parsed.error;
+  const body = parsed.value;
+  if (!isRecord(body) || Object.keys(body).length !== 4 || !isRecord(body.move) || !isSha256(body.move_digest) || !isSha256(body.base_plan_digest) || body.confirmed !== true) {
+    return { error: { code: body?.confirmed !== true ? "confirmation_required" : "invalid_request", message: body?.confirmed !== true ? "confirmed must be true" : "move, move_digest, base_plan_digest, and confirmed are required" } };
+  }
+  const evidence = /** @type {any} */ (await plannedDayMoveDigests(state, /** @type {{source_date:string,target_date:string}} */ (body.move), now));
+  if (!evidence.ok) return { error: { code: "invalid_planned_day_move", message: "The Planned Day move needs repair", details: evidence.errors } };
+  if (evidence.move_digest !== body.move_digest) return { error: { code: "package_digest_mismatch", message: "move_digest does not match move" } };
+  if (evidence.base_plan_digest !== body.base_plan_digest) return { error: { code: "stale_plan", message: "The dated Plan changed after this move was validated" } };
+  const applied = /** @type {any} */ (applyPlannedDayMove(state, evidence.value, now));
+  if (!applied.ok) return { error: { code: "invalid_planned_day_move", message: "The Planned Day move needs repair", details: applied.errors } };
+  return {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    data_as_of: now.toISOString(),
+    training_version: state.training_version,
+    source_ref: "planned-day-move:application",
+    applied: true,
+    source_date: evidence.value.source_date,
+    target_date: evidence.value.target_date,
+    change_key: applied.change.change_key,
+    move_digest: evidence.move_digest,
+    base_plan_digest: evidence.base_plan_digest,
+    preview: { ...applied.preview, source_ref: "planned-day-move:preview" },
   };
 }
 
@@ -240,13 +297,13 @@ function parseAgentJson(rawBody, maxBytes = 512 * 1024) {
 /** @param {AgentState} state @param {Date} now */
 export function agentPlan(state, now) {
   const today = localDate(now, state.timezone);
-  const current = state.plan_revisions.filter((revision) => revision.effective_from <= today).sort((left, right) => right.revision_sequence - left.revision_sequence)[0] ?? null;
+  const current = effectiveRevision(state, today);
   const future = state.plan_revisions
-    .filter((revision) => revision.effective_from > today && state.plan_revisions.filter((candidate) => candidate.effective_from <= revision.effective_from).sort((left, right) => right.revision_sequence - left.revision_sequence)[0]?.revision_key === revision.revision_key)
+    .filter((revision) => revision.effective_from > today)
     .sort((left, right) => left.effective_from.localeCompare(right.effective_from));
   const firstEffective = state.plan_revisions.slice().sort((left, right) => left.effective_from.localeCompare(right.effective_from))[0]?.effective_from ?? null;
   /** @param {PlanRevision} revision */
-  const project = (revision) => ({ effective_from: revision.effective_from, week: Object.fromEntries(WEEKDAYS.map((day) => { const slot = revision.week[/** @type {keyof Week} */ (day)] ?? null; return [day, slot?.kind === "workout" ? { kind: "workout", prescription: prescriptionProjection(slot, `plan:${revision.effective_from}:${day}`, safePrescriptionKeys(`agent_plan_${revision.effective_from}_${day}`)) } : deepClone(slot)]; })) });
+  const project = (revision) => ({ effective_from: revision.effective_from, through_date: addDays(revision.effective_from, 6), week: Object.fromEntries(WEEKDAYS.map((day) => { const slot = revision.week[/** @type {keyof Week} */ (day)] ?? null; return [day, slot?.kind === "workout" ? { kind: "workout", prescription: prescriptionProjection(slot, `plan:${revision.effective_from}:${day}`, safePrescriptionKeys(`agent_plan_${revision.effective_from}_${day}`)) } : deepClone(slot)]; })) });
   return {
     schema_version: 1,
     generated_at: now.toISOString(),
@@ -290,6 +347,8 @@ export function agentSchedule(state, url, now) {
       session_key: raw.session_key,
       is_due: raw.is_due,
       is_overdue_unstarted: raw.is_overdue_unstarted,
+      ...(raw.moved_from_date ? { moved_from_date: raw.moved_from_date } : {}),
+      ...(raw.moved_to_date ? { moved_to_date: raw.moved_to_date } : {}),
       source_ref: `schedule:${date}:${raw.kind}`,
     };
   });

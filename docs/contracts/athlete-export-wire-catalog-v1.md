@@ -55,9 +55,11 @@ starts at 1 and strictly increases.
 ```text
 ScheduledWorkout = {
   scheduled_workout_key: ExportKey, scheduled_date: LocalDate,
-  kind: workout|rest, revision_key: ExportKey,
+  kind: workout|rest, revision_key: ExportKey|null,
+  plan_change_key: ExportKey,
   prescription: Workout|null, session_key: ExportKey|null,
-  is_overdue_unstarted: boolean
+  is_overdue_unstarted: boolean,
+  moved_from_date?: LocalDate, moved_to_date?: LocalDate
 }
 
 SnapshotSet = PlanSet & { set_key: ExportKey }

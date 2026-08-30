@@ -129,7 +129,7 @@ test("Agent plan application replays one idempotent success and rejects a confli
   assert.equal(state.training_version, first.body.training_version);
 });
 
-test("Agent plan application preserves effective revision precedence for later updates", async () => {
+test("Agent plan application reads the exact dated seven-day base for later updates", async () => {
   const { handler } = appFixture();
   const token = await createAgentToken(handler);
   const firstPackage = JSON.parse(packageText(addDays(today, 1), workout("第一阶段")));
@@ -139,7 +139,8 @@ test("Agent plan application preserves effective revision precedence for later u
 
   const laterPackage = JSON.parse(packageText(addDays(today, 3), workout("第二阶段")));
   const laterPreview = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify(laterPackage) });
-  assert.equal(laterPreview.body.base_plan.effective_from, firstPackage.effective_from);
+  assert.equal(laterPreview.body.base_plan.effective_from, laterPackage.effective_from);
+  assert.equal(laterPreview.body.base_plan.through_date, addDays(laterPackage.effective_from, 6));
   const later = await agentPost(handler, token, "/api/agent/v1/plan-updates/apply", applyBody(laterPackage, laterPreview.body), { "Idempotency-Key": "precedence-2" });
   assert.equal(later.response.status, 201);
 

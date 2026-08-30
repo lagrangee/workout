@@ -20,6 +20,7 @@ const MIGRATIONS = [
   "0010_plan_recording_intent.sql",
   "0011_mutation_owner.sql",
   "0012_exercise_category.sql",
+  "0013_planned_days.sql",
 ];
 
 function execMigrations(db) {
@@ -147,6 +148,8 @@ test("bounded canonical rebuild replaces rows, clears legacy state arrays, and r
     assert.equal(db.prepare("SELECT count(*) AS count FROM plans WHERE athlete_key = ?").get(state.athlete_key).count, 1);
     assert.equal(db.prepare("SELECT count(*) AS count FROM plan_revisions WHERE athlete_key = ?").get(state.athlete_key).count, 1);
     assert.equal(db.prepare("SELECT count(*) AS count FROM plan_sets").get().count, 1);
+    assert.equal(db.prepare("SELECT count(*) AS count FROM plan_changes WHERE athlete_key = ?").get(state.athlete_key).count, 1);
+    assert.equal(db.prepare("SELECT count(*) AS count FROM planned_days WHERE athlete_key = ?").get(state.athlete_key).count, 7);
     assert.equal(db.prepare("SELECT count(*) AS count FROM sessions WHERE athlete_key = ?").get(state.athlete_key).count, 1);
     assert.equal(db.prepare("SELECT category FROM plan_exercises WHERE revision_key = ?").get("rev-rebuild").category, "mobility");
     assert.equal(db.prepare("SELECT category FROM session_exercises WHERE session_key = ?").get("sess-rebuild").category, "mobility");
@@ -155,6 +158,8 @@ test("bounded canonical rebuild replaces rows, clears legacy state arrays, and r
     assert.equal(db.prepare("SELECT rollback_ref FROM workout_storage_cutover WHERE athlete_key = ?").get(state.athlete_key).rollback_ref, "workout-rollback-test");
     const persisted = JSON.parse(db.prepare("SELECT state_json FROM athlete_state WHERE athlete_key = ?").get(state.athlete_key).state_json);
     assert.deepEqual(persisted.plan_revisions, []);
+    assert.deepEqual(persisted.planned_days, []);
+    assert.deepEqual(persisted.plan_changes, []);
     assert.deepEqual(persisted.sessions, []);
     assert.equal(persisted.legacy_workout_v1, undefined);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);

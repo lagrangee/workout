@@ -145,6 +145,14 @@ test("Agent plan validation rejects no-op and non-future effective dates", async
   const token = await createAgentToken(handler);
   const state = await store.getByEmail("athlete-a@example.invalid");
   const unchangedWeek = deepClone(state.plan_revisions[0].week);
+  state.plan_revisions.push({
+    revision_key: "future-no-op-baseline",
+    revision_sequence: 2,
+    created_at: TEST_NOW,
+    effective_from: addDays(today, 1),
+    week: unchangedWeek,
+  });
+  await store.save(state);
   const noOp = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", {
     package_text: JSON.stringify({ schema_version: 1, effective_from: addDays(today, 1), week: unchangedWeek }),
   });
@@ -173,6 +181,14 @@ test("Agent plan preview counts changed and unchanged weekday slots explicitly",
   const state = await store.getByEmail("athlete-a@example.invalid");
   const effectiveFrom = addDays(today, 1);
   const week = deepClone(state.plan_revisions[0].week);
+  state.plan_revisions.push({
+    revision_key: "future-preview-baseline",
+    revision_sequence: 2,
+    created_at: TEST_NOW,
+    effective_from: effectiveFrom,
+    week: deepClone(week),
+  });
+  await store.save(state);
   week[weekdayKey(effectiveFrom)] = workout("只改一天");
   const result = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: JSON.stringify({ schema_version: 1, effective_from: effectiveFrom, week }) });
   assert.equal(result.response.status, 200);
@@ -197,13 +213,23 @@ test("Agent plan validation returns the effective plan base used by the preview"
     package_text: packageText(addDays(futureEffectiveFrom, 1), workout("替换未来基线")),
   });
   assert.equal(result.response.status, 200);
-  assert.equal(result.body.base_plan.effective_from, futureEffectiveFrom);
+  assert.equal(result.body.base_plan.effective_from, addDays(futureEffectiveFrom, 1));
+  assert.equal(result.body.base_plan.through_date, addDays(futureEffectiveFrom, 7));
   assert.equal(result.body.base_plan.week.monday.title, "已有未来基线");
   assert.equal(result.body.preview.changed_weekday_slot_count, 1);
 });
 
 test("Agent plan validation remains scoped to the bearer Athlete", async () => {
   const { handler, store } = appFixture();
+  const athleteA = await store.getByEmail("athlete-a@example.invalid");
+  athleteA.plan_revisions.push({
+    revision_key: "future-athlete-a-baseline",
+    revision_sequence: 2,
+    created_at: TEST_NOW,
+    effective_from: addDays(today, 1),
+    week: week(workout("只属于 A 的基线")),
+  });
+  await store.save(athleteA);
   const tokenA = await createAgentToken(handler, "athlete-a@example.invalid");
   const tokenB = await createAgentToken(handler, "athlete-b@example.invalid");
   const packageValue = JSON.parse(packageText(addDays(today, 1), workout("隔离预览")));
@@ -212,7 +238,7 @@ test("Agent plan validation remains scoped to the bearer Athlete", async () => {
   assert.equal(athleteAResult.response.status, 200);
   assert.equal(athleteBResult.response.status, 200);
   assert.notEqual(athleteAResult.body.base_plan_digest, athleteBResult.body.base_plan_digest);
-  assert.notEqual(athleteAResult.body.base_plan.effective_from, athleteBResult.body.base_plan.effective_from);
-  assert.equal((await store.getByEmail("athlete-a@example.invalid")).plan_revisions.length, 1);
+  assert.notDeepEqual(athleteAResult.body.base_plan.week, athleteBResult.body.base_plan.week);
+  assert.equal((await store.getByEmail("athlete-a@example.invalid")).plan_revisions.length, 2);
   assert.equal((await store.getByEmail("athlete-b@example.invalid")).plan_revisions.length, 0);
 });

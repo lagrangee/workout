@@ -399,6 +399,27 @@ async function settle(): Promise<void> {
 }
 
 describe("CalendarPage", () => {
+  it("shows when a workout was moved from another date", async () => {
+    const movedWorkout = {
+      date: targetDate,
+      weekday: weekday(targetDate),
+      kind: "workout",
+      title: "下肢力量与下坡耐受",
+      module_count: 2,
+      estimated_duration_min: 60,
+      session_key: null,
+      is_overdue_unstarted: false,
+      moved_from_date: "2026-08-28",
+      aerobic_summary: { activity_count: 0, distance_km: null, duration_sec: null, source_status: "none" },
+      prescription: { blocks: [] },
+    };
+    const { app } = createTestApp(calendarHandler(movedWorkout));
+    const wrapper = mount(CalendarPage, { props: { app } });
+    await settle();
+
+    expect(wrapper.text()).toContain("从 2026-08-28 调整");
+  });
+
   it("navigates by exact seven-day ranges and keeps the selected weekday", async () => {
     const { app, request } = createTestApp(calendarHandler());
     const wrapper = mount(CalendarPage, { props: { app } });

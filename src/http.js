@@ -8,7 +8,7 @@ import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
 import { agentAccessStatus, createAgentAccess, findAgentInStore, revokeAgentAccess } from "./agent.js";
-import { agentApplyPlanUpdate, agentApplyPlanUpdateBatch, agentManifest, agentQueryError, agentResource, agentSyncAerobicProjection, agentValidatePlanUpdate, agentValidatePlanUpdateBatch } from "./agent-api.js";
+import { agentApplyPlanUpdate, agentApplyPlanUpdateBatch, agentApplyPlannedDayMove, agentManifest, agentQueryError, agentResource, agentSyncAerobicProjection, agentValidatePlanUpdate, agentValidatePlanUpdateBatch, agentValidatePlannedDayMove } from "./agent-api.js";
 import { aerobicDetailModel, aerobicListModel } from "./training-archive.js";
 import { MAX_AEROBIC_SYNC_BODY_BYTES, syncAerobicProjection } from "./training-archive-projection.js";
 import { compactAerobicSummary, recordingEvidence, recordsOverviewModel } from "./training-records.js";
@@ -85,18 +85,22 @@ async function agentRoute(request, env, getStore, url, now) {
   const isPlanApplyPath = url.pathname === "/api/agent/v1/plan-updates/apply";
   const isPlanBatchValidationPath = url.pathname === "/api/agent/v1/plan-update-batches/validate";
   const isPlanBatchApplyPath = url.pathname === "/api/agent/v1/plan-update-batches/apply";
+  const isPlannedDayMoveValidationPath = url.pathname === "/api/agent/v1/planned-day-moves/validate";
+  const isPlannedDayMoveApplyPath = url.pathname === "/api/agent/v1/planned-day-moves/apply";
   const isAerobicSyncPath = url.pathname === "/api/agent/v1/aerobic/sync";
   const isPlanValidation = request.method === "POST" && isPlanValidationPath;
   const isPlanApply = request.method === "POST" && isPlanApplyPath;
   const isPlanBatchValidation = request.method === "POST" && isPlanBatchValidationPath;
   const isPlanBatchApply = request.method === "POST" && isPlanBatchApplyPath;
+  const isPlannedDayMoveValidation = request.method === "POST" && isPlannedDayMoveValidationPath;
+  const isPlannedDayMoveApply = request.method === "POST" && isPlannedDayMoveApplyPath;
   const isAerobicSync = request.method === "POST" && isAerobicSyncPath;
-  if ((isPlanValidationPath || isPlanApplyPath || isPlanBatchValidationPath || isPlanBatchApplyPath || isAerobicSyncPath) && request.method !== "POST") return agentMethodNotAllowed("POST");
-  if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation && !isPlanApply && !isPlanBatchValidation && !isPlanBatchApply && !isAerobicSync) return agentMethodNotAllowed();
+  if ((isPlanValidationPath || isPlanApplyPath || isPlanBatchValidationPath || isPlanBatchApplyPath || isPlannedDayMoveValidationPath || isPlannedDayMoveApplyPath || isAerobicSyncPath) && request.method !== "POST") return agentMethodNotAllowed("POST");
+  if (request.method !== "GET" && request.method !== "HEAD" && !isPlanValidation && !isPlanApply && !isPlanBatchValidation && !isPlanBatchApply && !isPlannedDayMoveValidation && !isPlannedDayMoveApply && !isAerobicSync) return agentMethodNotAllowed();
   if (["athlete", "athlete_key", "email"].some((key) => url.searchParams.has(key))) return jsonError("invalid_request", "The Agent API does not accept Athlete selectors", [], 400);
   const queryError = agentQueryError(url.pathname, url);
   if (queryError) return jsonError(queryError.code, queryError.message, [], 400);
-  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write", "plan-batch:write", "aerobic:write"] } : isPlanValidation ? await agentValidatePlanUpdate(state, await request.text(), now) : isPlanApply ? await agentApplyRoute(request, env, store, state, now) : isPlanBatchValidation ? await agentValidatePlanUpdateBatch(state, await request.text(), now) : isPlanBatchApply ? await agentBatchApplyRoute(request, env, store, state, now) : isAerobicSync ? await agentAerobicSyncRoute(request, env, store, state, now) : await agentResource(state, url.pathname, url, now, configuredPublicOrigin(env, url), env.AGENT_TOKEN_SECRET);
+  const resource = url.pathname === "/api/agent/v1" ? { ...agentManifest(state, now), capabilities: ["read", "plan:write", "plan-batch:write", "planned-day:move", "aerobic:write"] } : isPlanValidation ? await agentValidatePlanUpdate(state, await request.text(), now) : isPlanApply ? await agentApplyRoute(request, env, store, state, now) : isPlanBatchValidation ? await agentValidatePlanUpdateBatch(state, await request.text(), now) : isPlanBatchApply ? await agentBatchApplyRoute(request, env, store, state, now) : isPlannedDayMoveValidation ? await agentValidatePlannedDayMove(state, await request.text(), now) : isPlannedDayMoveApply ? await agentPlannedDayMoveApplyRoute(request, env, store, state, now) : isAerobicSync ? await agentAerobicSyncRoute(request, env, store, state, now) : await agentResource(state, url.pathname, url, now, configuredPublicOrigin(env, url), env.AGENT_TOKEN_SECRET);
   if (resource instanceof Response) return resource;
   if (resource?.error) return jsonError(resource.error.code, resource.error.message, resource.error.details ?? [], errorStatus(resource.error.code));
   return maybeHead(jsonResponse(resource), request);
@@ -115,6 +119,12 @@ async function agentApplyRoute(request, env, store, authenticatedState, now) {
 async function agentBatchApplyRoute(request, env, store, authenticatedState, now) {
   const rawBody = await request.text();
   return agentMutationRoute({ request, env, store, authenticatedState, now, path: "/api/agent/v1/plan-update-batches/apply", rawBody, status: 201, apply: (state) => agentApplyPlanUpdateBatch(state, rawBody, now) });
+}
+
+/** @param {Request} request @param {any} env @param {any} store @param {any} authenticatedState @param {Date} now */
+async function agentPlannedDayMoveApplyRoute(request, env, store, authenticatedState, now) {
+  const rawBody = await request.text();
+  return agentMutationRoute({ request, env, store, authenticatedState, now, path: "/api/agent/v1/planned-day-moves/apply", rawBody, status: 201, apply: (state) => agentApplyPlannedDayMove(state, rawBody, now) });
 }
 
 /** @param {Request} request @param {any} env @param {any} store @param {any} authenticatedState @param {Date} now */
@@ -158,7 +168,7 @@ async function agentMutationRoute({ request, env, store, authenticatedState, now
     return response;
   };
   try {
-    return store.transaction ? await store.transaction(execute, { now }) : await execute(store);
+    return store.transaction ? await store.transaction(execute, { now, initialState: authenticatedState }) : await execute(store);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "D1_CONCURRENCY_CONFLICT") {
       emitSecurityEvent(env, "mutation_conflict", now, { surface: "agent", reason: "state_concurrency" });
