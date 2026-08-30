@@ -28,7 +28,18 @@ function arrayOf(items, minItems, maxItems) {
 const targetSchema = exactObject({
   metric: { type: "string", enum: ["reps", "duration_sec"] },
   value: { type: "integer", minimum: 1 },
-});
+  distance_km: { type: "number", minimum: 0.01, maximum: 1000 },
+  heart_rate_zone: exactObject({
+    min: { type: "integer", minimum: 1, maximum: 5 },
+    max: { type: "integer", minimum: 1, maximum: 5 },
+  }),
+  incline_percent: { type: "number", minimum: 0, maximum: 40 },
+  rpe: exactObject({
+    min: { type: "integer", minimum: 1, maximum: 10 },
+    max: { type: "integer", minimum: 1, maximum: 10 },
+  }),
+  effort_cue: { type: "string", minLength: 1, maxLength: 160 },
+}, ["metric", "value"]);
 
 const resistanceSchema = nullable({
   oneOf: [

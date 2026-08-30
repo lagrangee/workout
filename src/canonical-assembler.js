@@ -97,7 +97,7 @@ function assemblePlanSet(value) {
   return {
     set_id: value.set_id,
     ordinal: requiredPositiveInteger(value.ordinal, "Plan Set ordinal"),
-    target: { metric: value.target_metric, value: Number(value.target_value) },
+    target: assembleTarget(value),
     resistance_mode: value.resistance_mode ?? null,
     resistance_kg: value.resistance_kg == null ? null : Number(value.resistance_kg),
     tempo: value.tempo ?? null,
@@ -110,7 +110,7 @@ function assemblePlanSet(value) {
  * No field in the Session snapshot is resolved from the mutable current Plan
  * or the current registry.
  *
- * @param {{ session: any, exercises?: any[], completionItems?: any[], results?: any[], intervals?: any[], notes?: any, feedback?: any[] }} rows
+ * @param {{ session: any, exercises?: any[], completionItems?: any[], results?: any[], intervals?: any[], notes?: any, feedback?: any[], externalCompletions?: any[] }} rows
  */
 export function assembleCanonicalSession(rows) {
   const exerciseRows = (rows.exercises ?? []).filter((exercise) => exercise.session_key === rows.session.session_key).sort((left, right) => left.block_ordinal - right.block_ordinal || left.exercise_ordinal - right.exercise_ordinal);
@@ -136,7 +136,7 @@ export function assembleCanonicalSession(rows) {
         set_key: item.set_id,
         set_id: item.set_id,
         ordinal: requiredPositiveInteger(item.set_ordinal, "Session Snapshot Set ordinal"),
-        target: { metric: item.target_metric, value: Number(item.target_value) },
+        target: assembleTarget(item),
         resistance_mode: item.resistance_mode ?? null,
         resistance_kg: item.resistance_kg == null ? null : Number(item.resistance_kg),
         resistance: resistanceProjection(item.resistance_mode, item.resistance_kg),
@@ -163,7 +163,7 @@ export function assembleCanonicalSession(rows) {
     set_id: item.set_id,
     set_ordinal: requiredPositiveInteger(item.set_ordinal, "Completion Item Set ordinal"),
     side: item.side,
-    target: { metric: item.target_metric, value: Number(item.target_value) },
+    target: assembleTarget(item),
     resistance_mode: item.resistance_mode ?? null,
     resistance_kg: item.resistance_kg == null ? null : Number(item.resistance_kg),
     resistance: resistanceProjection(item.resistance_mode, item.resistance_kg),
@@ -200,6 +200,12 @@ export function assembleCanonicalSession(rows) {
     note: note.note ?? null,
     skip_reason: note.skip_reason ?? null,
     exercise_feedback: (rows.feedback ?? []).filter((feedback) => feedback.session_key === rows.session.session_key).map((feedback) => ({ exercise_occurrence_key: feedback.occurrence_key, text: feedback.text })),
+    external_completions: (rows.externalCompletions ?? []).filter((completion) => completion.session_key === rows.session.session_key).map((completion) => ({
+      schema_version: Number(completion.schema_version),
+      occurrence_key: completion.occurrence_key,
+      completed_at: completion.completed_at,
+      recording_source: completion.recording_source,
+    })),
     created_at: rows.session.created_at,
     updated_at: rows.session.updated_at,
   };
@@ -229,6 +235,19 @@ export function resistanceProjection(mode, load) {
   return null;
 }
 
+/** @param {any} value */
+function assembleTarget(value) {
+  return {
+    metric: value.target_metric,
+    value: Number(value.target_value),
+    ...(value.target_distance_km == null ? {} : { distance_km: Number(value.target_distance_km) }),
+    ...(value.target_hr_zone_min == null || value.target_hr_zone_max == null ? {} : { heart_rate_zone: { min: Number(value.target_hr_zone_min), max: Number(value.target_hr_zone_max) } }),
+    ...(value.target_incline_percent == null ? {} : { incline_percent: Number(value.target_incline_percent) }),
+    ...(value.target_rpe_min == null || value.target_rpe_max == null ? {} : { rpe: { min: Number(value.target_rpe_min), max: Number(value.target_rpe_max) } }),
+    ...(value.effort_cue == null ? {} : { effort_cue: value.effort_cue }),
+  };
+}
+
 /**
  * Rebuild the Workout-owned state projections from canonical D1 rows while
  * preserving unrelated archive/authentication fields from the base record.
@@ -236,7 +255,7 @@ export function resistanceProjection(mode, load) {
  * caller can distinguish an empty canonical dataset from a missing migration.
  *
  * @param {any} base
- * @param {{ plan?: any, revisions?: any[], slots?: any[], exercises?: any[], sets?: any[], plannedDays?: any[]|null, planChanges?: any[], sessions?: any[], sessionExercises?: any[], completionItems?: any[], results?: any[], intervals?: any[], notes?: any[], feedback?: any[] }} rows
+ * @param {{ plan?: any, revisions?: any[], slots?: any[], exercises?: any[], sets?: any[], plannedDays?: any[]|null, planChanges?: any[], sessions?: any[], sessionExercises?: any[], completionItems?: any[], results?: any[], intervals?: any[], notes?: any[], feedback?: any[], externalCompletions?: any[] }} rows
  */
 export function assembleCanonicalState(base, rows) {
   const planRows = rows.revisions?.length || rows.sessions?.length || rows.plan ? rows : null;
@@ -251,6 +270,7 @@ export function assembleCanonicalState(base, rows) {
     intervals: rows.intervals,
     notes: notes.get(session.session_key),
     feedback: rows.feedback,
+    externalCompletions: rows.externalCompletions,
   }));
   const state = deepClone(base);
   state.plan_revisions = plan.revisions;

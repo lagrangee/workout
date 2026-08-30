@@ -33,6 +33,7 @@ export function buildCanonicalRebuildSql(state, options = {}) {
     `DELETE FROM session_notes WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM set_results WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM completion_items WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
+    `DELETE FROM session_external_completions WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM session_exercises WHERE session_key IN (SELECT session_key FROM sessions WHERE athlete_key = ${sql(state.athlete_key)});`,
     `DELETE FROM sessions WHERE athlete_key = ${sql(state.athlete_key)};`,
     `DELETE FROM plan_sets WHERE revision_key IN (SELECT revision_key FROM plan_revisions WHERE athlete_key = ${sql(state.athlete_key)});`,
@@ -72,6 +73,7 @@ export function buildCanonicalRebuildSql(state, options = {}) {
       const occurrenceKey = exercise.exercise_occurrence_key ?? exercise.occurrence_key;
       statements.push(`INSERT INTO session_exercises (session_key, occurrence_key, block_ordinal, block_title, exercise_ordinal, exercise_id, name_snapshot, definition_version, execution_mode, category) VALUES (${sql(session.session_key)}, ${sql(occurrenceKey)}, ${integer(blockIndex + 1)}, ${sql(block.title)}, ${integer(exerciseIndex + 1)}, ${sql(exercise.exercise_id)}, ${sql(exercise.name)}, ${integer(exercise.definition_version)}, ${sql(exercise.execution_mode)}, ${sql(exercise.category)});`);
     }));
+    for (const completion of session.external_completions ?? []) statements.push(`INSERT INTO session_external_completions (session_key, occurrence_key, schema_version, completed_at, recording_source) VALUES (${sql(session.session_key)}, ${sql(completion.occurrence_key)}, 1, ${sql(completion.completed_at)}, ${sql(completion.recording_source)});`);
     for (const item of session.snapshot.completion_items) statements.push(completionItemSql(session.session_key, item));
     const results = Array.isArray(session.set_results) && session.set_results.length > 0 ? session.set_results : (session.completion_results ?? []);
     for (const result of results) statements.push(setResultSql(session.session_key, result));
@@ -135,12 +137,12 @@ function firstPlanCreatedAt(state) { return /** @type {any[]} */ (state.plan_rev
 
 /** @param {string} revisionKey @param {string} occurrenceKey @param {any} set */
 function planSetSql(revisionKey, occurrenceKey, set) {
-  return `INSERT INTO plan_sets (revision_key, occurrence_key, set_id, ordinal, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec) VALUES (${sql(revisionKey)}, ${sql(occurrenceKey)}, ${sql(set.set_id)}, ${integer(set.ordinal)}, ${sql(set.target.metric)}, ${integer(set.target.value)}, ${sql(set.resistance_mode)}, ${numberOrNull(set.resistance_kg)}, ${sql(set.tempo)}, ${numberOrNull(set.rest_after_sec)});`;
+  return `INSERT INTO plan_sets (revision_key, occurrence_key, set_id, ordinal, target_metric, target_value, target_distance_km, target_hr_zone_min, target_hr_zone_max, target_incline_percent, target_rpe_min, target_rpe_max, effort_cue, resistance_mode, resistance_kg, tempo, rest_after_sec) VALUES (${sql(revisionKey)}, ${sql(occurrenceKey)}, ${sql(set.set_id)}, ${integer(set.ordinal)}, ${sql(set.target.metric)}, ${integer(set.target.value)}, ${numberOrNull(set.target.distance_km)}, ${numberOrNull(set.target.heart_rate_zone?.min)}, ${numberOrNull(set.target.heart_rate_zone?.max)}, ${numberOrNull(set.target.incline_percent)}, ${numberOrNull(set.target.rpe?.min)}, ${numberOrNull(set.target.rpe?.max)}, ${sql(set.target.effort_cue)}, ${sql(set.resistance_mode)}, ${numberOrNull(set.resistance_kg)}, ${sql(set.tempo)}, ${numberOrNull(set.rest_after_sec)});`;
 }
 
 /** @param {string} sessionKey @param {any} item */
 function completionItemSql(sessionKey, item) {
-  return `INSERT INTO completion_items (session_key, completion_item_key, occurrence_key, set_id, side, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec, set_ordinal) VALUES (${sql(sessionKey)}, ${sql(item.completion_item_key)}, ${sql(item.exercise_occurrence_key ?? item.occurrence_key)}, ${sql(item.set_id ?? item.set_key)}, ${sql(item.side)}, ${sql(item.target.metric)}, ${integer(item.target.value)}, ${sql(item.resistance_mode ?? item.resistance?.mode)}, ${numberOrNull(item.resistance_kg ?? item.resistance?.load_kg)}, ${sql(item.tempo)}, ${numberOrNull(item.rest_after_sec ?? item.rest_sec)}, ${numberOrNull(item.set_ordinal)});`;
+  return `INSERT INTO completion_items (session_key, completion_item_key, occurrence_key, set_id, side, target_metric, target_value, target_distance_km, target_hr_zone_min, target_hr_zone_max, target_incline_percent, target_rpe_min, target_rpe_max, effort_cue, resistance_mode, resistance_kg, tempo, rest_after_sec, set_ordinal) VALUES (${sql(sessionKey)}, ${sql(item.completion_item_key)}, ${sql(item.exercise_occurrence_key ?? item.occurrence_key)}, ${sql(item.set_id ?? item.set_key)}, ${sql(item.side)}, ${sql(item.target.metric)}, ${integer(item.target.value)}, ${numberOrNull(item.target.distance_km)}, ${numberOrNull(item.target.heart_rate_zone?.min)}, ${numberOrNull(item.target.heart_rate_zone?.max)}, ${numberOrNull(item.target.incline_percent)}, ${numberOrNull(item.target.rpe?.min)}, ${numberOrNull(item.target.rpe?.max)}, ${sql(item.target.effort_cue)}, ${sql(item.resistance_mode ?? item.resistance?.mode)}, ${numberOrNull(item.resistance_kg ?? item.resistance?.load_kg)}, ${sql(item.tempo)}, ${numberOrNull(item.rest_after_sec ?? item.rest_sec)}, ${numberOrNull(item.set_ordinal)});`;
 }
 
 /** @param {string} sessionKey @param {any} result */

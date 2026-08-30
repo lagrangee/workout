@@ -21,6 +21,7 @@ const MIGRATIONS = [
   "0011_mutation_owner.sql",
   "0012_exercise_category.sql",
   "0013_planned_days.sql",
+  "0014_endurance_prescription_external_completion.sql",
 ];
 
 function execMigrations(db) {

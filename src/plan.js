@@ -112,7 +112,9 @@ export function todayModel(state, now = new Date()) {
 export function completionFraction(session) {
   const total = session.snapshot.completion_items.length;
   if (!total) return 0;
-  const completed = session.completion_results.filter(/** @param {any} result */ (result) => result.status ? result.status === "completed" : result.completed === true).length;
+  const completedResults = new Set(session.completion_results.filter(/** @param {any} result */ (result) => result.status ? result.status === "completed" : result.completed === true).map(/** @param {any} result */ (result) => result.completion_item_key));
+  const externalOccurrences = new Set((session.external_completions ?? []).map(/** @param {any} completion */ (completion) => completion.occurrence_key));
+  const completed = session.snapshot.completion_items.filter(/** @param {any} item */ (item) => completedResults.has(item.completion_item_key) || externalOccurrences.has(item.exercise_occurrence_key ?? item.occurrence_key)).length;
   return completed / total;
 }
 
@@ -260,7 +262,8 @@ export function packagePreview(state, packageValue, now = new Date()) {
 /** @param {any} state @param {string} text @param {Date} now */
 export function validatePlanForState(state, text, now = new Date()) {
   const today = localDate(now, state.timezone);
-  const result = validatePlanPackage(text, today);
+  const currentDateIsUnstarted = !(state.sessions ?? []).some(/** @param {any} session */ (session) => session.scheduled_date === today);
+  const result = validatePlanPackage(text, today, { allowCurrentDate: currentDateIsUnstarted });
   if (!result.ok) return result;
   /** @type {any} */
   const value = result.value;

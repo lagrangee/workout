@@ -393,6 +393,63 @@ describe("TodayPage", () => {
     expect(harness.calls).toHaveLength(0);
   });
 
+  test("shows endurance requirements in minutes and marks completion without opening a timer", async () => {
+    const completedRun: SessionDetail = {
+      session_key: "session-run",
+      status: "completed",
+      scheduled_date: "2026-08-29",
+      updated_at: "2026-08-29T05:00:00.000Z",
+      completion_fraction: 1,
+      training_duration_sec: 0,
+      snapshot: {
+        schema_version: 2,
+        title: "轻松跑",
+        blocks: [{ title: "有氧", exercises: [{ exercise_occurrence_key: "easy_run_main", occurrence_key: "easy_run_main", exercise_id: "outdoor_easy_run", category: "endurance", name: "户外轻松跑", execution_mode: "none", sets: [{ set_id: "easy_run_set_1", target: { metric: "duration_sec", value: 2700, heart_rate_zone: { min: 1, max: 3 }, rpe: { min: 2, max: 4 }, effort_cue: "测试结构化有氧处方" } }] }] }],
+        completion_items: [{ completion_item_key: "run-item", exercise_occurrence_key: "easy_run_main", set_key: "easy_run_set_1", side: "none", target: { metric: "duration_sec", value: 2700, heart_rate_zone: { min: 1, max: 3 }, rpe: { min: 2, max: 4 }, effort_cue: "测试结构化有氧处方" } }],
+      },
+      completion_results: [],
+      external_completions: [{ schema_version: 1, occurrence_key: "easy_run_main", completed_at: "2026-08-29T05:00:00.000Z", recording_source: "apple_watch" }],
+      training_intervals: [],
+      session_rpe: null,
+      note: null,
+      skip_reason: null,
+      exercise_feedback: [],
+    };
+    const harness = appHarness(async (path) => {
+      if (path.endsWith("/external-completion")) return completedRun as unknown as JsonRecord;
+      throw new Error(`unexpected request: ${path}`);
+    });
+    if (!harness.app.state.today) throw new Error("expected Today fixture");
+    harness.app.state.today.entry = {
+      kind: "workout",
+      date: "2026-08-29",
+      title: "轻松跑",
+      estimated_duration_min: 45,
+      module_count: 1,
+      prescription: completedRun.snapshot,
+    };
+    const wrapper = mount(TodayPage, { props: { app: harness.app } });
+    wrappers.push(wrapper);
+    await settle();
+
+    const enduranceCard = wrapper.get('[aria-label="有氧训练要求"]');
+    expect(enduranceCard.text()).toContain("45 分钟");
+    expect(enduranceCard.text()).toContain("心率 Z1–Z3");
+    expect(enduranceCard.text()).toContain("RPE 2–4");
+    expect(enduranceCard.text()).not.toContain("2700");
+    expect(wrapper.find('[data-action="start"]').exists()).toBe(false);
+    await enduranceCard.get("select").setValue("apple_watch");
+    await enduranceCard.get('[data-action="save-external-completion"]').trigger("click");
+    await settle();
+
+    const call = harness.calls.find((candidate) => candidate.path.endsWith("/external-completion"));
+    expect(call?.options?.method).toBe("POST");
+    expect(call?.options?.headers).toEqual({ "Idempotency-Key": "component-test-1" });
+    expect(call?.options?.body).toBe(JSON.stringify({ recording_source: "apple_watch" }));
+    expect(wrapper.text()).toContain("Apple Watch 数据未导入");
+    expect(wrapper.find('[data-action="toggle-timer"]').exists()).toBe(false);
+  });
+
   test("renders an immediate pending state, blocks duplicate starts, and enters execution from the mutation response", async () => {
     const clock = componentClock();
     installSeams(clock, componentAudio());

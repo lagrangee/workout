@@ -3,7 +3,7 @@
 import { createStore } from "./store.js";
 import { addDays, base64UrlEncode, constantTimeEqual, deepClone, dateSpan, isRecord, isValidLocalDate, normalizeEmail, localDate, isValidTimezone, isValidUtcInstant, sha256Hex, trimString } from "./util.js";
 import { planModel, planUpdateWeekProjection, scheduleModel, todayModel, sessionSummary, validatePlanForState, appendPlanRevision } from "./plan.js";
-import { createSession, replaceRecord, endSession, pauseSession, resumeSession, continueOrRestart, normalizeExpiredSessions, findSession, sessionDetail } from "./session.js";
+import { createSession, replaceRecord, endSession, pauseSession, resumeSession, continueOrRestart, normalizeExpiredSessions, findSession, sessionDetail, saveExternalCompletion, undoExternalCompletion } from "./session.js";
 import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
@@ -363,6 +363,7 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (request.method === "POST" && path === "/api/private/plan-update-batches/validate") return validatePlanUpdateBatch(state, rawBody, now);
     if (request.method === "POST" && path === "/api/private/plan-update-batches/apply") return applyPlanUpdateBatch(state, rawBody, now);
     if (request.method === "POST" && path.match(/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/(start|skip)$/)) return startOrSkip(state, path, rawBody, now);
+    if (["POST", "PUT", "DELETE"].includes(request.method) && path.match(/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/exercises\/[^/]+\/external-completion$/)) return externalCompletionCommand(state, request.method, path, rawBody, now);
     if (request.method === "POST" && path === "/api/private/sessions/normalize-expired") return normalizeExpired(state, rawBody, now);
     if (request.method === "POST" && path.match(/^\/api\/private\/sessions\/[^/]+\/(end|pause|resume|continue|restart)$/)) return sessionCommand(state, path, rawBody, now);
     if (request.method === "PUT" && path.match(/^\/api\/private\/sessions\/[^/]+\/record$/)) return correctRecord(state, path, rawBody, now);
@@ -481,6 +482,26 @@ function startOrSkip(state, path, rawBody, now) {
   if (!date || !kind) return { body: errorBody("invalid_request", "Session command path is incomplete", []), status: 400, persist: false };
   const result = createSession(state, date, now, kind, reason); if (result.error) return { body: errorBody(result.error.code, result.error.message, []), status: errorStatus(result.error.code), persist: false };
   return { body: sessionDetail(result.session), status: result.replay ? 200 : 201, persist: !result.replay };
+}
+
+/** @param {any} state @param {string} method @param {string} path @param {string} rawBody @param {Date} now */
+function externalCompletionCommand(state, method, path, rawBody, now) {
+  const parts = path.split("/");
+  const date = parts.at(-4);
+  const occurrenceKey = parts.at(-2);
+  const body = parseJsonBody(rawBody);
+  if (body.error) return body;
+  if (!date || !occurrenceKey) return { body: errorBody("invalid_request", "External completion path is incomplete", []), status: 400, persist: false };
+  if (method === "DELETE") {
+    if (!isRecord(body.value) || Object.keys(body.value).length !== 0) return { body: errorBody("invalid_request", "Undo accepts an empty object", []), status: 400, persist: false };
+    const result = undoExternalCompletion(state, date, decodeURIComponent(occurrenceKey), now);
+    if (result.error) return { body: errorBody(result.error.code, result.error.message, []), status: errorStatus(result.error.code), persist: false };
+    return { body: { external_completion: null, session: result.session ? sessionDetail(result.session) : null }, status: 200, persist: !result.replay };
+  }
+  if (!isRecord(body.value) || Object.keys(body.value).length !== 1 || typeof body.value.recording_source !== "string") return { body: errorBody("invalid_request", "recording_source is required", []), status: 400, persist: false };
+  const result = saveExternalCompletion(state, date, decodeURIComponent(occurrenceKey), body.value.recording_source, now, method === "POST" ? "create" : "update");
+  if (result.error) return { body: errorBody(result.error.code, result.error.message, [],), status: errorStatus(result.error.code), persist: false };
+  return { body: sessionDetail(result.session), status: result.replay ? 200 : method === "POST" ? 201 : 200, persist: !result.replay };
 }
 
 /** @param {any} state @param {string} path @param {string} rawBody @param {Date} now */

@@ -381,9 +381,12 @@ function appendCanonicalPlanDeltaStatements(db, statements, state, mutationOwner
     FROM json_each(?1) AS revision, json_each(revision.value, '$.week') AS weekday,
       json_each(weekday.value, '$.blocks') AS block, json_each(block.value, '$.exercises') AS exercise
     WHERE json_extract(weekday.value, '$.kind') = 'workout' AND ${ownerSql}`).bind(payload, state.athlete_key, mutationOwner));
-  statements.push(db.prepare(`INSERT INTO plan_sets (revision_key, occurrence_key, set_id, ordinal, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec)
+  statements.push(db.prepare(`INSERT INTO plan_sets (revision_key, occurrence_key, set_id, ordinal, target_metric, target_value, target_distance_km, target_hr_zone_min, target_hr_zone_max, target_incline_percent, target_rpe_min, target_rpe_max, effort_cue, resistance_mode, resistance_kg, tempo, rest_after_sec)
     SELECT json_extract(revision.value, '$.revision_key'), json_extract(exercise.value, '$.occurrence_key'), json_extract(set_value.value, '$.set_id'), json_extract(set_value.value, '$.ordinal'),
-      json_extract(set_value.value, '$.target.metric'), json_extract(set_value.value, '$.target.value'), COALESCE(json_extract(set_value.value, '$.resistance_mode'), json_extract(set_value.value, '$.resistance.mode')),
+      json_extract(set_value.value, '$.target.metric'), json_extract(set_value.value, '$.target.value'), json_extract(set_value.value, '$.target.distance_km'),
+      json_extract(set_value.value, '$.target.heart_rate_zone.min'), json_extract(set_value.value, '$.target.heart_rate_zone.max'), json_extract(set_value.value, '$.target.incline_percent'),
+      json_extract(set_value.value, '$.target.rpe.min'), json_extract(set_value.value, '$.target.rpe.max'), json_extract(set_value.value, '$.target.effort_cue'),
+      COALESCE(json_extract(set_value.value, '$.resistance_mode'), json_extract(set_value.value, '$.resistance.mode')),
       COALESCE(json_extract(set_value.value, '$.resistance_kg'), json_extract(set_value.value, '$.resistance.load_kg')), json_extract(set_value.value, '$.tempo'), json_extract(set_value.value, '$.rest_after_sec')
     FROM json_each(?1) AS revision, json_each(revision.value, '$.week') AS weekday,
       json_each(weekday.value, '$.blocks') AS block, json_each(block.value, '$.exercises') AS exercise,
@@ -455,9 +458,16 @@ function appendCanonicalSessionDeltaStatements(db, statements, state, mutationOw
       CAST(block.key AS INTEGER) + 1, json_extract(block.value, '$.title'), CAST(exercise.key AS INTEGER) + 1, json_extract(exercise.value, '$.exercise_id'), json_extract(exercise.value, '$.name'), json_extract(exercise.value, '$.definition_version'), json_extract(exercise.value, '$.execution_mode'), json_extract(exercise.value, '$.category')
     FROM json_each(?1, '$.sessions') AS session, json_each(session.value, '$.snapshot.blocks') AS block, json_each(block.value, '$.exercises') AS exercise
     WHERE ${ownerSql}`).bind(payload, state.athlete_key, mutationOwner));
-  statements.push(db.prepare(`INSERT INTO completion_items (session_key, completion_item_key, occurrence_key, set_id, side, target_metric, target_value, resistance_mode, resistance_kg, tempo, rest_after_sec, set_ordinal)
+  statements.push(db.prepare(`INSERT INTO session_external_completions (session_key, occurrence_key, schema_version, completed_at, recording_source)
+    SELECT json_extract(session.value, '$.session_key'), json_extract(completion.value, '$.occurrence_key'), 1,
+      json_extract(completion.value, '$.completed_at'), json_extract(completion.value, '$.recording_source')
+    FROM json_each(?1, '$.sessions') AS session, json_each(session.value, '$.external_completions') AS completion
+    WHERE ${ownerSql}`).bind(payload, state.athlete_key, mutationOwner));
+  statements.push(db.prepare(`INSERT INTO completion_items (session_key, completion_item_key, occurrence_key, set_id, side, target_metric, target_value, target_distance_km, target_hr_zone_min, target_hr_zone_max, target_incline_percent, target_rpe_min, target_rpe_max, effort_cue, resistance_mode, resistance_kg, tempo, rest_after_sec, set_ordinal)
     SELECT json_extract(session.value, '$.session_key'), json_extract(item.value, '$.completion_item_key'), COALESCE(json_extract(item.value, '$.exercise_occurrence_key'), json_extract(item.value, '$.occurrence_key')),
       COALESCE(json_extract(item.value, '$.set_id'), json_extract(item.value, '$.set_key')), json_extract(item.value, '$.side'), json_extract(item.value, '$.target.metric'), json_extract(item.value, '$.target.value'),
+      json_extract(item.value, '$.target.distance_km'), json_extract(item.value, '$.target.heart_rate_zone.min'), json_extract(item.value, '$.target.heart_rate_zone.max'), json_extract(item.value, '$.target.incline_percent'),
+      json_extract(item.value, '$.target.rpe.min'), json_extract(item.value, '$.target.rpe.max'), json_extract(item.value, '$.target.effort_cue'),
       COALESCE(json_extract(item.value, '$.resistance_mode'), json_extract(item.value, '$.resistance.mode')), COALESCE(json_extract(item.value, '$.resistance_kg'), json_extract(item.value, '$.resistance.load_kg')),
       json_extract(item.value, '$.tempo'), json_extract(item.value, '$.rest_after_sec'),
       COALESCE(json_extract(item.value, '$.set_ordinal'), (
@@ -516,9 +526,30 @@ async function readCanonicalRows(db, athleteKey) {
     sessionExercises: await allRows(db, "SELECT se.* FROM session_exercises AS se JOIN sessions AS s ON s.session_key = se.session_key WHERE s.athlete_key = ?1", [athleteKey]),
     completionItems: await allRows(db, "SELECT ci.* FROM completion_items AS ci JOIN sessions AS s ON s.session_key = ci.session_key WHERE s.athlete_key = ?1", [athleteKey]),
     results: await allRows(db, "SELECT sr.* FROM set_results AS sr JOIN sessions AS s ON s.session_key = sr.session_key WHERE s.athlete_key = ?1", [athleteKey]),
-    notes: await allRows(db, "SELECT sn.* FROM session_notes AS sn JOIN sessions AS s ON s.session_key = sn.session_key WHERE s.athlete_key = ?1", [athleteKey]),
-    feedback: await allRows(db, "SELECT ef.* FROM exercise_feedback AS ef JOIN sessions AS s ON s.session_key = ef.session_key WHERE s.athlete_key = ?1", [athleteKey]),
   };
+  try {
+    const ancillary = await allRows(db, `SELECT 'note' AS row_type, sn.session_key, NULL AS occurrence_key, sn.note, sn.skip_reason, sn.session_rpe, NULL AS text, NULL AS schema_version, NULL AS completed_at, NULL AS recording_source
+      FROM session_notes AS sn JOIN sessions AS s ON s.session_key = sn.session_key WHERE s.athlete_key = ?1
+      UNION ALL
+      SELECT 'feedback', ef.session_key, ef.occurrence_key, NULL, NULL, NULL, ef.text, NULL, NULL, NULL
+      FROM exercise_feedback AS ef JOIN sessions AS s ON s.session_key = ef.session_key WHERE s.athlete_key = ?1
+      UNION ALL
+      SELECT 'external', ec.session_key, ec.occurrence_key, NULL, NULL, NULL, NULL, ec.schema_version, ec.completed_at, ec.recording_source
+      FROM session_external_completions AS ec JOIN sessions AS s ON s.session_key = ec.session_key WHERE s.athlete_key = ?1`, [athleteKey]);
+    rows.notes = ancillary.filter((/** @type {any} */ row) => row.row_type === "note");
+    rows.feedback = ancillary.filter((/** @type {any} */ row) => row.row_type === "feedback");
+    rows.externalCompletions = ancillary.filter((/** @type {any} */ row) => row.row_type === "external");
+  } catch (error) {
+    if (!/no such table|no such column|does not exist/i.test(String((/** @type {{ message?: unknown }} */ (error))?.message))) throw error;
+    const ancillary = await allRows(db, `SELECT 'note' AS row_type, sn.session_key, NULL AS occurrence_key, sn.note, sn.skip_reason, sn.session_rpe, NULL AS text
+      FROM session_notes AS sn JOIN sessions AS s ON s.session_key = sn.session_key WHERE s.athlete_key = ?1
+      UNION ALL
+      SELECT 'feedback', ef.session_key, ef.occurrence_key, NULL, NULL, NULL, ef.text
+      FROM exercise_feedback AS ef JOIN sessions AS s ON s.session_key = ef.session_key WHERE s.athlete_key = ?1`, [athleteKey]);
+    rows.notes = ancillary.filter((/** @type {any} */ row) => row.row_type === "note");
+    rows.feedback = ancillary.filter((/** @type {any} */ row) => row.row_type === "feedback");
+    rows.externalCompletions = [];
+  }
   try {
     const datedPlanRows = await allRows(db, `SELECT 'day' AS row_type, planned_date AS sort_key, planned_date, kind,
         prescription_revision_key, prescription_weekday, change_key, version, moved_from_date, moved_to_date,

@@ -93,6 +93,24 @@ test("private Plan Update Batch validates four full weeks without mutation and a
   assert.equal((await store.getByEmail(before.email)).plan_revisions.length, before.plan_revisions.length + 4);
 });
 
+test("batch may begin on the current Monday only before today's Session exists", async () => {
+  const monday = "2030-01-07";
+  const { handler } = appFixture({ today: monday });
+  const value = batch(2);
+  value.updates[0].effective_from = monday;
+  value.updates[1].effective_from = addDays(monday, 7);
+  const batchText = JSON.stringify(value);
+  const accepted = await privatePost(handler, "/api/private/plan-update-batches/validate", { batch_text: batchText });
+  assert.equal(accepted.response.status, 200);
+
+  const started = await call(handler, `/api/private/scheduled-workouts/${monday}/start`, { method: "POST", headers: { "Idempotency-Key": "batch-same-day-guard" }, body: "{}" });
+  assert.equal(started.response.status, 201);
+  const rejected = await privatePost(handler, "/api/private/plan-update-batches/validate", { batch_text: batchText });
+  assert.equal(rejected.response.status, 400);
+  assert.equal(rejected.body.error.code, "invalid_plan_batch");
+  assert.equal(rejected.body.error.details.some((detail) => detail.path === "/updates/0/effective_from"), true);
+});
+
 test("batch rejects non-consecutive weeks and an invalid member without writing any revision", async () => {
   const { handler, store } = appFixture();
   const before = await store.getByEmail("athlete-a@example.invalid");

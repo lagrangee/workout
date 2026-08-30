@@ -51,9 +51,10 @@ import type {
   SnapshotSet,
   TargetValue,
   TrainingInterval,
+  ExternalRecordingSource,
 } from "./session-types";
 
-type MutationAction = "start" | "continue" | "restart" | "complete" | "pause" | "resume";
+type MutationAction = "start" | "continue" | "restart" | "complete" | "pause" | "resume" | "complete-external" | "update-external" | "undo-external";
 type PauseReason = "manual" | "visibility" | "wake-lock" | "navigation" | "pagehide" | "end-form" | string;
 type TimedPhase = "idle" | "preparing" | "active" | "complete";
 type SessionMode = "overview" | "execution" | "correction";
@@ -211,7 +212,10 @@ export type SessionIntent =
   | { type: "draft-correction-feedback"; key: string; value: string }
   | { type: "draft-correction-rpe"; value: string }
   | { type: "draft-correction-note"; value: string }
-  | { type: "draft-correction-skip-reason"; value: string };
+  | { type: "draft-correction-skip-reason"; value: string }
+  | { type: "complete-external"; occurrenceKey: string; recordingSource: ExternalRecordingSource }
+  | { type: "update-external"; occurrenceKey: string; recordingSource: ExternalRecordingSource }
+  | { type: "undo-external"; occurrenceKey: string };
 
 export const mutationPendingLabels: Record<MutationAction, string> = {
   start: "正在开始训练…",
@@ -220,6 +224,9 @@ export const mutationPendingLabels: Record<MutationAction, string> = {
   complete: "正在保存…",
   pause: "正在暂停…",
   resume: "正在继续…",
+  "complete-external": "正在标记完成…",
+  "update-external": "正在更新记录来源…",
+  "undo-external": "正在撤销…",
 };
 
 export const rpeMeanings = [
@@ -486,7 +493,11 @@ export function useSessionExecution(
     const candidate = app.state.today?.entry;
     return isTodayEntryView(candidate) ? candidate : null;
   });
-  const items = computed<DisplayCompletionItem[]>(() => state.detail ? displayCompletionItems(state.detail) : []);
+  const items = computed<DisplayCompletionItem[]>(() => {
+    if (!state.detail) return [];
+    const enduranceOccurrences = new Set((state.detail.snapshot.blocks ?? []).flatMap((block) => block.exercises ?? []).filter((exercise) => exercise.category === "endurance").map((exercise) => exercise.exercise_occurrence_key ?? exercise.occurrence_key));
+    return displayCompletionItems(state.detail).filter((item) => !enduranceOccurrences.has(item.exercise_occurrence_key));
+  });
   const focusedItem = computed<DisplayCompletionItem | null>(() => items.value[state.focusIndex] ?? items.value[0] ?? null);
   const focusedContext = computed(() => itemContext(state.detail, focusedItem.value));
   const focusedResult = computed<SessionCompletionResult | null>(() => resultForDisplay(state.detail, focusedItem.value));
@@ -1601,6 +1612,34 @@ export function useSessionExecution(
     state.mode = "overview";
   }
 
+  async function mutateExternalCompletion(intent: Extract<SessionIntent, { type: "complete-external" | "update-external" | "undo-external" }>): Promise<void> {
+    if (!app.state.today || !beginMutation(intent.type)) return;
+    const path = `/api/private/scheduled-workouts/${app.state.today.date}/exercises/${encodeURIComponent(intent.occurrenceKey)}/external-completion`;
+    try {
+      if (intent.type === "undo-external") {
+        const result = await app.api.request<{ session: SessionDetail | null }>(path, { method: "DELETE", body: "{}" });
+        if (result.session) syncDetail(result.session);
+        else {
+          state.detail = null;
+          app.state.session = null;
+          if (app.state.today) app.state.today.session = null;
+        }
+      } else {
+        const detail = await app.api.request<SessionDetail>(path, {
+          method: intent.type === "complete-external" ? "POST" : "PUT",
+          headers: intent.type === "complete-external" ? { "Idempotency-Key": app.api.idempotencyKey() } : undefined,
+          body: JSON.stringify({ recording_source: intent.recordingSource }),
+        });
+        syncDetail(detail);
+        state.mode = "overview";
+      }
+      clearMutation();
+      await app.refresh();
+    } catch (error: unknown) {
+      failMutation(intent.type, error);
+    }
+  }
+
   async function resumeTerminalSession(command: "continue" | "restart"): Promise<void> {
     const current = summary.value;
     if (!current) return app.refresh();
@@ -2407,6 +2446,9 @@ export function useSessionExecution(
         case "edit-session": beginCorrection(); break;
         case "cancel-correction": state.mode = "overview"; break;
         case "save-correction": await saveCorrection(); break;
+        case "complete-external": await mutateExternalCompletion(intent); break;
+        case "update-external": await mutateExternalCompletion(intent); break;
+        case "undo-external": await mutateExternalCompletion(intent); break;
         case "draft-actual": writeExecutionDraft("actual", intent.key, intent.value); break;
         case "draft-weight": writeExecutionDraft("resistance", intent.key, intent.value); break;
         case "draft-rir": writeExecutionDraft("rir", intent.key, intent.value); break;

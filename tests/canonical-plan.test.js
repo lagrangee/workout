@@ -60,7 +60,7 @@ function routeRecordingPackage() {
         occurrence_key: "chicken_line_trail",
         exercise_id: "trail_run_hike",
         execution_mode: "none",
-        sets: [{ set_id: "chicken_line_1", ordinal: 1, target: { metric: "duration_sec", value: 9000 }, resistance: { mode: "bodyweight" }, tempo: null, rest_after_sec: null }],
+        sets: [{ set_id: "chicken_line_1", ordinal: 1, target: { metric: "duration_sec", value: 9000, distance_km: 12.5, heart_rate_zone: { min: 1, max: 3 }, rpe: { min: 2, max: 4 }, effort_cue: "测试结构化有氧处方" }, resistance: { mode: "bodyweight" }, tempo: null, rest_after_sec: null }],
       }],
     }],
   };
@@ -100,6 +100,7 @@ test("canonical Plan Update accepts an explicit COROS route recording intent", a
     sport_type: 102,
     route_key: "香山鸡腿线",
   });
+  assert.deepEqual(result.body.preview.week.monday.blocks[0].exercises[0].sets[0].target, routeRecordingPackage().week.monday.blocks[0].exercises[0].sets[0].target);
 });
 
 test("canonical Plan Update writes an immutable Athlete-owned revision and reads the same prescription", async () => {
@@ -169,6 +170,7 @@ test("canonical Plan Update rejects ranges, unknown IDs, unsupported modes, and 
     ["unknown exercise", (value) => { value.week.monday.blocks[0].exercises[0].exercise_id = "not_in_registry"; }],
     ["unsupported mode", (value) => { value.week.monday.blocks[0].exercises[0].execution_mode = "bilateral"; }],
     ["invalid tempo", (value) => { value.week.monday.blocks[0].exercises[0].sets[0].tempo = "3-1-1"; }],
+    ["endurance requirements on strength", (value) => { value.week.monday.blocks[0].exercises[0].sets[0].target.heart_rate_zone = { min: 2, max: 2 }; }],
     ["recording intent without a compatible route exercise", (value) => { value.week.monday.recording_intent = { schema_version: 1, source: "coros", sport_type: 102, route_key: "香山鸡腿线" }; }],
   ];
   for (const [label, mutate] of cases) {

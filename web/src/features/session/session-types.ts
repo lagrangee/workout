@@ -19,6 +19,11 @@ export type ResistanceMode =
 export interface TargetValue {
   metric: string;
   value?: number;
+  distance_km?: number;
+  heart_rate_zone?: { min: number; max: number };
+  incline_percent?: number;
+  rpe?: { min: number; max: number };
+  effort_cue?: string;
   min?: number;
   max?: number;
   target_rir?: number | null;
@@ -87,6 +92,7 @@ export interface SnapshotExercise {
   occurrence_key?: string;
   exercise_key?: string;
   exercise_id?: string;
+  category?: "strength" | "endurance" | "mobility" | "recovery";
   name?: string;
   execution_mode?: ExecutionMode;
   side_mode?: "none" | "left_right";
@@ -171,11 +177,21 @@ export interface SessionDetail extends Record<string, unknown> {
   note: string | null;
   skip_reason: string | null;
   exercise_feedback: ExerciseFeedback[];
+  external_completions?: ExternalCompletion[];
   scheduled_date?: string;
   title?: string;
   updated_at?: string;
   completion_fraction?: number;
   training_duration_sec?: number;
+}
+
+export type ExternalRecordingSource = "coros" | "apple_watch" | "none";
+
+export interface ExternalCompletion {
+  schema_version: 1;
+  occurrence_key: string;
+  completed_at: string;
+  recording_source: ExternalRecordingSource;
 }
 
 export interface ItemContext {

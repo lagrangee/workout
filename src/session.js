@@ -35,10 +35,22 @@ export function createSession(state, date, now, kind, skipReason = null) {
     if ((kind === "start" && existing.status === "in_progress") || (kind === "skip" && existing.status === "skipped")) return { session: existing, replay: true };
     return { error: { code: "session_state_conflict", message: "A different action cannot be applied to this Session" } };
   }
+  const { slot } = resolveSlot(state, date);
+  if (kind === "start" && slot.blocks.flatMap(/** @param {any} block */ (block) => block.exercises).every(/** @param {any} exercise */ (exercise) => exercise.category === "endurance")) {
+    return { error: { code: "session_execution_not_required", message: "Endurance-only workouts are completed externally and do not use the Workout timer" } };
+  }
+  const session = buildSession(state, date, now, kind === "skip" ? "skipped" : "in_progress", skipReason);
+  if (kind === "start") session.training_intervals.push({ interval_key: opaqueKey("ti"), started_at: now.toISOString(), ended_at: null });
+  state.sessions.push(session);
+  state.training_version += 1;
+  return { session };
+}
+
+/** @param {any} state @param {string} date @param {Date} now @param {string} status @param {string|null} skipReason */
+function buildSession(state, date, now, status, skipReason = null) {
   const { revision, slot } = resolveSlot(state, date);
-  const sessionKey = opaqueKey("sess");
-  const session = {
-    session_key: sessionKey,
+  return {
+    session_key: opaqueKey("sess"),
     plan_id: `plan_${state.athlete_key}`,
     plan_revision_key: revision.revision_key,
     scheduled_workout_key: scheduledWorkoutKey(state, date),
@@ -46,21 +58,70 @@ export function createSession(state, date, now, kind, skipReason = null) {
     local_date: date,
     timezone_at_session: state.timezone,
     title: slot.title,
-    status: kind === "skip" ? "skipped" : "in_progress",
+    status,
     snapshot: expandForSession(slot),
     completion_results: /** @type {any[]} */ ([]),
+    external_completions: /** @type {any[]} */ ([]),
     training_intervals: /** @type {any[]} */ ([]),
     session_rpe: null,
     note: null,
-    skip_reason: kind === "skip" ? skipReason : null,
+    skip_reason: status === "skipped" ? skipReason : null,
     exercise_feedback: /** @type {any[]} */ ([]),
     created_at: now.toISOString(),
     updated_at: now.toISOString(),
   };
-  if (kind === "start") session.training_intervals.push({ interval_key: opaqueKey("ti"), started_at: now.toISOString(), ended_at: null });
-  state.sessions.push(session);
+}
+
+const EXTERNAL_RECORDING_SOURCES = new Set(["coros", "apple_watch", "none"]);
+
+/**
+ * Mark one endurance Exercise occurrence complete without inventing telemetry.
+ * @param {any} state @param {string} date @param {string} occurrenceKey @param {string} recordingSource @param {Date} now @param {"create"|"update"} mode
+ */
+export function saveExternalCompletion(state, date, occurrenceKey, recordingSource, now, mode = "create") {
+  const invalid = assertTodayWorkout(state, date, now);
+  if (invalid) return { error: invalid };
+  if (!EXTERNAL_RECORDING_SOURCES.has(recordingSource)) return { error: { code: "invalid_request", message: "recording_source must be coros, apple_watch, or none" } };
+  let session = state.sessions.find(/** @param {any} item */ (item) => item.scheduled_date === date) ?? null;
+  if (session?.status === "skipped") return { error: { code: "session_state_conflict", message: "A skipped Session cannot accept an external completion" } };
+  if (!session) session = buildSession(state, date, now, "partial");
+  const exercise = session.snapshot.blocks.flatMap(/** @param {any} block */ (block) => block.exercises).find(/** @param {any} item */ (item) => (item.exercise_occurrence_key ?? item.occurrence_key) === occurrenceKey);
+  if (!exercise) return { error: { code: "not_found", message: "Exercise occurrence not found" } };
+  if (exercise.category !== "endurance") return { error: { code: "invalid_request", message: "Only endurance Exercise occurrences support external completion" } };
+  session.external_completions ??= [];
+  const existing = session.external_completions.find(/** @param {any} completion */ (completion) => completion.occurrence_key === occurrenceKey);
+  if (mode === "create" && existing) {
+    if (existing.recording_source === recordingSource) return { session, replay: true };
+    return { error: { code: "session_state_conflict", message: "The occurrence is already complete; update its recording source instead" } };
+  }
+  const completion = { schema_version: 1, occurrence_key: occurrenceKey, completed_at: now.toISOString(), recording_source: recordingSource };
+  if (existing) Object.assign(existing, completion);
+  else session.external_completions.push(completion);
+  if (!state.sessions.includes(session)) state.sessions.push(session);
+  if (session.status !== "in_progress") session.status = completionFraction(session) === 1 ? "completed" : "partial";
+  session.updated_at = now.toISOString();
   state.training_version += 1;
-  return { session };
+  return { session, replay: false };
+}
+
+/** @param {any} state @param {string} date @param {string} occurrenceKey @param {Date} now */
+export function undoExternalCompletion(state, date, occurrenceKey, now) {
+  const invalid = assertTodayWorkout(state, date, now);
+  if (invalid) return { error: invalid };
+  const session = state.sessions.find(/** @param {any} item */ (item) => item.scheduled_date === date) ?? null;
+  if (!session) return { session: null, replay: true };
+  const existing = (session.external_completions ?? []).find(/** @param {any} completion */ (completion) => completion.occurrence_key === occurrenceKey);
+  if (!existing) return { session, replay: true };
+  session.external_completions = session.external_completions.filter(/** @param {any} completion */ (completion) => completion.occurrence_key !== occurrenceKey);
+  const removable = session.external_completions.length === 0 && session.completion_results.length === 0 && session.training_intervals.length === 0 && session.exercise_feedback.length === 0 && session.session_rpe === null && session.note === null && session.skip_reason === null;
+  if (removable) state.sessions = state.sessions.filter(/** @param {any} item */ (item) => item.session_key !== session.session_key);
+  else {
+    const hasOpenInterval = session.training_intervals.some(/** @param {any} interval */ (interval) => interval.ended_at === null);
+    session.status = hasOpenInterval ? "in_progress" : completionFraction(session) === 1 ? "completed" : "partial";
+    session.updated_at = now.toISOString();
+  }
+  state.training_version += 1;
+  return { session: removable ? null : session, replay: false };
 }
 
 /** @param {any} slot */
@@ -317,6 +378,7 @@ export function sessionDetail(session) {
     set_results: session.set_results ? deepClone(session.set_results) : undefined,
     training_intervals: deepClone(session.training_intervals),
     exercise_feedback: deepClone(session.exercise_feedback),
+    external_completions: deepClone(session.external_completions ?? []),
     created_at: session.created_at,
   };
 }

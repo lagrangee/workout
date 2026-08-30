@@ -50,6 +50,7 @@ function execMigrations(db) {
     "0011_mutation_owner.sql",
     "0012_exercise_category.sql",
     "0013_planned_days.sql",
+    "0014_endurance_prescription_external_completion.sql",
   ]) db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
 
@@ -196,14 +197,17 @@ test("D1 canonical save replaces Session facts without duplicating immutable Pla
     routeRevision.created_at = "2026-08-20T00:00:00.000Z";
     routeRevision.week.wednesday.recording_intent = { schema_version: 1, source: "coros", sport_type: 102, route_key: "香山鸡腿线" };
     state.plan_revisions.push(routeRevision);
+    state.sessions[0].external_completions = [{ schema_version: 1, occurrence_key: "dead_bug_main", completed_at: "2026-08-19T12:10:00.000Z", recording_source: "coros" }];
     await store.save(state);
     const rebuilt = await store.getByEmail("a@example.invalid");
     assert.equal(db.prepare("SELECT count(*) AS count FROM sessions WHERE athlete_key = ?").get("athlete-a").count, 1);
     assert.equal(db.prepare("SELECT count(*) AS count FROM plan_revisions WHERE athlete_key = ?").get("athlete-a").count, 2);
     assert.equal(db.prepare("SELECT count(*) AS count FROM set_results WHERE session_key = ?").get("sess-a").count, 2);
+    assert.equal(db.prepare("SELECT count(*) AS count FROM session_external_completions WHERE session_key = ?").get("sess-a").count, 1);
     assert.equal(rebuilt.sessions[0].snapshot.completion_items[1].side, "right");
     assert.equal(rebuilt.plan_revisions[0].week.wednesday.blocks[0].exercises[0].sets[0].tempo, "3-1-1-0");
     assert.deepEqual(rebuilt.plan_revisions[1].week.wednesday.recording_intent, { schema_version: 1, source: "coros", sport_type: 102, route_key: "香山鸡腿线" });
+    assert.equal(rebuilt.sessions[0].external_completions[0].recording_source, "coros");
   } finally {
     db.close();
   }

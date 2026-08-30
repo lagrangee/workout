@@ -15,8 +15,8 @@ function cloneState(state) {
   return clone;
 }
 
-/** @param {string} text @param {Date} now @param {string} timezone */
-export function parsePlanUpdateBatch(text, now, timezone) {
+/** @param {string} text @param {Date} now @param {string} timezone @param {{ allowCurrentDate?: boolean }} [options] */
+export function parsePlanUpdateBatch(text, now, timezone, options = {}) {
   let input;
   try { input = parseStrictJson(text, PLAN_UPDATE_BATCH_MAX_BYTES); }
   catch { return { ok: false, errors: [{ path: "/", message: "Batch must be valid strict JSON" }] }; }
@@ -32,7 +32,7 @@ export function parsePlanUpdateBatch(text, now, timezone) {
   /** @type {{path: string, message: string}[]} */
   const errors = [];
   for (let index = 0; index < input.updates.length; index += 1) {
-    const result = /** @type {any} */ (validatePlanPackage(canonicalJson(input.updates[index]), today));
+    const result = /** @type {any} */ (validatePlanPackage(canonicalJson(input.updates[index]), today, options));
     if (!result.ok) {
       errors.push(...result.errors.map(/** @param {{path: string, message: string}} error */ (error) => ({ path: `/updates/${index}${error.path}`, message: error.message })));
       continue;
@@ -62,7 +62,8 @@ export function planUpdateBatchBaseEvidence(state, batchValue, now = new Date())
 
 /** @param {any} state @param {string} text @param {Date} now */
 export function validatePlanUpdateBatchForState(state, text, now = new Date()) {
-  const parsed = /** @type {any} */ (parsePlanUpdateBatch(text, now, state.timezone));
+  const today = localDate(now, state.timezone);
+  const parsed = /** @type {any} */ (parsePlanUpdateBatch(text, now, state.timezone, { allowCurrentDate: !(state.sessions ?? []).some(/** @param {any} session */ (session) => session.scheduled_date === today) }));
   if (!parsed.ok) return parsed;
   const simulated = cloneState(state);
   const previews = [];

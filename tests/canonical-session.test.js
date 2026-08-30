@@ -60,3 +60,68 @@ test("Session snapshot retains its own Exercise name/version after the source Pl
   const detail = await call(fixture.handler, `/api/private/sessions/${started.body.session_key}`);
   assert.deepEqual(detail.body.snapshot, before);
 });
+
+function enduranceRevision({ mixed = true } = {}) {
+  const run = {
+    occurrence_key: "easy_run_main",
+    exercise_id: "outdoor_easy_run",
+    execution_mode: "none",
+    name: "户外轻松跑",
+    definition_version: 1,
+    category: "endurance",
+    sets: [{ set_id: "easy_run_set_1", ordinal: 1, target: { metric: "duration_sec", value: 2700, heart_rate_zone: { min: 1, max: 3 }, rpe: { min: 2, max: 4 }, effort_cue: "测试结构化有氧处方" }, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: null }],
+  };
+  const core = {
+    occurrence_key: "dead_bug_main",
+    exercise_id: "dead_bug",
+    execution_mode: "alternating",
+    name: "死虫",
+    definition_version: 1,
+    category: "strength",
+    sets: [{ set_id: "dead_bug_set_1", ordinal: 1, target: { metric: "reps", value: 8 }, resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 30 }],
+  };
+  return {
+    revision_key: mixed ? "rev-endurance-mixed" : "rev-endurance-only",
+    revision_sequence: 1,
+    created_at: TEST_NOW,
+    effective_from: today,
+    week: Object.fromEntries(WEEKDAYS.map((day) => [day, day === weekdayKey(today) ? { kind: "workout", title: "轻松跑", start_time: null, estimated_duration_min: 65, blocks: [{ title: "有氧", exercises: [run] }, ...(mixed ? [{ title: "核心", exercises: [core] }] : [])] } : null])),
+  };
+}
+
+test("external endurance completion freezes the prescription without a timer and can be corrected or undone", async () => {
+  const fixture = appFixture();
+  const state = await fixture.store.getByEmail("athlete-a@example.invalid");
+  state.plan_revisions = [enduranceRevision()];
+  await fixture.store.save(state);
+  const path = `/api/private/scheduled-workouts/${today}/exercises/easy_run_main/external-completion`;
+
+  const completed = await call(fixture.handler, path, { method: "POST", headers: { "Idempotency-Key": "external-run-complete" }, body: JSON.stringify({ recording_source: "coros" }) });
+  assert.equal(completed.response.status, 201);
+  assert.equal(completed.body.status, "partial");
+  assert.equal(completed.body.training_intervals.length, 0);
+  assert.equal(completed.body.completion_results.length, 0);
+  assert.equal(completed.body.completion_fraction, 1 / 3);
+  assert.deepEqual(completed.body.snapshot.completion_items[0].target, { metric: "duration_sec", value: 2700, heart_rate_zone: { min: 1, max: 3 }, rpe: { min: 2, max: 4 }, effort_cue: "测试结构化有氧处方" });
+  assert.equal(completed.body.external_completions[0].recording_source, "coros");
+
+  const corrected = await call(fixture.handler, path, { method: "PUT", body: JSON.stringify({ recording_source: "apple_watch" }) });
+  assert.equal(corrected.response.status, 200);
+  assert.equal(corrected.body.external_completions[0].recording_source, "apple_watch");
+
+  const undone = await call(fixture.handler, path, { method: "DELETE", body: "{}" });
+  assert.equal(undone.response.status, 200);
+  assert.equal(undone.body.session, null);
+  const readback = await fixture.store.getByEmail("athlete-a@example.invalid");
+  assert.equal(readback.sessions.length, 0);
+});
+
+test("endurance-only Scheduled Workouts reject the standard timer start", async () => {
+  const fixture = appFixture();
+  const state = await fixture.store.getByEmail("athlete-a@example.invalid");
+  state.plan_revisions = [enduranceRevision({ mixed: false })];
+  await fixture.store.save(state);
+  const started = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": "no-endurance-timer" }, body: "{}" });
+  assert.equal(started.response.status, 400);
+  assert.equal(started.body.error.code, "session_execution_not_required");
+});

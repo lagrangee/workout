@@ -140,7 +140,7 @@ test("Agent plan validation reports strict errors and preserves zero-write failu
   assert.equal((await duplicateOuter.json()).error.code, "invalid_json");
 });
 
-test("Agent plan validation rejects no-op and non-future effective dates", async () => {
+test("Agent plan validation allows an unstarted same-day revision but rejects no-op, started-day, and past dates", async () => {
   const { handler, store } = appFixture();
   const token = await createAgentToken(handler);
   const state = await store.getByEmail("athlete-a@example.invalid");
@@ -160,11 +160,16 @@ test("Agent plan validation rejects no-op and non-future effective dates", async
   assert.equal(noOp.body.error.code, "invalid_plan_package");
   assert.equal(noOp.body.error.details[0].path, "/week");
 
+  const sameDay = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: packageText(today, workout("当天未开始提案")) });
+  assert.equal(sameDay.response.status, 200);
+
+  const started = await call(handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": "same-day-plan-guard" }, body: "{}" });
+  assert.equal(started.response.status, 201);
   for (const effectiveFrom of [today, addDays(today, -1)]) {
-    const past = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: packageText(effectiveFrom, workout("过期提案")) });
-    assert.equal(past.response.status, 400);
-    assert.equal(past.body.error.code, "invalid_plan_package");
-    assert.equal(past.body.error.details.some((detail) => detail.path === "/effective_from"), true);
+    const rejected = await agentPost(handler, token, "/api/agent/v1/plan-updates/validate", { package_text: packageText(effectiveFrom, workout("过期提案")) });
+    assert.equal(rejected.response.status, 400);
+    assert.equal(rejected.body.error.code, "invalid_plan_package");
+    assert.equal(rejected.body.error.details.some((detail) => detail.path === "/effective_from"), true);
   }
 
   const emptyWeek = Object.fromEntries(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((day) => [day, null]));

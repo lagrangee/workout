@@ -198,11 +198,34 @@ function canonicalKg(value, unit) {
 /** @param {any} value @param {string} path @param {string[]} errors @param {any} exercise */
 function validateCanonicalTarget(value, path, errors, exercise) {
   if (!requireObject(value, path, errors)) return null;
-  exactKeys(value, ["metric", "value"], path, errors);
+  exactKeys(value, ["metric", "value", "distance_km", "heart_rate_zone", "incline_percent", "rpe", "effort_cue"], path, errors);
   if (!CANONICAL_METRICS.includes(value.metric)) errors.push(`${path}/metric: unsupported metric`);
   if (exercise && !exercise.target.metrics.includes(value.metric)) errors.push(`${path}/metric: metric is not supported by ${exercise.exercise_id}`);
   if (!requireInteger(value.value, `${path}/value`, errors) || value.value <= 0) errors.push(`${path}/value: must be a positive integer`);
-  return { metric: value.metric, value: value.value };
+  const enduranceFields = ["distance_km", "heart_rate_zone", "incline_percent", "rpe", "effort_cue"];
+  if (exercise?.category !== "endurance" && enduranceFields.some((key) => Object.hasOwn(value, key))) errors.push(`${path}: endurance requirements are only allowed for endurance Exercises`);
+  if (Object.hasOwn(value, "distance_km") && (typeof value.distance_km !== "number" || !Number.isFinite(value.distance_km) || value.distance_km <= 0 || value.distance_km > 1000)) errors.push(`${path}/distance_km: must be a number greater than 0 and at most 1000`);
+  if (Object.hasOwn(value, "incline_percent") && (typeof value.incline_percent !== "number" || !Number.isFinite(value.incline_percent) || value.incline_percent < 0 || value.incline_percent > 40)) errors.push(`${path}/incline_percent: must be a number from 0 to 40`);
+  for (const key of ["heart_rate_zone", "rpe"]) {
+    if (!Object.hasOwn(value, key)) continue;
+    const range = value[key];
+    if (!requireObject(range, `${path}/${key}`, errors)) continue;
+    exactKeys(range, ["min", "max"], `${path}/${key}`, errors);
+    const maximum = key === "heart_rate_zone" ? 5 : 10;
+    if (!requireInteger(range.min, `${path}/${key}/min`, errors) || range.min < 1 || range.min > maximum) errors.push(`${path}/${key}/min: must be an integer from 1 to ${maximum}`);
+    if (!requireInteger(range.max, `${path}/${key}/max`, errors) || range.max < 1 || range.max > maximum) errors.push(`${path}/${key}/max: must be an integer from 1 to ${maximum}`);
+    if (Number.isInteger(range.min) && Number.isInteger(range.max) && range.min > range.max) errors.push(`${path}/${key}: min cannot exceed max`);
+  }
+  if (Object.hasOwn(value, "effort_cue") && (typeof value.effort_cue !== "string" || trimString(value.effort_cue) !== value.effort_cue || value.effort_cue.length < 1 || value.effort_cue.length > 160)) errors.push(`${path}/effort_cue: must contain 1-160 trimmed characters`);
+  return {
+    metric: value.metric,
+    value: value.value,
+    ...(Object.hasOwn(value, "distance_km") ? { distance_km: value.distance_km } : {}),
+    ...(Object.hasOwn(value, "heart_rate_zone") ? { heart_rate_zone: { min: value.heart_rate_zone?.min, max: value.heart_rate_zone?.max } } : {}),
+    ...(Object.hasOwn(value, "incline_percent") ? { incline_percent: value.incline_percent } : {}),
+    ...(Object.hasOwn(value, "rpe") ? { rpe: { min: value.rpe?.min, max: value.rpe?.max } } : {}),
+    ...(Object.hasOwn(value, "effort_cue") ? { effort_cue: value.effort_cue } : {}),
+  };
 }
 
 /** @param {any} value @param {string} path @param {string[]} errors @param {any} exercise */
@@ -312,8 +335,8 @@ function validateCanonicalSlot(value, path, errors) {
   return { kind: "workout", title: value.title, start_time: value.start_time, estimated_duration_min: value.estimated_duration_min, ...(recordingIntent ? { recording_intent: recordingIntent } : {}), blocks };
 }
 
-/** @param {any} packageValue @param {string} today */
-function validateCanonicalPlanPackageValue(packageValue, today) {
+/** @param {any} packageValue @param {string} today @param {{ allowCurrentDate?: boolean }} [options] */
+function validateCanonicalPlanPackageValue(packageValue, today, options = {}) {
   const structuralErrors = validatePlanUpdatePackageStructure(packageValue);
   if (structuralErrors.length) {
     return {
@@ -327,7 +350,7 @@ function validateCanonicalPlanPackageValue(packageValue, today) {
   exactKeys(packageValue, ["schema_version", "effective_from", "week"], "", errors);
   if (packageValue.schema_version !== 2) errors.push("/schema_version: must equal integer 2");
   if (!requireString(packageValue.effective_from, "/effective_from", errors) || !isValidLocalDate(packageValue.effective_from)) errors.push("/effective_from: must be a valid local date");
-  else if (packageValue.effective_from <= today) errors.push("/effective_from: must be later than the current local date");
+  else if (packageValue.effective_from < today || (packageValue.effective_from === today && !options.allowCurrentDate)) errors.push("/effective_from: must be later than the current local date unless today's Scheduled Workout is still unstarted");
   if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: validationErrorDetails(errors) };
   exactKeys(packageValue.week, ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], "/week", errors);
   /** @type {Record<string, any>} */
@@ -376,8 +399,8 @@ function validateSlot(value, path, errors) {
   if (completionItems > 200) errors.push(`${path}/blocks: workout may expand to at most 200 Completion Items`);
 }
 
-/** @param {string} text @param {string} today */
-export function validatePlanPackage(text, today) {
+/** @param {string} text @param {string} today @param {{ allowCurrentDate?: boolean }} [options] */
+export function validatePlanPackage(text, today, options = {}) {
   /** @type {string[]} */
   const errors = [];
   let packageValue;
@@ -387,12 +410,12 @@ export function validatePlanPackage(text, today) {
       errors: [{ path: error instanceof StrictJsonParseError ? error.path : "", message: error instanceof Error ? error.message : "Invalid JSON" }],
     };
   }
-  if (packageValue?.schema_version === 2) return validateCanonicalPlanPackageValue(packageValue, today);
+  if (packageValue?.schema_version === 2) return validateCanonicalPlanPackageValue(packageValue, today, options);
   if (!requireObject(packageValue, "", errors)) return { ok: false, errors: validationErrorDetails(errors) };
   exactKeys(packageValue, ["schema_version", "effective_from", "week"], "", errors);
   if (packageValue.schema_version !== 1) errors.push("/schema_version: must equal integer 1");
   if (!requireString(packageValue.effective_from, "/effective_from", errors) || !isValidLocalDate(packageValue.effective_from)) errors.push("/effective_from: must be a valid local date");
-  else if (packageValue.effective_from <= today) errors.push("/effective_from: must be later than the current local date");
+  else if (packageValue.effective_from < today || (packageValue.effective_from === today && !options.allowCurrentDate)) errors.push("/effective_from: must be later than the current local date unless today's Scheduled Workout is still unstarted");
   if (!requireObject(packageValue.week, "/week", errors)) return { ok: false, errors: validationErrorDetails(errors) };
   exactKeys(packageValue.week, ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], "/week", errors);
   for (const weekday of ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]) {

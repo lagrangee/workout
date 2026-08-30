@@ -12,6 +12,7 @@ const mutationOwnerMigration = readFileSync(new URL("../migrations/0011_mutation
 const canonicalSessionMigration = readFileSync(new URL("../migrations/0007_canonical_session_records.sql", import.meta.url), "utf8");
 const exerciseCategoryMigration = readFileSync(new URL("../migrations/0012_exercise_category.sql", import.meta.url), "utf8");
 const plannedDaysMigration = readFileSync(new URL("../migrations/0013_planned_days.sql", import.meta.url), "utf8");
+const endurancePrescriptionMigration = readFileSync(new URL("../migrations/0014_endurance_prescription_external_completion.sql", import.meta.url), "utf8");
 const exerciseRegistry = JSON.parse(readFileSync(new URL("../config/exercises.json", import.meta.url), "utf8"));
 
 test("ticket 24 migration restores an idempotent per-Athlete date guard", () => {
@@ -114,8 +115,8 @@ function createCategoryMigrationDatabase(exerciseIds) {
   return db;
 }
 
-test("Exercise category migration backfills all 26 pinned IDs and requires future frozen values", () => {
-  const expected = new Map(exerciseRegistry.exercises.map((exercise) => [exercise.exercise_id, exercise.category]));
+test("Exercise category migration backfills its 26 historical pinned IDs and requires future frozen values", () => {
+  const expected = new Map(exerciseRegistry.exercises.filter((exercise) => exercise.exercise_id !== "stability_ball_hamstring_curl").map((exercise) => [exercise.exercise_id, exercise.category]));
   assert.equal(expected.size, 26);
   const db = createCategoryMigrationDatabase([...expected.keys()]);
   try {
@@ -170,6 +171,24 @@ test("Planned Day migration materializes finite dated windows and lets the later
     assert.equal(db.prepare("SELECT change_key FROM planned_days WHERE athlete_key = ? AND planned_date = ?").get("athlete-a", "2026-09-01").change_key, "legacy_revision-b");
     assert.equal(db.prepare("SELECT count(*) AS count FROM planned_days WHERE athlete_key = ? AND planned_date = ?").get("athlete-a", "2026-09-08").count, 0);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally {
+    db.close();
+  }
+});
+
+test("endurance prescription migration adds structured targets and constrained external completions", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(initialMigration);
+    db.exec(canonicalPlanMigration);
+    db.exec(canonicalSessionMigration);
+    db.exec(endurancePrescriptionMigration);
+    const planColumns = new Set(db.prepare("PRAGMA table_info('plan_sets')").all().map((column) => column.name));
+    assert.equal(planColumns.has("target_hr_zone_min"), true);
+    assert.equal(planColumns.has("target_incline_percent"), true);
+    assert.equal(planColumns.has("effort_cue"), true);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_external_completions'").get().name, "session_external_completions");
   } finally {
     db.close();
   }

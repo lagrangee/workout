@@ -133,6 +133,7 @@ function validateSessionDetail(path: string, value: JsonRecord): void {
     || !Array.isArray(value.completion_results)
     || !Array.isArray(value.training_intervals)
     || !Array.isArray(value.exercise_feedback)
+    || !(value.external_completions === undefined || Array.isArray(value.external_completions))
     || !isNonEmptyString(value.timezone_at_session)
     || !isNonEmptyString(value.created_at)
     || !hasOwn(value, "note")
@@ -141,6 +142,10 @@ function validateSessionDetail(path: string, value: JsonRecord): void {
     || !(value.skip_reason === null || typeof value.skip_reason === "string")) {
     protocolFailure(path, "session detail is missing required fields");
   }
+}
+
+function isExternalCompletionPath(pathname: string): boolean {
+  return /^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/exercises\/[^/]+\/external-completion$/.test(pathname);
 }
 
 function validateToday(path: string, value: JsonRecord): void {
@@ -215,6 +220,13 @@ export function validateWorkoutJsonResponse(path: string, value: unknown): JsonR
   if (hasOwn(value, "error")) protocolFailure(path, "successful response contains an error envelope");
 
   const pathname = responsePath(path);
+  if (isExternalCompletionPath(pathname)) {
+    if (hasOwn(value, "session")) {
+      if (!(value.session === null || isRecord(value.session)) || value.external_completion !== null) protocolFailure(path, "external completion undo response is malformed");
+      if (isRecord(value.session)) validateSessionDetail(path, value.session);
+    } else validateSessionDetail(path, value);
+    return value;
+  }
   if (pathname === "/api/private/me") validateMe(path, value);
   else if (pathname === "/api/private/today") validateToday(path, value);
   else if (pathname === "/api/private/plan") validatePlan(path, value);

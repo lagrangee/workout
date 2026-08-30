@@ -6,6 +6,7 @@ Start with the documents that describe the product and its stable boundaries:
 - [Architecture and authority boundaries](architecture.md)
 - [Domain model](domain-model.md)
 - [Design system](design-system.md)
+- [Endurance prescription and external completion spec](specs/endurance-prescription-and-external-completion.md)
 
 For operating or extending Workout Tracker:
 

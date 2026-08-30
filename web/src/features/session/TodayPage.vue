@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, reactive } from "vue";
 
 import type { WorkoutAppStore } from "../../core/contracts";
 import { canonicalSetResistance } from "./session-model";
@@ -9,6 +9,9 @@ import type {
   ResistanceValue,
   SessionCompletionResult,
   SnapshotExercise,
+  TargetValue,
+  ExternalCompletion,
+  ExternalRecordingSource,
 } from "./session-types";
 import {
   mutationPendingLabels,
@@ -26,6 +29,7 @@ const emit = defineEmits<{
 
 const session = useSessionExecution(props.app, (focused) => emit("execution-focus-change", focused));
 const view = session.view;
+const externalSourceDrafts = reactive<Record<string, ExternalRecordingSource>>({});
 
 function send(intent: SessionIntent): void {
   void session.dispatch(intent);
@@ -68,6 +72,56 @@ function recordingStatus(entry: TodayEntryView): "recorded" | "needs_link" | "aw
 function showAerobicDate(): void {
   const date = String(view.entry?.date ?? view.today?.date ?? "");
   if (date) emit("show-aerobic", date);
+}
+
+function occurrenceKey(exercise: SnapshotExercise): string {
+  return String(exercise.exercise_occurrence_key ?? exercise.occurrence_key ?? "");
+}
+
+const prescriptionExercises = computed<SnapshotExercise[]>(() => (view.entry?.prescription?.blocks ?? []).flatMap((block) => block.exercises ?? []));
+const enduranceExercises = computed<SnapshotExercise[]>(() => {
+  const detailExercises = (view.detail?.snapshot?.blocks ?? []).flatMap((block) => block.exercises ?? []);
+  return (detailExercises.length ? detailExercises : prescriptionExercises.value).filter((exercise) => exercise.category === "endurance");
+});
+const hasStandardExecution = computed(() => prescriptionExercises.value.some((exercise) => exercise.category !== "endurance"));
+
+function externalCompletion(exercise: SnapshotExercise): ExternalCompletion | null {
+  const key = occurrenceKey(exercise);
+  return view.detail?.external_completions?.find((completion) => completion.occurrence_key === key) ?? null;
+}
+
+function externalSource(exercise: SnapshotExercise): ExternalRecordingSource {
+  const key = occurrenceKey(exercise);
+  return externalSourceDrafts[key] ?? externalCompletion(exercise)?.recording_source ?? "coros";
+}
+
+function setExternalSource(exercise: SnapshotExercise, event: Event): void {
+  externalSourceDrafts[occurrenceKey(exercise)] = (event.target as HTMLSelectElement).value as ExternalRecordingSource;
+}
+
+function saveExternal(exercise: SnapshotExercise): void {
+  const key = occurrenceKey(exercise);
+  send({ type: externalCompletion(exercise) ? "update-external" : "complete-external", occurrenceKey: key, recordingSource: externalSource(exercise) });
+}
+
+function undoExternal(exercise: SnapshotExercise): void {
+  send({ type: "undo-external", occurrenceKey: occurrenceKey(exercise) });
+}
+
+function sourceLabel(source: ExternalRecordingSource): string {
+  return source === "coros" ? "COROS" : source === "apple_watch" ? "Apple Watch" : "无设备";
+}
+
+function enduranceRequirement(target: TargetValue | undefined): string {
+  if (!target) return "按计划完成";
+  const parts: string[] = [];
+  if (target.metric === "duration_sec" && target.value != null) parts.push(`${Math.round(target.value / 60)} 分钟`);
+  if (target.distance_km != null) parts.push(`${target.distance_km} 公里`);
+  if (target.heart_rate_zone) parts.push(target.heart_rate_zone.min === target.heart_rate_zone.max ? `心率 Z${target.heart_rate_zone.min}` : `心率 Z${target.heart_rate_zone.min}–Z${target.heart_rate_zone.max}`);
+  if (target.incline_percent != null) parts.push(`跑步机坡度 ${target.incline_percent}%`);
+  if (target.rpe) parts.push(target.rpe.min === target.rpe.max ? `RPE ${target.rpe.min}` : `RPE ${target.rpe.min}–${target.rpe.max}`);
+  if (target.effort_cue) parts.push(target.effort_cue);
+  return parts.join(" · ") || view.formatTarget(target);
 }
 
 const focusPrescription = computed(() => {
@@ -138,6 +192,33 @@ defineExpose({ ensurePaused, executionFocused });
   <div v-if="view.state.navigationPauseError" class="mutation-feedback is-error" role="alert">
     <strong>{{ view.state.navigationPauseError }}</strong><span>当前页面会保留；确认暂停后再离开。</span>
   </div>
+  <section v-if="view.entry?.kind === 'workout' && enduranceExercises.length && view.state.mode === 'overview'" class="today-page endurance-prescription" aria-label="有氧训练要求">
+    <div class="today-content">
+      <article v-for="exercise in enduranceExercises" :key="occurrenceKey(exercise)" class="quiet-card endurance-prescription-card">
+        <p class="eyebrow">有氧训练要求</p>
+        <h2>{{ exercise.name }}</h2>
+        <p class="endurance-requirement">{{ enduranceRequirement(exercise.sets?.[0]?.target) }}</p>
+        <p class="muted">使用手表记录；Workout 不做倒计时，也不会虚构实际时长、距离或心率。</p>
+        <div v-if="view.entry.recording_intent" class="calendar-recording-guide">
+          <strong>COROS 路线证据</strong><span class="status-pill" :class="recordingStatus(view.entry) === 'recorded' ? 'recorded' : recordingStatus(view.entry) === 'needs_link' ? 'partial' : ''">{{ recordingStatus(view.entry) === "recorded" ? "已记录" : recordingStatus(view.entry) === "needs_link" ? "待关联" : "待同步" }}</span>
+        </div>
+        <label>记录来源
+          <select :value="externalSource(exercise)" :disabled="view.state.mutation.pending" @change="setExternalSource(exercise, $event)">
+            <option value="coros">COROS</option>
+            <option value="apple_watch">Apple Watch</option>
+            <option value="none">无</option>
+          </select>
+        </label>
+        <p v-if="externalSource(exercise) === 'apple_watch'" class="muted">仅记录完成来源；Apple Watch 数据未导入。</p>
+        <p v-if="externalCompletion(exercise)" class="muted">已标记完成 · {{ sourceLabel(externalCompletion(exercise)?.recording_source ?? "none") }}</p>
+        <div class="hero-actions">
+          <button class="primary" data-action="save-external-completion" :disabled="view.state.mutation.pending" @click="saveExternal(exercise)">{{ externalCompletion(exercise) ? mutationLabel("update-external", "更新来源") : mutationLabel("complete-external", "标记完成") }}</button>
+          <button v-if="externalCompletion(exercise)" class="secondary" data-action="undo-external-completion" :disabled="view.state.mutation.pending" @click="undoExternal(exercise)">{{ mutationLabel("undo-external", "撤销完成") }}</button>
+        </div>
+        <div v-if="view.state.mutation.error && ['complete-external', 'update-external', 'undo-external'].includes(String(view.state.mutation.action))" class="mutation-feedback is-error" role="alert"><strong>{{ view.state.mutation.error }}</strong><span>可以直接重试。</span></div>
+      </article>
+    </div>
+  </section>
   <section v-if="!view.entry || view.entry.kind === 'no_plan'" class="today-page">
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
@@ -156,7 +237,7 @@ defineExpose({ ensurePaused, executionFocused });
     </div>
   </section>
 
-  <section v-else-if="!view.summary && view.entry.recording_intent" class="today-page">
+  <section v-else-if="!view.summary && view.entry.recording_intent && !enduranceExercises.length" class="today-page">
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
       <h1>{{ view.entry.title }}</h1>
@@ -198,6 +279,7 @@ defineExpose({ ensurePaused, executionFocused });
       <p class="muted">约 {{ view.entry.estimated_duration_min }} 分钟</p>
       <div class="hero-actions">
         <button
+          v-if="hasStandardExecution"
           class="primary"
           data-action="start"
           :disabled="view.state.mutation.pending"
@@ -227,8 +309,8 @@ defineExpose({ ensurePaused, executionFocused });
                 <strong>{{ exercise.name }}</strong><span class="prescription-execution">{{ view.exerciseExecutionModeLabel(exercise) }}</span>
               </div>
               <div v-for="(set, index) in exercise.sets || []" :key="set.set_id || set.set_key || index" class="prescription-set">
-                <span>第 {{ Number(index) + 1 }} 组 · {{ view.formatTarget(set.target) }}</span>
-                <span>{{ view.formatResistance(set.resistance ?? canonicalSetResistance(set)) }}<template v-if="view.formatTempo(set.tempo)"> · 节奏 {{ view.formatTempo(set.tempo) }}</template><template v-if="set.rest_after_sec != null"> · 休息 {{ set.rest_after_sec }} 秒</template></span>
+                <span>{{ exercise.category === "endurance" ? enduranceRequirement(set.target) : `第 ${Number(index) + 1} 组 · ${view.formatTarget(set.target)}` }}</span>
+                <span v-if="exercise.category !== 'endurance'">{{ view.formatResistance(set.resistance ?? canonicalSetResistance(set)) }}<template v-if="view.formatTempo(set.tempo)"> · 节奏 {{ view.formatTempo(set.tempo) }}</template><template v-if="set.rest_after_sec != null"> · 休息 {{ set.rest_after_sec }} 秒</template></span>
               </div>
             </div>
           </article>
@@ -298,7 +380,7 @@ defineExpose({ ensurePaused, executionFocused });
           <p class="muted">{{ view.entry.title }} · 训练日期保持不变。留空的项目会被视为未完成。</p>
         </section>
         <section class="list-card">
-          <label v-for="(item, index) in view.detail.snapshot.completion_items || []" :key="item.completion_item_key">
+        <label v-for="(item, index) in view.items" :key="item.completion_item_key">
             {{ index + 1 }}. {{ view.itemLabel(view.detail, item) }}
             <input
               :id="`correction-value-${item.completion_item_key}`"

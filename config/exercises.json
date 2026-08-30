@@ -41,6 +41,19 @@
       "capabilities": {}
     },
     {
+      "exercise_id": "stability_ball_hamstring_curl",
+      "slug": "stability-ball-hamstring-curl",
+      "name": "瑜伽球腿弯举",
+      "definition_version": 1,
+      "status": "active",
+      "category": "strength",
+      "execution": { "side_modes": ["bilateral"] },
+      "target": { "metrics": ["reps"] },
+      "resistance": { "modes": ["bodyweight"], "units": [] },
+      "equipment": { "required": ["stability_ball"], "optional": [] },
+      "capabilities": {}
+    },
+    {
       "exercise_id": "straight_knee_single_leg_calf_raise",
       "slug": "straight-knee-single-leg-calf-raise",
       "name": "平地直膝单腿提踵",

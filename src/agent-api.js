@@ -143,7 +143,8 @@ export async function agentApplyPlanUpdate(state, rawBody, now) {
   if (!isRecord(body) || Object.keys(body).length !== 4 || typeof body.package_text !== "string" || !isSha256(body.package_digest) || !isSha256(body.base_plan_digest) || body.confirmed !== true) {
     return { error: { code: body?.confirmed !== true ? "confirmation_required" : "invalid_request", message: body?.confirmed !== true ? "confirmed must be true" : "package_text, package_digest, base_plan_digest, and confirmed are required" } };
   }
-  const packageResult = validatePlanPackage(body.package_text, localDate(now, state.timezone));
+  const today = localDate(now, state.timezone);
+  const packageResult = validatePlanPackage(body.package_text, today, { allowCurrentDate: !(state.sessions ?? []).some((session) => session.scheduled_date === today) });
   if (!packageResult.ok) return { error: { code: "invalid_plan_package", message: "The plan package needs repair", details: "errors" in packageResult ? packageResult.errors : [] } };
   const packageDigest = await sha256Hex(canonicalJson(packageResult.value));
   if (packageDigest !== body.package_digest) return { error: { code: "package_digest_mismatch", message: "package_digest does not match package_text" } };
@@ -250,7 +251,8 @@ export async function agentApplyPlanUpdateBatch(state, rawBody, now) {
   if (!isRecord(body) || Object.keys(body).length !== 4 || typeof body.batch_text !== "string" || !isSha256(body.batch_digest) || !isSha256(body.base_plan_digest) || body.confirmed !== true) {
     return { error: { code: body?.confirmed !== true ? "confirmation_required" : "invalid_request", message: body?.confirmed !== true ? "confirmed must be true" : "batch_text, batch_digest, base_plan_digest, and confirmed are required" } };
   }
-  const batchResult = parsePlanUpdateBatch(body.batch_text, now, state.timezone);
+  const today = localDate(now, state.timezone);
+  const batchResult = parsePlanUpdateBatch(body.batch_text, now, state.timezone, { allowCurrentDate: !(state.sessions ?? []).some((session) => session.scheduled_date === today) });
   if (!batchResult.ok) return { error: { code: "invalid_plan_batch", message: "The plan update batch needs repair", details: batchResult.errors } };
   const evidence = await planUpdateBatchDigests(state, batchResult.value, now);
   if (evidence.batch_digest !== body.batch_digest) return { error: { code: "package_digest_mismatch", message: "batch_digest does not match batch_text" } };
