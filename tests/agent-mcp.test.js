@@ -277,6 +277,26 @@ test("workout MCP validates and atomically applies a typed four-week batch with 
   assert.equal(requests[3].url, "https://workout.example/api/agent/v1/schedule?from=2026-08-10&to=2026-09-06&expand=prescription");
 });
 
+test("workout MCP readback selects the later winning revision when an effective date repeats", async () => {
+  const emptyWeek = { monday: null, tuesday: null, wednesday: null, thursday: null, friday: null, saturday: null, sunday: { kind: "rest" } };
+  const update = { schema_version: 2, effective_from: "2026-08-10", week: emptyWeek };
+  const older = { effective_from: update.effective_from, week: { ...emptyWeek, monday: { kind: "rest" } } };
+  const client = new WorkoutApiClient({
+    origin: "https://workout.example",
+    token: "local-test-token",
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ applied: true, effective_from: update.effective_from }), { headers: { "Content-Type": "application/json" } });
+      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ current: null, future: [older, update] }), { headers: { "Content-Type": "application/json" } });
+      const entries = Array.from({ length: 7 }, (_, index) => { const date = new Date("2026-08-10T00:00:00Z"); date.setUTCDate(date.getUTCDate() + index); return { date: date.toISOString().slice(0, 10) }; });
+      return new Response(JSON.stringify({ from: "2026-08-10", to: "2026-08-16", entries }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const bridge = new McpBridge({ client });
+  const applied = await bridge.handleMessage({ jsonrpc: "2.0", id: 27, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: update, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "winning-revision-readback" } } });
+
+  assert.equal(applied.result.structuredContent.readback.status, "verified");
+});
+
 test("workout MCP applies a Planned Day move and verifies provenance plus the full prescription", async () => {
   const move = { source_date: "2026-08-29", target_date: "2026-08-30" };
   const prescription = {

@@ -462,7 +462,10 @@ function addDays(value, days) {
 /** @param {any} plan @param {string} effectiveFrom @param {PlanUpdatePackage} expectedPackage */
 function verifyPlanReadback(plan, effectiveFrom, expectedPackage) {
   const revisions = [plan?.current, ...(Array.isArray(plan?.future) ? plan.future : [])];
-  const revision = revisions.find((candidate) => candidate?.effective_from === effectiveFrom);
+  let revision = null;
+  for (const candidate of revisions) {
+    if (candidate?.effective_from === effectiveFrom) revision = candidate;
+  }
   if (!revision) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not contain the applied effective date");
   if (JSON.stringify(comparablePlanWeek(revision.week)) !== JSON.stringify(comparablePlanWeek(expectedPackage.week))) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not match the applied Weekly Template");
 }
