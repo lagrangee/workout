@@ -29,7 +29,15 @@ const emit = defineEmits<{
 
 const session = useSessionExecution(props.app, (focused) => emit("execution-focus-change", focused));
 const view = session.view;
-const externalSourceDrafts = reactive<Record<string, ExternalRecordingSource>>({});
+type ExternalCompletionChoice = ExternalRecordingSource | "unfinished";
+
+const externalCompletionChoices: ReadonlyArray<{ value: ExternalCompletionChoice; label: string }> = [
+  { value: "unfinished", label: "未完成" },
+  { value: "coros", label: "COROS" },
+  { value: "apple_watch", label: "Apple Watch" },
+  { value: "none", label: "无记录" },
+];
+const externalChoiceDrafts = reactive<Record<string, ExternalCompletionChoice>>({});
 
 function send(intent: SessionIntent): void {
   void session.dispatch(intent);
@@ -90,26 +98,40 @@ function externalCompletion(exercise: SnapshotExercise): ExternalCompletion | nu
   return view.detail?.external_completions?.find((completion) => completion.occurrence_key === key) ?? null;
 }
 
-function externalSource(exercise: SnapshotExercise): ExternalRecordingSource {
+function externalChoice(exercise: SnapshotExercise): ExternalCompletionChoice {
   const key = occurrenceKey(exercise);
-  return externalSourceDrafts[key] ?? externalCompletion(exercise)?.recording_source ?? "coros";
+  return externalChoiceDrafts[key] ?? externalCompletion(exercise)?.recording_source ?? "unfinished";
 }
 
-function setExternalSource(exercise: SnapshotExercise, event: Event): void {
-  externalSourceDrafts[occurrenceKey(exercise)] = (event.target as HTMLSelectElement).value as ExternalRecordingSource;
-}
+const externalMutationPending = computed(() => view.state.mutation.pending && [
+  "complete-external",
+  "update-external",
+  "undo-external",
+].includes(String(view.state.mutation.action)));
 
-function saveExternal(exercise: SnapshotExercise): void {
+const externalMutationError = computed(() => view.state.mutation.error && [
+  "complete-external",
+  "update-external",
+  "undo-external",
+].includes(String(view.state.mutation.action)) ? view.state.mutation.error : null);
+
+async function chooseExternalCompletion(exercise: SnapshotExercise, event: Event): Promise<void> {
+  if (view.state.mutation.pending) return;
   const key = occurrenceKey(exercise);
-  send({ type: externalCompletion(exercise) ? "update-external" : "complete-external", occurrenceKey: key, recordingSource: externalSource(exercise) });
-}
+  const choice = (event.target as HTMLInputElement).value as ExternalCompletionChoice;
+  if (choice === externalChoice(exercise)) return;
 
-function undoExternal(exercise: SnapshotExercise): void {
-  send({ type: "undo-external", occurrenceKey: occurrenceKey(exercise) });
-}
-
-function sourceLabel(source: ExternalRecordingSource): string {
-  return source === "coros" ? "COROS" : source === "apple_watch" ? "Apple Watch" : "无设备";
+  externalChoiceDrafts[key] = choice;
+  if (choice === "unfinished") {
+    await session.dispatch({ type: "undo-external", occurrenceKey: key });
+  } else {
+    await session.dispatch({
+      type: externalCompletion(exercise) ? "update-external" : "complete-external",
+      occurrenceKey: key,
+      recordingSource: choice,
+    });
+  }
+  if (externalChoiceDrafts[key] === choice) delete externalChoiceDrafts[key];
 }
 
 function enduranceRequirement(target: TargetValue | undefined): string {
@@ -192,33 +214,6 @@ defineExpose({ ensurePaused, executionFocused });
   <div v-if="view.state.navigationPauseError" class="mutation-feedback is-error" role="alert">
     <strong>{{ view.state.navigationPauseError }}</strong><span>当前页面会保留；确认暂停后再离开。</span>
   </div>
-  <section v-if="view.entry?.kind === 'workout' && enduranceExercises.length && view.state.mode === 'overview'" class="today-page endurance-prescription" aria-label="有氧训练要求">
-    <div class="today-content">
-      <article v-for="exercise in enduranceExercises" :key="occurrenceKey(exercise)" class="quiet-card endurance-prescription-card">
-        <p class="eyebrow">有氧训练要求</p>
-        <h2>{{ exercise.name }}</h2>
-        <p class="endurance-requirement">{{ enduranceRequirement(exercise.sets?.[0]?.target) }}</p>
-        <p class="muted">使用手表记录；Workout 不做倒计时，也不会虚构实际时长、距离或心率。</p>
-        <div v-if="view.entry.recording_intent" class="calendar-recording-guide">
-          <strong>COROS 路线证据</strong><span class="status-pill" :class="recordingStatus(view.entry) === 'recorded' ? 'recorded' : recordingStatus(view.entry) === 'needs_link' ? 'partial' : ''">{{ recordingStatus(view.entry) === "recorded" ? "已记录" : recordingStatus(view.entry) === "needs_link" ? "待关联" : "待同步" }}</span>
-        </div>
-        <label>记录来源
-          <select :value="externalSource(exercise)" :disabled="view.state.mutation.pending" @change="setExternalSource(exercise, $event)">
-            <option value="coros">COROS</option>
-            <option value="apple_watch">Apple Watch</option>
-            <option value="none">无</option>
-          </select>
-        </label>
-        <p v-if="externalSource(exercise) === 'apple_watch'" class="muted">仅记录完成来源；Apple Watch 数据未导入。</p>
-        <p v-if="externalCompletion(exercise)" class="muted">已标记完成 · {{ sourceLabel(externalCompletion(exercise)?.recording_source ?? "none") }}</p>
-        <div class="hero-actions">
-          <button class="primary" data-action="save-external-completion" :disabled="view.state.mutation.pending" @click="saveExternal(exercise)">{{ externalCompletion(exercise) ? mutationLabel("update-external", "更新来源") : mutationLabel("complete-external", "标记完成") }}</button>
-          <button v-if="externalCompletion(exercise)" class="secondary" data-action="undo-external-completion" :disabled="view.state.mutation.pending" @click="undoExternal(exercise)">{{ mutationLabel("undo-external", "撤销完成") }}</button>
-        </div>
-        <div v-if="view.state.mutation.error && ['complete-external', 'update-external', 'undo-external'].includes(String(view.state.mutation.action))" class="mutation-feedback is-error" role="alert"><strong>{{ view.state.mutation.error }}</strong><span>可以直接重试。</span></div>
-      </article>
-    </div>
-  </section>
   <section v-if="!view.entry || view.entry.kind === 'no_plan'" class="today-page">
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
@@ -272,12 +267,15 @@ defineExpose({ ensurePaused, executionFocused });
     </div>
   </section>
 
-  <section v-else-if="!view.summary" class="today-page">
+  <section
+    v-else-if="!view.summary || (view.state.mode === 'overview' && view.detail && (view.detail.external_completions?.length || 0) > 0 && (view.detail.completion_results?.length || 0) === 0 && (view.detail.training_intervals?.length || 0) === 0)"
+    class="today-page"
+  >
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
       <h1>{{ view.entry.title }}</h1>
       <p class="muted">约 {{ view.entry.estimated_duration_min }} 分钟</p>
-      <div class="hero-actions">
+      <div v-if="!view.summary" class="hero-actions">
         <button
           v-if="hasStandardExecution"
           class="primary"
@@ -289,6 +287,9 @@ defineExpose({ ensurePaused, executionFocused });
         >{{ mutationLabel("start", "开始训练") }}</button>
         <button class="secondary" data-action="skip" @click="send({ type: 'skip' })">跳过今天</button>
       </div>
+      <div v-else-if="view.summary.status === 'partial' && hasStandardExecution" class="hero-actions">
+        <button class="primary" data-action="continue" :disabled="view.state.mutation.pending" @click="send({ type: 'continue' })">{{ mutationLabel("continue", "继续训练") }}</button>
+      </div>
       <div
         v-if="mutationMatches('start') && view.state.mutation.pending"
         class="mutation-feedback is-pending"
@@ -298,6 +299,8 @@ defineExpose({ ensurePaused, executionFocused });
       <div v-else-if="mutationMatches('start') && view.state.mutation.error" class="mutation-feedback is-error" role="alert">
         <strong>{{ view.state.mutation.error }}</strong><span>{{ mutationHint("start") }}</span>
       </div>
+      <div v-else-if="mutationMatches('continue') && view.state.mutation.pending" class="mutation-feedback is-pending" role="status" aria-live="polite"><span class="mutation-indicator" aria-hidden="true" /><span>{{ mutationPendingLabels.continue }}</span></div>
+      <div v-else-if="mutationMatches('continue') && view.state.mutation.error" class="mutation-feedback is-error" role="alert"><strong>{{ view.state.mutation.error }}</strong><span>{{ mutationHint("continue") }}</span></div>
       <section class="today-plan calendar-prescription" aria-label="今日训练计划">
         <div class="today-plan-head"><h2>今日训练计划</h2><span>{{ view.entry.module_count }} 个模块</span></div>
         <template v-if="view.entry.prescription">
@@ -312,6 +315,39 @@ defineExpose({ ensurePaused, executionFocused });
                 <span>{{ exercise.category === "endurance" ? enduranceRequirement(set.target) : `第 ${Number(index) + 1} 组 · ${view.formatTarget(set.target)}` }}</span>
                 <span v-if="exercise.category !== 'endurance'">{{ view.formatResistance(set.resistance ?? canonicalSetResistance(set)) }}<template v-if="view.formatTempo(set.tempo)"> · 节奏 {{ view.formatTempo(set.tempo) }}</template><template v-if="set.rest_after_sec != null"> · 休息 {{ set.rest_after_sec }} 秒</template></span>
               </div>
+              <template v-if="exercise.category === 'endurance'">
+                <div v-if="view.entry.recording_intent" class="calendar-recording-guide endurance-recording-guide">
+                  <strong>COROS 路线证据</strong><span class="status-pill" :class="recordingStatus(view.entry) === 'recorded' ? 'recorded' : recordingStatus(view.entry) === 'needs_link' ? 'partial' : ''">{{ recordingStatus(view.entry) === "recorded" ? "已记录" : recordingStatus(view.entry) === "needs_link" ? "待关联" : "待同步" }}</span>
+                </div>
+                <fieldset
+                  class="endurance-completion"
+                  :disabled="externalMutationPending"
+                  :aria-busy="externalMutationPending || undefined"
+                >
+                  <legend>完成状态</legend>
+                  <span v-if="externalMutationPending" class="endurance-completion-saving" role="status" aria-live="polite">保存中…</span>
+                  <div class="endurance-choice-grid">
+                    <label
+                      v-for="option in externalCompletionChoices"
+                      :key="option.value"
+                      class="endurance-choice"
+                      :class="{ 'is-selected': externalChoice(exercise) === option.value }"
+                    >
+                      <input
+                        type="radio"
+                        :name="`endurance-completion-${occurrenceKey(exercise)}`"
+                        :value="option.value"
+                        :checked="externalChoice(exercise) === option.value"
+                        :data-external-choice="option.value"
+                        @change="chooseExternalCompletion(exercise, $event)"
+                      />
+                      <span>{{ option.label }}</span>
+                    </label>
+                  </div>
+                </fieldset>
+                <p v-if="externalChoice(exercise) === 'apple_watch'" class="endurance-source-note">仅记录完成来源；Apple Watch 数据未导入。</p>
+                <div v-if="externalMutationError" class="mutation-feedback is-error endurance-completion-error" role="alert"><strong>{{ externalMutationError }}</strong><span>已恢复原状态，可以直接重试。</span></div>
+              </template>
             </div>
           </article>
         </template>
