@@ -906,6 +906,110 @@ button.records-overview-metric:focus-visible {
   color: #9f5b4b;
 }
 
+.endurance-recording-guide {
+  margin: 5px 0 0;
+}
+
+.endurance-completion {
+  position: relative;
+  min-width: 0;
+  margin: 7px 0 0;
+  padding: 14px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.endurance-completion legend {
+  padding: 0 8px 0 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.endurance-completion-saving {
+  position: absolute;
+  top: -8px;
+  right: 0;
+  padding-left: 8px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.endurance-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.endurance-choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 160ms ease-out, background-color 160ms ease-out, color 160ms ease-out;
+}
+
+.endurance-choice:hover {
+  border-color: #cdbfae;
+  color: var(--ink);
+}
+
+.endurance-choice:focus-within {
+  outline: 3px solid rgba(214, 93, 63, .28);
+  outline-offset: 2px;
+}
+
+.endurance-choice.is-selected {
+  border-color: var(--accent);
+  background: #f7eee5;
+  color: var(--ink);
+}
+
+.endurance-choice input[type="radio"] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.endurance-choice span {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.endurance-completion:disabled .endurance-choice {
+  cursor: wait;
+  opacity: .58;
+}
+
+.endurance-source-note {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.endurance-completion-error {
+  margin-top: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .endurance-choice {
+    transition: none;
+  }
+}
+
 .compact-loading {
   padding: 10vh 0;
 }

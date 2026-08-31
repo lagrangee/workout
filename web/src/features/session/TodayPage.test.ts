@@ -393,7 +393,7 @@ describe("TodayPage", () => {
     expect(harness.calls).toHaveLength(0);
   });
 
-  test("shows endurance requirements in minutes and marks completion without opening a timer", async () => {
+  test("embeds endurance completion in today's plan and saves reversible radio choices", async () => {
     const completedRun: SessionDetail = {
       session_key: "session-run",
       status: "completed",
@@ -415,8 +415,27 @@ describe("TodayPage", () => {
       skip_reason: null,
       exercise_feedback: [],
     };
-    const harness = appHarness(async (path) => {
-      if (path.endsWith("/external-completion")) return completedRun as unknown as JsonRecord;
+    const firstCompletion = deferred<SessionDetail>();
+    let updateAttempts = 0;
+    const completedWithSource = (recordingSource: "apple_watch" | "none"): SessionDetail => ({
+      ...clone(completedRun),
+      external_completions: [{
+        schema_version: 1,
+        occurrence_key: "easy_run_main",
+        completed_at: "2026-08-29T05:00:00.000Z",
+        recording_source: recordingSource,
+      }],
+    });
+    const harness = appHarness(async (path, options) => {
+      if (path.endsWith("/external-completion")) {
+        if (options?.method === "DELETE") return { session: null };
+        if (options?.method === "PUT") {
+          updateAttempts += 1;
+          if (updateAttempts === 1) throw new Error("网络暂时不可用");
+          return completedWithSource("none") as unknown as JsonRecord;
+        }
+        return firstCompletion.promise as unknown as Promise<JsonRecord>;
+      }
       throw new Error(`unexpected request: ${path}`);
     });
     if (!harness.app.state.today) throw new Error("expected Today fixture");
@@ -432,21 +451,56 @@ describe("TodayPage", () => {
     wrappers.push(wrapper);
     await settle();
 
-    const enduranceCard = wrapper.get('[aria-label="有氧训练要求"]');
-    expect(enduranceCard.text()).toContain("45 分钟");
-    expect(enduranceCard.text()).toContain("心率 Z1–Z3");
-    expect(enduranceCard.text()).toContain("RPE 2–4");
-    expect(enduranceCard.text()).not.toContain("2700");
+    const plan = wrapper.get('[aria-label="今日训练计划"]');
+    expect(wrapper.find('[aria-label="有氧训练要求"]').exists()).toBe(false);
+    expect(plan.text()).toContain("45 分钟");
+    expect(plan.text()).toContain("心率 Z1–Z3");
+    expect(plan.text()).toContain("RPE 2–4");
+    expect(plan.text()).not.toContain("2700");
+    expect(plan.text()).not.toContain("Workout 不做倒计时");
+    expect(plan.find("select").exists()).toBe(false);
+    expect(plan.findAll('input[type="radio"]')).toHaveLength(4);
+    expect((plan.get('[data-external-choice="unfinished"]').element as HTMLInputElement).checked).toBe(true);
+    expect(plan.text()).toContain("无记录");
     expect(wrapper.find('[data-action="start"]').exists()).toBe(false);
-    await enduranceCard.get("select").setValue("apple_watch");
-    await enduranceCard.get('[data-action="save-external-completion"]').trigger("click");
+    await plan.get('[data-external-choice="apple_watch"]').setValue(true);
+    await nextTick();
+
+    expect(wrapper.get(".endurance-completion").attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[role="status"]').text()).toContain("保存中…");
+    const createCall = harness.calls.find((candidate) => candidate.path.endsWith("/external-completion"));
+    expect(createCall?.options?.method).toBe("POST");
+    expect(createCall?.options?.headers).toEqual({ "Idempotency-Key": "component-test-1" });
+    expect(createCall?.options?.body).toBe(JSON.stringify({ recording_source: "apple_watch" }));
+
+    firstCompletion.resolve(completedWithSource("apple_watch"));
     await settle();
 
-    const call = harness.calls.find((candidate) => candidate.path.endsWith("/external-completion"));
-    expect(call?.options?.method).toBe("POST");
-    expect(call?.options?.headers).toEqual({ "Idempotency-Key": "component-test-1" });
-    expect(call?.options?.body).toBe(JSON.stringify({ recording_source: "apple_watch" }));
+    expect(wrapper.find('[aria-label="今日训练计划"]').exists()).toBe(true);
+    expect((wrapper.get('[data-external-choice="apple_watch"]').element as HTMLInputElement).checked).toBe(true);
     expect(wrapper.text()).toContain("Apple Watch 数据未导入");
+
+    await wrapper.get('[data-external-choice="none"]').setValue(true);
+    await settle();
+
+    expect(wrapper.get('.endurance-completion-error[role="alert"]').text()).toContain("网络暂时不可用");
+    expect(wrapper.get('.endurance-completion-error[role="alert"]').text()).toContain("已恢复原状态");
+    expect((wrapper.get('[data-external-choice="apple_watch"]').element as HTMLInputElement).checked).toBe(true);
+
+    await wrapper.get('[data-external-choice="none"]').setValue(true);
+    await settle();
+
+    expect((wrapper.get('[data-external-choice="none"]').element as HTMLInputElement).checked).toBe(true);
+    const updateCalls = harness.calls.filter((candidate) => candidate.options?.method === "PUT");
+    expect(updateCalls).toHaveLength(2);
+    expect(updateCalls[1]?.options?.body).toBe(JSON.stringify({ recording_source: "none" }));
+
+    await wrapper.get('[data-external-choice="unfinished"]').setValue(true);
+    await settle();
+
+    const deleteCall = harness.calls.find((candidate) => candidate.options?.method === "DELETE");
+    expect(deleteCall?.options?.body).toBe("{}");
+    expect((wrapper.get('[data-external-choice="unfinished"]').element as HTMLInputElement).checked).toBe(true);
     expect(wrapper.find('[data-action="toggle-timer"]').exists()).toBe(false);
   });
 
