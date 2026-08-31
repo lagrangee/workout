@@ -382,6 +382,127 @@ afterEach(async () => {
 });
 
 describe("useSessionExecution", () => {
+  function mixedEnduranceSession(options: { laterVisibleDone?: boolean } = {}): SessionDetail {
+    const detail = sessionDetail();
+    const block = detail.snapshot.blocks?.[0];
+    const exercise = block?.exercises?.[0];
+    if (!block || !exercise?.sets || !detail.snapshot.blocks || !detail.snapshot.completion_items) {
+      throw new Error("expected executable Session fixture");
+    }
+    exercise.category = "strength";
+    const thirdItem: CompletionItem = {
+      completion_item_key: "item-3",
+      exercise_occurrence_key: "exercise-1",
+      set_key: "set-3",
+      side: "none",
+      target: { metric: "reps", min: 4, max: 4 },
+      resistance: { mode: "external_weight", load_kg: 12, quantity: 1 },
+    };
+    exercise.sets.push({
+      set_key: "set-3",
+      ordinal: 3,
+      target: thirdItem.target,
+      resistance: thirdItem.resistance,
+      rest_after_sec: 0,
+    });
+    const enduranceItem: CompletionItem = {
+      completion_item_key: "endurance-item",
+      exercise_occurrence_key: "endurance-1",
+      set_key: "endurance-set-1",
+      side: "none",
+      target: { metric: "duration_sec", value: 3000 },
+      resistance: { mode: "bodyweight" },
+    };
+    detail.snapshot.blocks.unshift({
+      block_key: "endurance-block",
+      title: "轻松跑",
+      exercises: [{
+        exercise_occurrence_key: "endurance-1",
+        name: "户外轻松跑",
+        category: "endurance",
+        execution_mode: "none",
+        sets: [{
+          set_key: "endurance-set-1",
+          ordinal: 1,
+          target: enduranceItem.target,
+          resistance: enduranceItem.resistance,
+          rest_after_sec: 0,
+        }],
+      }],
+    });
+    detail.snapshot.completion_items = [
+      enduranceItem,
+      ...detail.snapshot.completion_items,
+      thirdItem,
+    ];
+    detail.snapshot.exercise_occurrence_keys = ["endurance-1", "exercise-1"];
+    if (options.laterVisibleDone) {
+      detail.completion_results = ["item-2", "item-3"].map((completion_item_key) => ({
+        completion_item_key,
+        completed: true,
+        actual: { metric: "reps", value: 6 },
+        resistance: { mode: "external_weight", load_kg: 12, quantity: 1 },
+        rir: null,
+        completed_at: new Date(initialNow + 5_000).toISOString(),
+      }));
+      detail.completion_fraction = 0.5;
+    }
+    return detail;
+  }
+
+  test("a mixed endurance Session rests toward the immediate next executable item", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    let authority = mixedEnduranceSession();
+    const harness = createApiHarness(async (path, options) => {
+      if (path.endsWith("/start")) return clone(authority);
+      if (path.endsWith("/record")) {
+        authority = clone(authority);
+        authority.completion_results = requestBody({ path, options }).completion_results as SessionDetail["completion_results"];
+        return clone(authority);
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    expect(execution.view.focusedItem?.completion_item_key).toBe("item-1");
+
+    await execution.dispatch({ type: "complete" });
+
+    expect(execution.view.restNextItem?.completion_item_key).toBe("item-2");
+    await clock.advance(60_000);
+    expect(execution.view.focusedItem?.completion_item_key).toBe("item-2");
+  });
+
+  test("a mixed endurance Session opens the end sheet after every executable item is done", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    let authority = mixedEnduranceSession({ laterVisibleDone: true });
+    const harness = createApiHarness(async (path, options) => {
+      if (path.endsWith("/start")) return clone(authority);
+      if (path.endsWith("/record")) {
+        authority = clone(authority);
+        authority.completion_results = requestBody({ path, options }).completion_results as SessionDetail["completion_results"];
+        authority.status = "partial";
+        authority.completion_fraction = 0.75;
+        return clone(authority);
+      }
+      if (path.endsWith("/pause")) {
+        authority = pausedDetail(authority);
+        return clone(authority);
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    expect(execution.view.focusedItem?.completion_item_key).toBe("item-1");
+
+    await execution.dispatch({ type: "complete" });
+
+    expect(execution.view.state.endSheet).toBe(true);
+    expect(execution.view.focusedItem?.completion_item_key).toBe("item-1");
+  });
+
   test("start is immediately pending, deduplicates commands, and consumes its Session response", async () => {
     const clock = frameClock();
     const audio = testAudio();

@@ -394,6 +394,19 @@ function isoNow(): string {
   return new Date().toISOString();
 }
 
+function executionCompletionItems(detail: SessionDetail): DisplayCompletionItem[] {
+  const enduranceOccurrenceKeys = new Set(
+    (detail.snapshot.blocks ?? [])
+      .flatMap((block) => block.exercises ?? [])
+      .filter((exercise) => exercise.category === "endurance")
+      .map((exercise) => exercise.exercise_occurrence_key ?? exercise.occurrence_key)
+      .filter((key): key is string => Boolean(key)),
+  );
+  return displayCompletionItems(detail).filter(
+    (item) => !enduranceOccurrenceKeys.has(item.exercise_occurrence_key),
+  );
+}
+
 export function useSessionExecution(
   app: WorkoutAppStore,
   onExecutionFocusChange: (focused: boolean) => void = () => {},
@@ -493,11 +506,9 @@ export function useSessionExecution(
     const candidate = app.state.today?.entry;
     return isTodayEntryView(candidate) ? candidate : null;
   });
-  const items = computed<DisplayCompletionItem[]>(() => {
-    if (!state.detail) return [];
-    const enduranceOccurrences = new Set((state.detail.snapshot.blocks ?? []).flatMap((block) => block.exercises ?? []).filter((exercise) => exercise.category === "endurance").map((exercise) => exercise.exercise_occurrence_key ?? exercise.occurrence_key));
-    return displayCompletionItems(state.detail).filter((item) => !enduranceOccurrences.has(item.exercise_occurrence_key));
-  });
+  const items = computed<DisplayCompletionItem[]>(() => state.detail
+    ? executionCompletionItems(state.detail)
+    : []);
   const focusedItem = computed<DisplayCompletionItem | null>(() => items.value[state.focusIndex] ?? items.value[0] ?? null);
   const focusedContext = computed(() => itemContext(state.detail, focusedItem.value));
   const focusedResult = computed<SessionCompletionResult | null>(() => resultForDisplay(state.detail, focusedItem.value));
@@ -1480,7 +1491,7 @@ export function useSessionExecution(
     state.timerPauseReason = pausedOnEntry ? options.pauseReason ?? "navigation" : null;
     state.timerPauseStartedAt = pausedOnEntry ? options.pausedAt ?? clockNow() : null;
     pruneSavedDrafts(detail);
-    const displayItems = displayCompletionItems(detail);
+    const displayItems = executionCompletionItems(detail);
     const firstIncomplete = displayItems.findIndex((item) => !displayItemDone(detail, item));
     state.focusIndex = requestedIndex === null
       ? (firstIncomplete >= 0 ? firstIncomplete : 0)
@@ -2035,7 +2046,7 @@ export function useSessionExecution(
         await pauseForInterruption(currentInterruptionReason());
         return;
       }
-      const updatedItems = displayCompletionItems(updated);
+      const updatedItems = executionCompletionItems(updated);
       const nextIndex = updatedItems.findIndex((candidate, index) => index > currentIndex && !displayItemDone(updated, candidate));
       const fallbackIndex = nextIndex >= 0 ? nextIndex : updatedItems.findIndex((candidate) => !displayItemDone(updated, candidate));
       if (fallbackIndex >= 0 && restSeconds > 0 && !state.muted) {
@@ -2078,7 +2089,7 @@ export function useSessionExecution(
             ));
           if (reconciled && committed) {
             completionAttempt = null;
-            const reconciledItems = displayCompletionItems(reconciled);
+            const reconciledItems = executionCompletionItems(reconciled);
             const nextIndex = reconciledItems.findIndex(
               (candidate, index) => index > currentIndex && !displayItemDone(reconciled, candidate),
             );
