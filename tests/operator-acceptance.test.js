@@ -180,12 +180,38 @@ test("operator acceptance proves the exact revision and fetches the built module
   }
 });
 
+test("operator acceptance retries a well-formed old health revision during deployment propagation", async () => {
+  const fixture = acceptanceFixture();
+  let healthReads = 0;
+  const delays = [];
+  const fetchImpl = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.pathname === "/healthz") {
+      healthReads += 1;
+      return jsonResponse({ ok: true, service: "workout-tracker", revision: healthReads === 1 ? OLD_SHA : EXPECTED_SHA });
+    }
+    return fixture.fetchImpl(input, init);
+  };
+
+  const result = await runOperatorAcceptance({
+    ...ACCEPTANCE_DEFAULTS,
+    fetchImpl,
+    healthRevisionAttempts: 3,
+    healthRevisionDelayMs: 25,
+    sleepImpl: async (milliseconds) => { delays.push(milliseconds); },
+  });
+
+  assert.equal(result.revision, EXPECTED_SHA);
+  assert.equal(healthReads, 2);
+  assert.deepEqual(delays, [25]);
+});
+
 test("operator acceptance rejects an old deployed revision", async () => {
   const { fetchImpl } = acceptanceFixture({
     health: jsonResponse({ ok: true, service: "workout-tracker", revision: OLD_SHA }),
   });
   await assert.rejects(
-    runOperatorAcceptance({ ...ACCEPTANCE_DEFAULTS, fetchImpl }),
+    runOperatorAcceptance({ ...ACCEPTANCE_DEFAULTS, fetchImpl, healthRevisionAttempts: 1 }),
     /health revision does not match EXPECTED_GITHUB_SHA/,
   );
 

@@ -8,6 +8,8 @@ const RELEASE_REVISION_PATTERN = /^[0-9a-f]{40}$/;
 const VITE_MODULE_PATH_PATTERN = /^\/assets\/index-[A-Za-z0-9_-]{8,}\.js$/;
 const VITE_GENERATED_SOURCE_EXAMPLE = 'src="\/assets\/index-<hash>.js"';
 const JAVASCRIPT_MEDIA_TYPES = new Set(["application/javascript", "text/javascript"]);
+const DEFAULT_HEALTH_REVISION_ATTEMPTS = 16;
+const DEFAULT_HEALTH_REVISION_DELAY_MS = 2_000;
 const REQUIRED_SCHEMA_NAMES = [
   "manifest",
   "overview",
@@ -267,12 +269,27 @@ function requireSchemaCatalog(catalog) {
  *   fetchImpl?: typeof fetch,
  *   now?: () => Date,
  *   expectedApplicationHtml?: string,
+ *   healthRevisionAttempts?: number,
+ *   healthRevisionDelayMs?: number,
+ *   sleepImpl?: (milliseconds: number) => Promise<void>,
  * }} options
  */
-export async function runOperatorAcceptance({ origin: rawOrigin, expectedGithubSha: rawExpectedRevision, fetchImpl = globalThis.fetch, now = () => new Date(), expectedApplicationHtml }) {
+export async function runOperatorAcceptance({
+  origin: rawOrigin,
+  expectedGithubSha: rawExpectedRevision,
+  fetchImpl = globalThis.fetch,
+  now = () => new Date(),
+  expectedApplicationHtml,
+  healthRevisionAttempts = DEFAULT_HEALTH_REVISION_ATTEMPTS,
+  healthRevisionDelayMs = DEFAULT_HEALTH_REVISION_DELAY_MS,
+  sleepImpl = (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds)),
+}) {
   const origin = productionOrigin(rawOrigin);
   const revision = expectedRevision(rawExpectedRevision);
   requireAcceptance(typeof fetchImpl === "function", "a fetch implementation is required");
+  requireAcceptance(Number.isInteger(healthRevisionAttempts) && healthRevisionAttempts >= 1 && healthRevisionAttempts <= 30, "health revision attempts must be an integer from 1 to 30");
+  requireAcceptance(Number.isInteger(healthRevisionDelayMs) && healthRevisionDelayMs >= 0 && healthRevisionDelayMs <= 10_000, "health revision delay must be an integer from 0 to 10000 milliseconds");
+  requireAcceptance(typeof sleepImpl === "function", "a sleep implementation is required");
   let gatedApplicationHtml = expectedApplicationHtml;
   if (typeof gatedApplicationHtml !== "string") {
     try {
@@ -310,16 +327,25 @@ export async function runOperatorAcceptance({ origin: rawOrigin, expectedGithubS
     }
   };
 
-  const health = await read("/healthz", 200, "health");
-  requireNoStore(health.response, "health");
-  requireAcceptance(mediaType(health.response) === "application/json", "health content-type must be application/json");
-  const healthBody = parseJson(health.body, "health");
-  requireAcceptance(isRecord(healthBody), "health must be a JSON object");
-  requireAcceptance(Object.keys(healthBody).sort().join(",") === "ok,revision,service", "health must expose only ok, service, and revision");
-  requireAcceptance(healthBody.ok === true && healthBody.service === "workout-tracker", "health must identify a ready workout-tracker service");
-  requireAcceptance(healthBody.revision === revision, "health revision does not match EXPECTED_GITHUB_SHA");
-  const expectedHealthBody = JSON.stringify({ ok: true, service: "workout-tracker", revision });
-  requireAcceptance(health.body === expectedHealthBody, "health must match the exact ready response");
+  let acceptedHealth = false;
+  for (let attempt = 1; attempt <= healthRevisionAttempts; attempt += 1) {
+    const health = await read("/healthz", 200, "health");
+    requireNoStore(health.response, "health");
+    requireAcceptance(mediaType(health.response) === "application/json", "health content-type must be application/json");
+    const healthBody = parseJson(health.body, "health");
+    requireAcceptance(isRecord(healthBody), "health must be a JSON object");
+    requireAcceptance(Object.keys(healthBody).sort().join(",") === "ok,revision,service", "health must expose only ok, service, and revision");
+    requireAcceptance(healthBody.ok === true && healthBody.service === "workout-tracker", "health must identify a ready workout-tracker service");
+    requireAcceptance(typeof healthBody.revision === "string" && RELEASE_REVISION_PATTERN.test(healthBody.revision), "health revision does not match EXPECTED_GITHUB_SHA");
+    const canonicalHealthBody = JSON.stringify({ ok: true, service: "workout-tracker", revision: healthBody.revision });
+    requireAcceptance(health.body === canonicalHealthBody, "health must match the exact ready response");
+    if (healthBody.revision === revision) {
+      acceptedHealth = true;
+      break;
+    }
+    if (attempt < healthRevisionAttempts) await sleepImpl(healthRevisionDelayMs);
+  }
+  requireAcceptance(acceptedHealth, "health revision does not match EXPECTED_GITHUB_SHA");
 
   const application = await read("/", 200, "application HTML");
   requireAcceptance(mediaType(application.response) === "text/html", "application HTML content-type must be text/html");
