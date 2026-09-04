@@ -157,7 +157,8 @@ test("Agent Plan readback uses the same canonical Exercise Prescription", async 
   const token = await createAgentToken(handler);
   const result = await agentRequest(handler, token, "/api/agent/v1/plan");
   assert.equal(result.response.status, 200);
-  const exercise = result.body.future[0].week.monday.prescription.blocks[0].exercises[0];
+  const workoutEntry = result.body.entries.find((entry) => entry.title === "核心与臀桥");
+  const exercise = result.body.prescriptions[workoutEntry.prescription_ref].blocks[0].exercises[0];
   assert.equal(exercise.exercise_id, "dead_bug");
   assert.equal(exercise.execution_mode, "alternating");
   assert.equal(exercise.sets[0].target.value, 5);

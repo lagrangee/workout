@@ -24,6 +24,12 @@ function applyBody(packageValue, preview, overrides = {}) {
   };
 }
 
+function planTitles(plan) {
+  return plan.entries
+    .filter((entry) => entry.kind === "workout")
+    .map((entry) => plan.prescriptions[entry.prescription_ref]?.title);
+}
+
 test("Agent plan application requires the preview evidence and returns readback-ready application data", async () => {
   const { handler, store } = appFixture();
   const token = await createAgentToken(handler);
@@ -51,7 +57,7 @@ test("Agent plan application requires the preview evidence and returns readback-
   assert.equal(state.training_version, before.training_version + 1);
   const plan = await agentRequest(handler, token, "/api/agent/v1/plan");
   assert.equal(plan.response.status, 200);
-  assert.equal(plan.body.future[0].effective_from, addDays(today, 1));
+  assert.ok(planTitles(plan.body).includes("确认应用"));
   const schedule = await agentRequest(handler, token, `/api/agent/v1/schedule?from=${addDays(today, 1)}&to=${addDays(today, 7)}`);
   assert.equal(schedule.response.status, 200);
   assert.equal(schedule.body.entries.length, 7);
@@ -145,8 +151,8 @@ test("Agent plan application reads the exact dated seven-day base for later upda
   assert.equal(later.response.status, 201);
 
   const plan = await agentRequest(handler, token, "/api/agent/v1/plan");
-  assert.ok(plan.body.future.some((revision) => revision.effective_from === firstPackage.effective_from && revision.week.monday.prescription.title === "第一阶段"));
-  assert.ok(plan.body.future.some((revision) => revision.effective_from === laterPackage.effective_from && revision.week.monday.prescription.title === "第二阶段"));
+  assert.ok(planTitles(plan.body).includes("第一阶段"));
+  assert.ok(planTitles(plan.body).includes("第二阶段"));
 });
 
 test("Agent plan application isolates Athletes and maps a concurrent state conflict", async () => {

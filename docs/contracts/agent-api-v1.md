@@ -101,12 +101,19 @@ Archive publication does. Schedule expansion uses the public prescription
 shape from the wire catalog; it never returns a raw internal plan slot or
 revision identity.
 
-Plan responses expose immutable seven-day write packages using the same typed Weekly Template projection: a workout slot
-contains a `prescription`, a Rest Day remains `{ kind: "rest" }`, and an empty
-slot remains `null`. Each package includes `effective_from` and
-`through_date`; it is authoring/provenance history, while Schedule is dated
-truth. Plan `source_ref` values are scoped to the Agent resource
-and do not expose internal Plan Revision keys.
+Plan responses are schema version 2 effective projections. The automatic
+Athlete-local range begins with the current natural week and ends with the
+natural week containing the last materialized current/future Planned Day (or
+the current week when there is no Plan). `entries` contains exactly one final
+Planned Day per date; later weekly writes and Planned Day moves have already
+been resolved. Workout entries refer to typed prescriptions in the deduplicated
+top-level `prescriptions` dictionary. Plan reads do not expose Plan Revision
+history, Revision keys, Session identity, due state, or completion state.
+
+`schedule` remains the explicit arbitrary-range operational read. It adds
+Session linkage and due/overdue state and only expands prescriptions when asked.
+The private authoring projection retains immutable Plan Revision provenance;
+the Agent Plan resource is not an audit log.
 
 `sessions` accepts optional inclusive local-date bounds, a status enum, a
 stable global `exercise_id`, and a limit from 1 to 200 (default 50). Results are ordered by
