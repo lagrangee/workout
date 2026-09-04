@@ -7,7 +7,7 @@ import { hasId, makeError, McpBridge, WorkoutApiClient } from "./bridge.mjs";
 
 /** @param {{ env?: NodeJS.ProcessEnv, fetchImpl?: typeof globalThis.fetch }} [options] */
 export function createDefaultBridge({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
-  return new McpBridge({ client: new WorkoutApiClient({ origin: env.WORKOUT_AGENT_API_ORIGIN, token: env.WORKOUT_AGENT_TOKEN, fetchImpl }) });
+  return new McpBridge({ client: new WorkoutApiClient({ origin: env.WORKOUT_AGENT_API_ORIGIN, token: env.WORKOUT_AGENT_TOKEN, archiveDir: env.WORKOUT_ARCHIVE_DIR, fetchImpl }) });
 }
 
 /** @param {{ input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream, bridge?: McpBridge }} [options] */

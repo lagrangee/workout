@@ -24,6 +24,7 @@ test("Workout Agent Skill maps bounded questions to typed MCP tools", async () =
   for (const tool of [
     "workout_get_overview",
     "workout_get_plan",
+    "workout_save_plan_local",
     "workout_get_schedule",
     "workout_list_sessions",
     "workout_get_session",
@@ -101,6 +102,13 @@ test("Workout Agent Skill routes local archive context without changing source a
   assert.match(skill, /local value is context, not authority/i);
   assert.match(skill, /live value wins/i);
   assert.match(skill, /sync data/);
+  assert.match(skill, /\/workout plan2local/);
+  assert.match(skill, /plan\/index\.md/);
+  assert.match(skill, /plan\/weeks\//);
+  assert.match(skill, /plan\/weeks\/YYYY-MM-DD\.md/);
+  assert.match(skill, /\.sync\/plan2local\/effective\.json/);
+  assert.match(skill, /\.sync\/plan2local\/manifest\.json/);
+  assert.match(skill, /training_version.*not.*plan version/is);
   assert.match(skill, /querySportRecords/);
   assert.match(skill, /downloadActivityFitFiles/);
   assert.match(skill, /YYYY-MM-DD-<activity_ref>\.fit/);
@@ -127,6 +135,7 @@ test("Workout Agent Skill routes local archive context without changing source a
   assert.match(skill, /weekly\/YYYY-Www\.md/);
   assert.match(skill, /training-archive-v1\.md/);
   assert.match(skill, /training-archive-wire-catalog-v1\.md/);
+  assert.match(skill, /training-plan-local-v1\.md/);
   assert.match(skill, /coros-field-catalog-v2\.md/);
   assert.match(skill, /projection_version: 2/);
   assert.match(skill, /each provider lap group separate.*Markdown table/is);
