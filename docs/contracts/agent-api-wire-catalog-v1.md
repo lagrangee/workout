@@ -147,27 +147,31 @@ AgentOverview = {
 }
 
 AgentPlan = {
-  schema_version: 1,
+  schema_version: 2,
   generated_at: Instant,
   data_as_of: Instant,
+  from: LocalDate,
+  to: LocalDate,
   timezone: IanaTimezone,
+  period: Period,
   training_version: integer,
   source_ref: "plan",
-  current: PlanProjection|null,
-  future: PlanProjection[],
-  next_effective_from: LocalDate|null,
-  first_effective_from: LocalDate|null,
-  pending_count: integer
+  entries: PlanEntry[],
+  prescriptions: { [prescription_ref: string]: Prescription }
 }
 
-PlanProjection = { effective_from: LocalDate, week: WeeklyTemplate, source_ref: string }
-
-WeeklyTemplate = {
-  monday: WeekSlot, tuesday: WeekSlot, wednesday: WeekSlot,
-  thursday: WeekSlot, friday: WeekSlot, saturday: WeekSlot, sunday: WeekSlot
+PlanEntry = {
+  date: LocalDate,
+  weekday: Weekday,
+  kind: "workout"|"rest"|"no_plan",
+  title: string|null,
+  module_count: integer|null,
+  estimated_duration_min: integer|null,
+  prescription_ref: string|null,
+  moved_from_date?: LocalDate,
+  moved_to_date?: LocalDate,
+  source_ref: string
 }
-
-WeekSlot = null | { kind: "rest" } | { kind: "workout", prescription: Prescription }
 
 AgentSchedule = {
   schema_version: 1,

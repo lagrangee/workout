@@ -1,6 +1,7 @@
 // @ts-check
 
 import { PLAN_UPDATE_PACKAGE_V2_SCHEMA, PLAN_UPDATE_WEEKDAYS, validateSchemaValue } from "../src/plan-update-structure.js";
+import { saveTrainingPlanLocal } from "../src/training-plan-local.js";
 
 /** @typedef {import("../types/interfaces.js").JsonRecord} JsonRecord */
 /** @typedef {import("../types/interfaces.js").JsonSchema} JsonSchema */
@@ -57,9 +58,15 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workout_get_plan",
-    description: "Read the Current Plan and effective future Weekly Templates for the configured Athlete.",
+    description: "Read one effective Planned Day per date from the current natural week through the configured Athlete's final planned week, with deduplicated prescriptions and no revision history.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "workout_save_plan_local",
+    description: "Read the configured Athlete's effective Workout Plan and atomically replace its managed Obsidian projection under WORKOUT_ARCHIVE_DIR.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: true },
   },
   {
     name: "workout_get_schedule",
@@ -99,7 +106,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workout_apply_plan_update",
-    description: "Apply one previously validated future Plan Update Package after explicit confirmation, then read back the Current Plan and affected seven-day Schedule.",
+    description: "Apply one previously validated future Plan Update Package after explicit confirmation, then verify its seven effective Planned Days from one Plan readback.",
     inputSchema: PLAN_UPDATE_APPLY_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
@@ -111,7 +118,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workout_apply_plan_update_batch",
-    description: "Atomically apply one previously validated Plan Update Batch after explicit confirmation, then read back the Plan timeline and full batch Schedule.",
+    description: "Atomically apply one previously validated Plan Update Batch after explicit confirmation, then verify every effective Planned Day from one Plan readback.",
     inputSchema: PLAN_UPDATE_BATCH_APPLY_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
@@ -141,8 +148,8 @@ export class WorkoutApiError extends Error {
 }
 
 export class WorkoutApiClient {
-  /** @param {{ origin?: string, token?: string, fetchImpl?: typeof globalThis.fetch }} [options] */
-  constructor({ origin, token, fetchImpl = globalThis.fetch } = {}) {
+  /** @param {{ origin?: string, token?: string, archiveDir?: string, fetchImpl?: typeof globalThis.fetch }} [options] */
+  constructor({ origin, token, archiveDir, fetchImpl = globalThis.fetch } = {}) {
     if (typeof origin !== "string" || !origin) throw new Error("WORKOUT_AGENT_API_ORIGIN is required");
     if (typeof token !== "string" || !token) throw new Error("WORKOUT_AGENT_TOKEN is required");
     const parsed = new URL(origin);
@@ -151,6 +158,7 @@ export class WorkoutApiClient {
     parsed.pathname = parsed.pathname.replace(/\/+$/, "");
     this.baseUrl = `${parsed.toString().replace(/\/$/, "")}/api/agent/v1`;
     this.token = token;
+    this.archiveDir = archiveDir;
     this.fetchImpl = fetchImpl;
   }
 
@@ -161,6 +169,7 @@ export class WorkoutApiClient {
     const input = /** @type {any} */ (args);
     if (name === "workout_get_overview") return this.getOverview(input);
     if (name === "workout_get_plan") return this.getPlan(input);
+    if (name === "workout_save_plan_local") return this.savePlanLocal(input);
     if (name === "workout_get_schedule") return this.getSchedule(input);
     if (name === "workout_list_sessions") return this.listSessions(input);
     if (name === "workout_get_session") return this.getSession(input);
@@ -185,6 +194,18 @@ export class WorkoutApiClient {
 
   /** @param {WorkoutToolArguments["workout_get_plan"]} [args] */
   async getPlan(args = {}) { assertToolArguments("workout_get_plan", args); return this.get("/plan"); }
+
+  /** @param {WorkoutToolArguments["workout_save_plan_local"]} [args] */
+  async savePlanLocal(args = {}) {
+    assertToolArguments("workout_save_plan_local", args);
+    if (typeof this.archiveDir !== "string" || !this.archiveDir.trim()) throw new WorkoutApiError("local_archive_unavailable", "WORKOUT_ARCHIVE_DIR is required for plan2local");
+    const plan = await this.getPlan();
+    try {
+      return await saveTrainingPlanLocal({ archiveDir: this.archiveDir, plan });
+    } catch (/** @type {any} */ error) {
+      throw new WorkoutApiError(error?.code ?? "local_archive_write_failed", error instanceof Error ? error.message : "Local plan projection failed");
+    }
+  }
 
   /** @param {WorkoutToolArguments["workout_get_schedule"]} args */
   async getSchedule(args) {
@@ -242,15 +263,10 @@ export class WorkoutApiClient {
       confirmed: args.confirmed,
     }, { "Idempotency-Key": args.idempotency_key });
     const readbackFrom = applied.effective_from;
-    const readbackTo = addDays(readbackFrom, 6);
     try {
-      const [plan, schedule] = await Promise.all([
-        this.get("/plan"),
-        this.getSchedule({ from: readbackFrom, to: readbackTo, expand: true }),
-      ]);
+      const plan = await this.get("/plan");
       verifyPlanReadback(plan, readbackFrom, args.package);
-      verifyScheduleReadback(schedule, readbackFrom, readbackTo);
-      return { ...applied, readback: { status: "verified", plan, schedule } };
+      return { ...applied, readback: { status: "verified", plan } };
     } catch (/** @type {any} */ error) {
       return {
         ...applied,
@@ -282,16 +298,10 @@ export class WorkoutApiClient {
       base_plan_digest: args.base_plan_digest,
       confirmed: args.confirmed,
     }, { "Idempotency-Key": args.idempotency_key });
-    const readbackFrom = applied.from;
-    const readbackTo = applied.to;
     try {
-      const [plan, schedule] = await Promise.all([
-        this.get("/plan"),
-        this.getSchedule({ from: readbackFrom, to: readbackTo, expand: true }),
-      ]);
+      const plan = await this.get("/plan");
       for (const update of args.batch.updates) verifyPlanReadback(plan, update.effective_from, update);
-      verifyScheduleRangeReadback(schedule, readbackFrom, readbackTo);
-      return { ...applied, readback: { status: "verified", plan, schedule } };
+      return { ...applied, readback: { status: "verified", plan } };
     } catch (/** @type {any} */ error) {
       return {
         ...applied,
@@ -461,28 +471,19 @@ function addDays(value, days) {
 
 /** @param {any} plan @param {string} effectiveFrom @param {PlanUpdatePackage} expectedPackage */
 function verifyPlanReadback(plan, effectiveFrom, expectedPackage) {
-  const revisions = [plan?.current, ...(Array.isArray(plan?.future) ? plan.future : [])];
-  let revision = null;
-  for (const candidate of revisions) {
-    if (candidate?.effective_from === effectiveFrom) revision = candidate;
-  }
-  if (!revision) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not contain the applied effective date");
-  if (JSON.stringify(comparablePlanWeek(revision.week)) !== JSON.stringify(comparablePlanWeek(expectedPackage.week))) throw new WorkoutApiError("readback_mismatch", "Current Plan readback does not match the applied Weekly Template");
-}
-
-/** @param {any} schedule @param {string} from @param {string} to */
-function verifyScheduleReadback(schedule, from, to) {
-  const entries = schedule?.entries;
-  const expectedDates = Array.from({ length: 7 }, (_, index) => addDays(from, index));
-  if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied seven-day window");
-}
-
-/** @param {any} schedule @param {string} from @param {string} to */
-function verifyScheduleRangeReadback(schedule, from, to) {
-  const entries = schedule?.entries;
-  const expectedLength = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
-  const expectedDates = Array.from({ length: expectedLength }, (_, index) => addDays(from, index));
-  if (!schedule || schedule.from !== from || schedule.to !== to || !Array.isArray(entries) || entries.length !== expectedDates.length || entries.some((entry, index) => entry?.date !== expectedDates[index])) throw new WorkoutApiError("readback_mismatch", "Schedule readback does not cover the applied batch window");
+  const expectedDates = Array.from({ length: 7 }, (_, index) => addDays(effectiveFrom, index));
+  const finalDate = expectedDates[6];
+  if (plan?.schema_version !== 2 || !Array.isArray(plan.entries) || !plan.prescriptions || plan.from > effectiveFrom || plan.to < finalDate) throw new WorkoutApiError("readback_mismatch", "Effective Plan readback does not cover the applied seven-day window");
+  const entriesByDate = new Map(plan.entries.map((/** @type {any} */ entry) => [entry?.date, entry]));
+  const week = Object.fromEntries(expectedDates.map((date) => {
+    const entry = entriesByDate.get(date);
+    if (!entry) throw new WorkoutApiError("readback_mismatch", `Effective Plan readback is missing ${date}`);
+    const slot = entry.kind === "no_plan" ? null : entry.kind === "rest" ? { kind: "rest" } : entry.kind === "workout" ? { kind: "workout", prescription: plan.prescriptions[entry.prescription_ref] } : undefined;
+    if (slot === undefined || (entry.kind === "workout" && !slot?.prescription)) throw new WorkoutApiError("readback_mismatch", `Effective Plan readback has an invalid entry for ${date}`);
+    const weekday = PLAN_UPDATE_WEEKDAYS[(new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7];
+    return [weekday, slot];
+  }));
+  if (JSON.stringify(comparablePlanWeek(week)) !== JSON.stringify(comparablePlanWeek(expectedPackage.week))) throw new WorkoutApiError("readback_mismatch", "Effective Plan readback does not match the applied seven-day window");
 }
 
 /** @param {any} week */

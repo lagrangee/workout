@@ -1,6 +1,6 @@
 ---
 name: workout
-description: "Workout and multi-source training data: use when the user asks to sync or analyze local training archive data, read Workout or COROS training evidence, inspect a plan or completed sessions, review exercise history, or propose, validate, or apply a future plan change."
+description: "Workout and multi-source training data: use when the user asks to sync or analyze local training archive data, save a Workout plan to the local vault, read Workout or COROS training evidence, inspect a plan or completed sessions, review exercise history, or propose, validate, or apply a future plan change."
 ---
 
 # Workout Agent
@@ -18,7 +18,8 @@ recommendation style for the question.
 
 1. **Scope the request.** Choose the smallest resource that answers the
    question. Use `workout_get_overview` for a bounded orientation,
-   `workout_get_plan` for prescribed templates, `workout_get_schedule` for an
+   `workout_get_plan` for the effective dated Plan, `workout_save_plan_local` for
+   the explicit `/workout plan2local` route, `workout_get_schedule` for an
    explicit date window, `workout_list_sessions` for history indexes,
    `workout_get_session` for one complete record, `workout_get_progress` for
    metric evidence, and `workout_get_exercise_history` for movement-level
@@ -67,10 +68,44 @@ A2. **Refresh selectively.** Query live Workout when the request concerns the
    safe D1 projection through the authenticated Workout application boundary;
    ordinary analysis reads never do either write.
 
+## Manual `plan2local`
+
+`/workout plan2local` is the no-argument route for refreshing the local
+Workout Plan mirror. It writes plan projection files only; `sync data` remains
+the training-history archive and cloud-publication route.
+
+P1. **Read and save through one typed boundary.** Call
+`workout_save_plan_local` with `{}`. The tool reads the live configured
+Athlete's schema-version-2 effective `workout_get_plan` resource once and
+validates one final Planned Day per covered date before any local replacement.
+It does not fetch or save Plan Revision history. Done when the tool returns a
+structured receipt or a structured source/configuration error.
+
+P2. **Verify the receipt.** Accept local success only when `write_status` is
+`complete`, `readback.status` is `verified`, and the manifest names
+`plan/index.md`, one stable `plan/weeks/YYYY-MM-DD.md` file per returned
+natural week, `.sync/plan2local/effective.json`, and
+`.sync/plan2local/manifest.json`.
+Report `data_as_of`, `training_version`, `plan_digest`, and `changed` without
+calling `training_version` a plan version: `training_version` is not a Plan
+version. Done when the user can distinguish
+a refreshed-but-unchanged mirror from changed plan content.
+
+P3. **Keep the authority boundary.** Treat `plan/index.md` as the compact
+readable entry point, `plan/weeks/` as the current effective weekly
+projections, and `.sync/plan2local/effective.json` as the exact structured
+recovery copy. A later plan write replaces the same natural-week file; it must
+not append a revision-named shard. Session notes remain immutable,
+self-contained records even when their prescribed content resembles a Plan
+week. Workout remains authoritative; plan edits continue through the
+read–validate–confirm–apply–readback flow. Done when no vault edit has been
+presented as a source Plan mutation.
+
 ## Manual `sync data`
 
 `sync data` is an explicit read-then-write operation. It is the only operation
-in this Skill that writes the local Training Archive.
+in this Skill that writes training-history records or publishes the safe cloud
+projection; `plan2local` writes only the separate local Plan mirror.
 
 S1. **Resolve the target dates.** With no date, use the previous Athlete-local
    date. Accept one or more explicit local dates as one user-visible sync for a
@@ -276,13 +311,14 @@ when cloud publication is pending.
    structured validation/readback failure.
 
 6. **Build a future change from the Current Plan.** When the user asks to
-   change a future plan, read `workout_get_plan` first. Preserve existing
-   values deliberately for unspecified slots and ask a clarifying question
-   for any value required by a new or changed prescription. Construct a
-   complete seven-day Plan Update Package using the canonical contract. When
-   the accepted proposal spans two to four consecutive Monday templates,
-   construct one complete Plan Update Batch instead of applying its packages
-   separately.
+   change a future plan, read `workout_get_plan` first and reconstruct the
+   target seven-day window from its dated `entries` plus `prescriptions`.
+   Preserve existing values deliberately for unspecified dates and ask a
+   clarifying question for any value required by a new or changed
+   prescription. Construct a complete seven-day Plan Update Package using the
+   canonical contract. When the accepted proposal spans two to four
+   consecutive Monday templates, construct one complete Plan Update Batch
+   instead of applying its packages separately.
    Completion: a complete package exists, or the missing user decision is
    explicit and the flow remains at clarification.
 
@@ -368,3 +404,7 @@ Load
 [`training-archive-wire-catalog-v1.md`](../../docs/contracts/training-archive-wire-catalog-v1.md)
 when a daily note, COROS activity archive, lap group, sport-specific metric, or
 archive field version is relevant.
+Load
+[`training-plan-local-v1.md`](../../docs/contracts/training-plan-local-v1.md)
+when the `plan2local` route, local Plan paths, projection format, or receipt is
+relevant.

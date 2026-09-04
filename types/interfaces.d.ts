@@ -62,6 +62,7 @@ export type PlannedDayMove = { source_date: string; target_date: string };
 export type WorkoutToolArguments = {
   workout_get_overview: { from?: string; to?: string; preset?: "7d" | "30d" | "12w" | "all"; range?: "7d" | "30d" | "12w" | "all" };
   workout_get_plan: Record<string, never>;
+  workout_save_plan_local: Record<string, never>;
   workout_get_schedule: { from: string; to: string; expand?: boolean };
   workout_list_sessions: { from?: string; to?: string; limit?: number; cursor?: string; status?: "in_progress" | "completed" | "partial" | "skipped"; exercise_id?: string };
   workout_get_session: { session_key: string };

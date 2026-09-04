@@ -12,6 +12,7 @@ For operating or extending Workout Tracker:
 
 - [Self-hosting on Cloudflare](deployment/self-hosting.md)
 - [Workout Agent MCP setup](guides/agent-mcp.md)
+- [Local Training Plan Projection v1](contracts/training-plan-local-v1.md)
 - [Source validation](validation.md)
 - [Recovery runbooks](recovery/)
 

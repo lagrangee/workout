@@ -1,6 +1,6 @@
 // @ts-check
 
-import { addDays, canonicalJson, dateRange, dateSpan, deepClone, localDate, opaqueKey, WEEKDAYS, weekdayKey } from "./util.js";
+import { addDays, canonicalJson, dateRange, dateSpan, deepClone, localDate, mondayOf, opaqueKey, WEEKDAYS, weekdayKey } from "./util.js";
 import { validatePlanPackage } from "./validation.js";
 import { resolveExercise } from "./exercise-registry.js";
 import { appendWeeklyPlannedDays, initializePlannedDays, plannedDayRecord, resolvePlannedDay } from "./planned-days.js";
@@ -168,6 +168,23 @@ export function scheduleModel(state, from, to, now = new Date(), includePrescrip
   const span = dateSpan(start, end);
   if (span === null || span > 366) return { error: { code: "invalid_period", message: "Schedule requires a valid inclusive range of at most 366 days" } };
   return dateRange(start, end).map((date) => scheduleEntry(state, date, now, includePrescription));
+}
+
+/**
+ * Return the automatic Athlete-local range for an effective Plan read. The
+ * range starts at the current natural week and ends with the natural week
+ * containing the last materialized current/future Planned Day.
+ * @param {any} state
+ * @param {Date} now
+ */
+export function effectivePlanPeriod(state, now = new Date()) {
+  initializePlannedDays(state);
+  const currentDate = localDate(now, state.timezone);
+  const from = mondayOf(currentDate);
+  const lastDate = (state.planned_days ?? [])
+    .filter((/** @type {any} */ day) => day.date >= from)
+    .at(-1)?.date ?? from;
+  return { from, to: addDays(mondayOf(lastDate), 6) };
 }
 
 function emptyWeek() {

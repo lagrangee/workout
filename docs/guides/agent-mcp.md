@@ -28,7 +28,9 @@ WORKOUT_ARCHIVE_DIR=/absolute/path/to/private/archive
 ```
 
 Omit `WORKOUT_ARCHIVE_DIR` when the bridge should expose only the remote Agent
-API tools.
+API tools. When it is configured, `workout_save_plan_local` can implement
+`/workout plan2local` by reading the live Plan and writing the verified local
+projection.
 
 `mcp/launch.mjs` rejects files that are not owner-only, unknown or duplicate
 keys, and missing required values without printing the credential.

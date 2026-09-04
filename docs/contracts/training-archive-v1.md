@@ -39,6 +39,11 @@ The root is supplied by a local-only `WORKOUT_ARCHIVE_DIR` configuration value.
 The path is never committed to the repository or inferred from a guessed
 Obsidian location.
 
+The same vault may also contain the separate Local Training Plan Projection
+written by `/workout plan2local`; its paths and write boundary are defined in
+[Local Training Plan Projection v1](training-plan-local-v1.md). Those plan
+files are not Training Archive history records.
+
 ```text
 $WORKOUT_ARCHIVE_DIR/
   daily/YYYY-MM-DD.md

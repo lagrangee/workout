@@ -1,7 +1,7 @@
 // @ts-check
 
-import { WEEKDAYS, addDays, base64UrlDecode, base64UrlEncode, canonicalJson, deepClone, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
-import { appendPlanRevision, effectiveRevision, planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
+import { addDays, base64UrlDecode, base64UrlEncode, canonicalJson, dateRange, dateSpan, isRecord, isValidLocalDate, localDate, sha256Hex } from "./util.js";
+import { appendPlanRevision, effectivePlanPeriod, planUpdateBase, scheduleEntry, validatePlanForState } from "./plan.js";
 import { coachOverview, coachResource, prescriptionProjection } from "./coach.js";
 import { parseStrictJson, validatePlanPackage } from "./validation.js";
 import { AGENT_ARCHIVE_LIMIT, agentAerobicActivities, agentAerobicActivityDetail, agentDailyContext, agentRouteDetail, agentRouteHistory, agentRoutes, agentSchemaCatalog, agentSchemaResource } from "./agent-archive-api.js";
@@ -12,9 +12,6 @@ import { PLAN_UPDATE_BATCH_MAX_BYTES, appendPlanUpdateBatch, parsePlanUpdateBatc
 /** @typedef {import("../types/interfaces.js").AgentState} AgentState */
 /** @typedef {import("../types/interfaces.js").PlanUpdatePackage} PlanUpdatePackage */
 /** @typedef {import("../types/interfaces.js").JsonRecord} JsonRecord */
-/** @typedef {import("./types.js").PlanRevision} PlanRevision */
-/** @typedef {import("./types.js").Week} Week */
-
 const AGENT_PREFIX = "/api/agent/v1";
 
 /** @param {AgentState} state @param {Date} now */
@@ -82,7 +79,7 @@ export function agentManifest(state, now) {
     },
     endpoints: {
       overview: { method: "GET", path: `${AGENT_PREFIX}/overview`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", preset: ["7d", "30d", "12w", "all"], range: ["7d", "30d", "12w", "all"] } },
-      plan: { method: "GET", path: `${AGENT_PREFIX}/plan`, parameters: {} },
+      plan: { method: "GET", path: `${AGENT_PREFIX}/plan`, parameters: {}, rules: { automatic_range: "current_natural_week_through_last_effective_planned_day", date_canonical: true, includes_revision_history: false, expands_prescriptions: true } },
       schedule: { method: "GET", path: `${AGENT_PREFIX}/schedule`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", expand: ["prescription"] }, rules: { from_to_required: true, max_days: 366 } },
       sessions: { method: "GET", path: `${AGENT_PREFIX}/sessions`, parameters: { from: "YYYY-MM-DD", to: "YYYY-MM-DD", limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }, cursor: { type: "string", format: "opaque" }, status: ["in_progress", "completed", "partial", "skipped"], exercise_id: "string", exercise_key: { type: "string", deprecated: true } }, rules: { max_days: 3660, date_window_optional: true, cursor_ttl_minutes: 15, cursor_format_version: 1, cursor_integrity: "hmac-sha256", cursor_bound_to: ["athlete", "resource", "filters", "limit", "position", "issued_at", "training_version"] } },
       session_detail: { method: "GET", path: `${AGENT_PREFIX}/sessions/{session_key}`, parameters: { session_key: { type: "string", location: "path" } } },
@@ -298,27 +295,8 @@ function parseAgentJson(rawBody, maxBytes = 512 * 1024) {
 
 /** @param {AgentState} state @param {Date} now */
 export function agentPlan(state, now) {
-  const today = localDate(now, state.timezone);
-  const current = effectiveRevision(state, today);
-  const future = state.plan_revisions
-    .filter((revision) => revision.effective_from > today)
-    .sort((left, right) => left.effective_from.localeCompare(right.effective_from));
-  const firstEffective = state.plan_revisions.slice().sort((left, right) => left.effective_from.localeCompare(right.effective_from))[0]?.effective_from ?? null;
-  /** @param {PlanRevision} revision */
-  const project = (revision) => ({ effective_from: revision.effective_from, through_date: addDays(revision.effective_from, 6), week: Object.fromEntries(WEEKDAYS.map((day) => { const slot = revision.week[/** @type {keyof Week} */ (day)] ?? null; return [day, slot?.kind === "workout" ? { kind: "workout", prescription: prescriptionProjection(slot, `plan:${revision.effective_from}:${day}`, safePrescriptionKeys(`agent_plan_${revision.effective_from}_${day}`)) } : deepClone(slot)]; })) });
-  return {
-    schema_version: 1,
-    generated_at: now.toISOString(),
-    data_as_of: now.toISOString(),
-    timezone: state.timezone,
-    training_version: state.training_version,
-    source_ref: "plan",
-    current: current ? { ...project(current), source_ref: "plan:current" } : null,
-    future: future.map((revision) => ({ ...project(revision), source_ref: `plan:future:${revision.effective_from}` })),
-    next_effective_from: future[0]?.effective_from ?? null,
-    first_effective_from: firstEffective,
-    pending_count: future.length,
-  };
+  const { from, to } = effectivePlanPeriod(state, now);
+  return agentDatedPlan(state, from, to, now);
 }
 
 /** @param {AgentState} state @param {URL} url @param {Date} now */
@@ -332,12 +310,54 @@ export function agentSchedule(state, url, now) {
   const expandValue = url.searchParams.get("expand");
   if (url.searchParams.has("expand") && expandValue !== "prescription") return { error: { code: "invalid_request", field: "expand", message: "expand must be prescription" } };
   const expand = expandValue === "prescription";
+  return agentDatedSchedule(state, from, to, now, expand);
+}
+
+/** @param {AgentState} state @param {string} from @param {string} to @param {Date} now */
+function agentDatedPlan(state, from, to, now) {
   /** @type {Record<string, any>} */
   const prescriptions = {};
   const entries = dateRange(from, to).map((date) => {
     const raw = scheduleEntry(state, date, now, true);
-    const prescriptionRef = raw.kind === "workout" ? stablePrescriptionRef(raw.prescription, raw.weekday) : null;
-    if (expand && prescriptionRef && raw.prescription) prescriptions[prescriptionRef] = prescriptionProjection(raw.prescription, prescriptionRef, safePrescriptionKeys(`agent_schedule_${raw.weekday}_${stableFingerprint(raw.prescription)}`));
+    const prescriptionRef = raw.kind === "workout" ? stablePrescriptionRef(raw.prescription) : null;
+    if (prescriptionRef && raw.prescription) prescriptions[prescriptionRef] = publicPrescription(raw.prescription, prescriptionRef);
+    return {
+      date: raw.date,
+      weekday: raw.weekday,
+      kind: raw.kind,
+      title: raw.title,
+      module_count: raw.module_count,
+      estimated_duration_min: raw.estimated_duration_min,
+      prescription_ref: prescriptionRef,
+      ...(raw.moved_from_date ? { moved_from_date: raw.moved_from_date } : {}),
+      ...(raw.moved_to_date ? { moved_to_date: raw.moved_to_date } : {}),
+      source_ref: `plan:${date}:${raw.kind}`,
+    };
+  });
+  const currentDate = localDate(now, state.timezone);
+  return {
+    schema_version: 2,
+    generated_at: now.toISOString(),
+    data_as_of: now.toISOString(),
+    from,
+    to,
+    timezone: state.timezone,
+    period: { from, to, timezone: state.timezone, includes_from: true, includes_to: true, includes_current_date: from <= currentDate && currentDate <= to, current_date_may_be_incomplete: from <= currentDate && currentDate <= to },
+    training_version: state.training_version,
+    source_ref: "plan",
+    entries,
+    prescriptions,
+  };
+}
+
+/** @param {AgentState} state @param {string} from @param {string} to @param {Date} now @param {boolean} expand */
+function agentDatedSchedule(state, from, to, now, expand) {
+  /** @type {Record<string, any>} */
+  const prescriptions = {};
+  const entries = dateRange(from, to).map((date) => {
+    const raw = scheduleEntry(state, date, now, true);
+    const prescriptionRef = raw.kind === "workout" ? stablePrescriptionRef(raw.prescription) : null;
+    if (expand && prescriptionRef && raw.prescription) prescriptions[prescriptionRef] = publicPrescription(raw.prescription, prescriptionRef);
     return {
       date: raw.date,
       weekday: raw.weekday,
@@ -369,8 +389,14 @@ export function agentSchedule(state, url, now) {
   };
 }
 
-/** @param {any} slot @param {string} weekday */
-function stablePrescriptionRef(slot, weekday) { return `prescription:${weekday}:${stableFingerprint(slot)}`; }
+/** @param {any} slot */
+function stablePrescriptionRef(slot) { return `prescription:${stableFingerprint(slot)}`; }
+
+/** @param {any} slot @param {string} prescriptionRef */
+function publicPrescription(slot, prescriptionRef) {
+  const fingerprint = stableFingerprint(slot);
+  return prescriptionProjection(slot, prescriptionRef, safePrescriptionKeys(`agent_prescription_${fingerprint}`));
+}
 
 /** @param {any} value */
 function stableFingerprint(value) {

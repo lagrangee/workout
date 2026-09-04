@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addDays, opaqueKey } from "../src/util.js";
+import { appendPlanRevision } from "../src/plan.js";
+import { addDays, mondayOf } from "../src/util.js";
 import { agentRequest, appFixture, call, createAgentToken, TEST_NOW, testAgentSecret, today, week, workout } from "./helpers.js";
 
 /** @param {any} handler @param {string} token @param {string} path @param {Record<string, string>} extraHeaders */
@@ -12,13 +13,8 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   const { handler, store } = appFixture();
   const stateA = await store.getByEmail("athlete-a@example.invalid");
   const futureEffectiveFrom = addDays(today, 8);
-  stateA.plan_revisions.push({
-    revision_key: opaqueKey("rev"),
-    revision_sequence: 2,
-    created_at: TEST_NOW,
-    effective_from: futureEffectiveFrom,
-    week: week(workout("未来计划")),
-  });
+  appendPlanRevision(stateA, { schema_version: 1, effective_from: futureEffectiveFrom, week: week(workout("已被覆盖的计划")) }, new Date(TEST_NOW));
+  appendPlanRevision(stateA, { schema_version: 1, effective_from: futureEffectiveFrom, week: week(workout("未来计划")) }, new Date(TEST_NOW));
   await store.save(stateA);
   const before = await store.getByEmail("athlete-a@example.invalid");
   const tokenA = await createAgentToken(handler);
@@ -57,11 +53,20 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
 
   const plan = await agentGet(handler, tokenA, "/api/agent/v1/plan");
   assert.equal(plan.response.status, 200);
-  assert.equal(plan.body.current.effective_from, before.plan_revisions[0].effective_from);
-  assert.equal(plan.body.future[0].effective_from, futureEffectiveFrom);
-  assert.deepEqual(Object.keys(plan.body.current.week).sort(), ["friday", "monday", "saturday", "sunday", "thursday", "tuesday", "wednesday"]);
-  assert.equal(typeof plan.body.current.source_ref, "string");
-  assert.equal(typeof plan.body.future[0].source_ref, "string");
+  assert.equal(plan.body.schema_version, 2);
+  assert.equal(plan.body.from, mondayOf(today));
+  assert.equal(plan.body.to, addDays(mondayOf(addDays(futureEffectiveFrom, 6)), 6));
+  assert.equal(plan.body.entries.length, 21);
+  assert.equal(new Set(plan.body.entries.map((entry) => entry.date)).size, plan.body.entries.length);
+  const futureEntry = plan.body.entries.find((entry) => entry.title === "未来计划");
+  assert.ok(futureEntry);
+  assert.equal(plan.body.prescriptions[futureEntry.prescription_ref].title, "未来计划");
+  assert.doesNotMatch(JSON.stringify(plan.body), /已被覆盖的计划/);
+  assert.equal(plan.body.source_ref, "plan");
+  assert.ok(plan.body.entries.every((entry) => /^plan:\d{4}-\d{2}-\d{2}:(workout|rest|no_plan)$/.test(entry.source_ref)));
+  assert.ok(plan.body.entries.every((entry) => !Object.hasOwn(entry, "session_key") && !Object.hasOwn(entry, "is_due") && !Object.hasOwn(entry, "is_overdue_unstarted")));
+  assert.equal(Object.hasOwn(plan.body, "current"), false);
+  assert.equal(Object.hasOwn(plan.body, "future"), false);
   assert.doesNotMatch(JSON.stringify(plan.body), /revision_key|athlete_key/);
 
   const missingRange = await agentGet(handler, tokenA, "/api/agent/v1/schedule?from=2026-08-01");
@@ -115,10 +120,13 @@ test("Agent plan reads preserve bounded projections and Athlete-local schedule r
   })();
   const bPlan = await agentGet(handler, tokenB, "/api/agent/v1/plan");
   assert.equal(bPlan.response.status, 200);
-  assert.equal(bPlan.body.current, null);
+  assert.equal(bPlan.body.from, mondayOf(today));
+  assert.equal(bPlan.body.to, addDays(mondayOf(today), 6));
+  assert.equal(bPlan.body.entries.length, 7);
+  assert.ok(bPlan.body.entries.every((entry) => entry.kind === "no_plan"));
   const spoofedIdentity = await agentGet(handler, tokenA, "/api/agent/v1/plan", { "x-athlete-email": stateB.email });
   assert.equal(spoofedIdentity.response.status, 200);
-  assert.equal(spoofedIdentity.body.current.effective_from, before.plan_revisions[0].effective_from);
+  assert.ok(spoofedIdentity.body.entries.some((entry) => entry.kind === "workout"));
   const bSchedule = await agentGet(handler, tokenB, `/api/agent/v1/schedule?from=${today}&to=${today}`);
   assert.equal(bSchedule.body.entries[0].kind, "no_plan");
   const crossHeader = await handler.fetch(new Request(`https://workout.example/api/agent/v1/overview?athlete_key=${stateB.athlete_key}`, { headers: { Authorization: `Bearer ${tokenA}`, "x-athlete-email": stateB.email } }), { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", AGENT_TOKEN_SECRET: testAgentSecret });

@@ -2,7 +2,54 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { McpBridge, WorkoutApiClient } from "../mcp/bridge.mjs";
+
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+function addLocalDays(value, days) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function mondayOf(value) {
+  const day = new Date(`${value}T00:00:00Z`).getUTCDay();
+  return addLocalDays(value, -(day === 0 ? 6 : day - 1));
+}
+
+function effectivePlan(packages, options = {}) {
+  const generatedAt = options.generatedAt ?? "2026-08-08T00:00:00.000Z";
+  const firstDate = options.from ?? mondayOf(packages[0]?.effective_from ?? "2026-08-03");
+  const finalPackageDate = packages.length ? addLocalDays(packages.at(-1).effective_from, 6) : firstDate;
+  const finalMonday = mondayOf(options.to ?? finalPackageDate);
+  const finalDate = options.to ?? addLocalDays(finalMonday, 6);
+  const prescriptions = {};
+  const entries = [];
+  for (let date = firstDate; date <= finalDate; date = addLocalDays(date, 1)) {
+    entries.push({ date, weekday: WEEKDAYS[(new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7], kind: "no_plan", title: null, module_count: null, estimated_duration_min: null, prescription_ref: null, source_ref: `plan:${date}:no_plan` });
+  }
+  for (const packageValue of packages) {
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = addLocalDays(packageValue.effective_from, offset);
+      const entry = entries.find((candidate) => candidate.date === date);
+      if (!entry) continue;
+      const slot = packageValue.week[entry.weekday];
+      if (slot?.kind === "workout") {
+        const ref = `prescription:${packageValue.effective_from}:${entry.weekday}`;
+        prescriptions[ref] = { prescription_ref: ref, ...slot };
+        Object.assign(entry, { kind: "workout", title: slot.title, module_count: slot.blocks.length, estimated_duration_min: slot.estimated_duration_min, prescription_ref: ref, source_ref: `plan:${date}:workout` });
+      } else if (slot?.kind === "rest") {
+        Object.assign(entry, { kind: "rest", source_ref: `plan:${date}:rest` });
+      } else {
+        Object.assign(entry, { kind: "no_plan", source_ref: `plan:${date}:no_plan` });
+      }
+    }
+  }
+  return { schema_version: 2, generated_at: generatedAt, data_as_of: generatedAt, from: firstDate, to: finalDate, timezone: "Asia/Shanghai", period: { from: firstDate, to: finalDate, timezone: "Asia/Shanghai", includes_from: true, includes_to: true, includes_current_date: true, current_date_may_be_incomplete: true }, training_version: 1, source_ref: "plan", entries, prescriptions };
+}
 
 test("workout MCP exposes exactly the typed tools", async () => {
   assert.throws(() => new WorkoutApiClient({ origin: "http://workout.example", token: "local-test-token" }), /HTTPS/);
@@ -11,12 +58,46 @@ test("workout MCP exposes exactly the typed tools", async () => {
   await assert.rejects(() => client.getSchedule({ expand: "" }), /** @param {any} error */ (error) => error.code === "invalid_arguments");
   const bridge = new McpBridge({ client });
   const listed = await bridge.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" });
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update", "workout_apply_plan_update", "workout_validate_plan_update_batch", "workout_apply_plan_update_batch", "workout_validate_planned_day_move", "workout_apply_planned_day_move"]);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["workout_get_overview", "workout_get_plan", "workout_save_plan_local", "workout_get_schedule", "workout_list_sessions", "workout_get_session", "workout_get_progress", "workout_get_exercise_history", "workout_validate_plan_update", "workout_apply_plan_update", "workout_validate_plan_update_batch", "workout_apply_plan_update_batch", "workout_validate_planned_day_move", "workout_apply_planned_day_move"]);
   assert.equal(listed.result.tools.some((tool) => tool.name === "http_request"), false);
-  assert.equal(listed.result.tools.filter((tool) => !tool.name.startsWith("workout_apply_")).every((tool) => tool.annotations.readOnlyHint === true), true);
+  assert.equal(listed.result.tools.filter((tool) => !tool.name.startsWith("workout_apply_") && tool.name !== "workout_save_plan_local").every((tool) => tool.annotations.readOnlyHint === true), true);
+  assert.equal(listed.result.tools.find((tool) => tool.name === "workout_save_plan_local").annotations.readOnlyHint, false);
+  assert.equal(listed.result.tools.find((tool) => tool.name === "workout_save_plan_local").annotations.destructiveHint, true);
   assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_plan_update").annotations.readOnlyHint, false);
   assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_plan_update_batch").annotations.readOnlyHint, false);
   assert.equal(listed.result.tools.find((tool) => tool.name === "workout_apply_planned_day_move").annotations.readOnlyHint, false);
+});
+
+test("workout_save_plan_local reads the live Plan once and writes the configured vault", async () => {
+  const archiveDir = await mkdtemp(join(tmpdir(), "workout-mcp-plan-local-"));
+  const plan = effectivePlan([], { from: "2026-08-31", to: "2026-09-06", generatedAt: "2026-09-03T02:00:00.000Z" });
+  let requests = 0;
+  try {
+    const client = new WorkoutApiClient({
+      origin: "https://workout.example",
+      token: "local-test-token",
+      archiveDir,
+      fetchImpl: async (url) => {
+        requests += 1;
+        assert.equal(String(url), "https://workout.example/api/agent/v1/plan");
+        return new Response(JSON.stringify(plan), { headers: { "Content-Type": "application/json" } });
+      },
+    });
+    const bridge = new McpBridge({ client });
+    const result = await bridge.handleMessage({ jsonrpc: "2.0", id: 90, method: "tools/call", params: { name: "workout_save_plan_local", arguments: {} } });
+    assert.equal(result.result.isError, undefined);
+    assert.equal(result.result.structuredContent.status, "none");
+    assert.equal(result.result.structuredContent.readback.status, "verified");
+    assert.equal(requests, 1);
+    assert.deepEqual(JSON.parse(await readFile(join(archiveDir, ".sync/plan2local/effective.json"), "utf8")), plan);
+  } finally {
+    await rm(archiveDir, { recursive: true, force: true });
+  }
+
+  const unavailable = new McpBridge({ client: new WorkoutApiClient({ origin: "https://workout.example", token: "local-test-token", fetchImpl: async () => new Response(JSON.stringify(plan)) }) });
+  const failed = await unavailable.handleMessage({ jsonrpc: "2.0", id: 91, method: "tools/call", params: { name: "workout_save_plan_local", arguments: {} } });
+  assert.equal(failed.result.isError, true);
+  assert.equal(failed.result.structuredContent.error.code, "local_archive_unavailable");
 });
 
 test("workout MCP maps typed calls to authenticated Agent API reads and preserves errors", async () => {
@@ -198,8 +279,7 @@ test("workout MCP accepts and preserves an optional COROS route recording intent
     fetchImpl: async (url, options) => {
       requests.push({ url: String(url), options });
       if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ schema_version: 1, applied: true, effective_from: packageValue.effective_from, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
-      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ source_ref: "plan", future: [{ effective_from: packageValue.effective_from, week: packageValue.week }] }), { headers: { "Content-Type": "application/json" } });
-      if (String(url).includes("/schedule?")) return new Response(JSON.stringify({ source_ref: "schedule", from: "2026-08-24", to: "2026-08-30", entries: ["2026-08-24", "2026-08-25", "2026-08-26", "2026-08-27", "2026-08-28", "2026-08-29", "2026-08-30"].map((date) => ({ date })) }), { headers: { "Content-Type": "application/json" } });
+      if (String(url).endsWith("/plan")) return new Response(JSON.stringify(effectivePlan([packageValue])), { headers: { "Content-Type": "application/json" } });
       return new Response(JSON.stringify({ schema_version: 1, valid: true, source_ref: "plan-update:validation", preview: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
     },
   });
@@ -212,10 +292,10 @@ test("workout MCP accepts and preserves an optional COROS route recording intent
   const applied = await bridge.handleMessage({ jsonrpc: "2.0", id: 142, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "route-recording-apply" } } });
   assert.equal(applied.result.structuredContent.applied, true);
   assert.equal(applied.result.structuredContent.readback.status, "verified");
-  assert.deepEqual(applied.result.structuredContent.readback.plan.future[0].week.wednesday.recording_intent, routeSlot.recording_intent);
+  assert.deepEqual(Object.values(applied.result.structuredContent.readback.plan.prescriptions)[0].recording_intent, routeSlot.recording_intent);
 });
 
-test("workout MCP applies a confirmed package and verifies plan and schedule readback", async () => {
+test("workout MCP applies a confirmed package and verifies it with one effective Plan readback", async () => {
   const requests = [];
   const packageValue = { schema_version: 2, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
   const client = new WorkoutApiClient({
@@ -224,21 +304,19 @@ test("workout MCP applies a confirmed package and verifies plan and schedule rea
     fetchImpl: async (url, options) => {
       requests.push({ url: String(url), options });
       if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ schema_version: 1, applied: true, effective_from: "2026-08-09", package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
-      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ source_ref: "plan", future: [{ effective_from: "2026-08-09", week: packageValue.week }] }), { headers: { "Content-Type": "application/json" } });
-      return new Response(JSON.stringify({ source_ref: "schedule", from: "2026-08-09", to: "2026-08-15", entries: ["2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14", "2026-08-15"].map((date) => ({ date })) }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(effectivePlan([packageValue])), { headers: { "Content-Type": "application/json" } });
     },
   });
   const bridge = new McpBridge({ client });
   const result = await bridge.handleMessage({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-1" } } });
   assert.equal(result.result.structuredContent.applied, true);
   assert.equal(result.result.structuredContent.readback.status, "verified");
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 2);
   assert.equal(requests[0].url, "https://workout.example/api/agent/v1/plan-updates/apply");
   assert.equal(requests[0].options.headers.Authorization, "Bearer local-test-token");
   assert.equal(requests[0].options.headers["Idempotency-Key"], "apply-1");
   assert.deepEqual(JSON.parse(requests[0].options.body), { package_text: JSON.stringify(packageValue), package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true });
   assert.equal(requests[1].url, "https://workout.example/api/agent/v1/plan");
-  assert.equal(requests[2].url, "https://workout.example/api/agent/v1/schedule?from=2026-08-09&to=2026-08-15&expand=prescription");
 
   const missingDigest = await bridge.handleMessage({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-2" } } });
   assert.equal(missingDigest.error.code, -32602);
@@ -246,7 +324,7 @@ test("workout MCP applies a confirmed package and verifies plan and schedule rea
   assert.equal(unconfirmed.error.code, -32602);
   const missingKey = await bridge.handleMessage({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "workout_apply_plan_update", arguments: { package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "" } } });
   assert.equal(missingKey.error.code, -32602);
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 2);
 });
 
 test("workout MCP validates and atomically applies a typed four-week batch with full readback", async () => {
@@ -260,9 +338,7 @@ test("workout MCP validates and atomically applies a typed four-week batch with 
       requests.push({ url: String(url), options });
       if (String(url).endsWith("/plan-update-batches/validate")) return new Response(JSON.stringify({ valid: true, batch_digest: "a".repeat(64), base_plan_digest: "b".repeat(64) }), { headers: { "Content-Type": "application/json" } });
       if (String(url).endsWith("/plan-update-batches/apply")) return new Response(JSON.stringify({ applied: true, from: "2026-08-10", to: "2026-09-06", update_count: 4 }), { headers: { "Content-Type": "application/json" } });
-      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ current: null, future: batch.updates.map(({ effective_from, week }) => ({ effective_from, week })) }), { headers: { "Content-Type": "application/json" } });
-      const entries = Array.from({ length: 28 }, (_, index) => { const date = new Date("2026-08-10T00:00:00Z"); date.setUTCDate(date.getUTCDate() + index); return { date: date.toISOString().slice(0, 10) }; });
-      return new Response(JSON.stringify({ from: "2026-08-10", to: "2026-09-06", entries }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(effectivePlan(batch.updates)), { headers: { "Content-Type": "application/json" } });
     },
   });
   const bridge = new McpBridge({ client });
@@ -274,21 +350,18 @@ test("workout MCP validates and atomically applies a typed four-week batch with 
   assert.equal(applied.result.structuredContent.readback.status, "verified");
   assert.equal(requests[1].url, "https://workout.example/api/agent/v1/plan-update-batches/apply");
   assert.equal(requests[1].options.headers["Idempotency-Key"], "batch-apply-1");
-  assert.equal(requests[3].url, "https://workout.example/api/agent/v1/schedule?from=2026-08-10&to=2026-09-06&expand=prescription");
+  assert.equal(requests[2].url, "https://workout.example/api/agent/v1/plan");
 });
 
-test("workout MCP readback selects the later winning revision when an effective date repeats", async () => {
+test("workout MCP readback verifies only the effective dated winner", async () => {
   const emptyWeek = { monday: null, tuesday: null, wednesday: null, thursday: null, friday: null, saturday: null, sunday: { kind: "rest" } };
   const update = { schema_version: 2, effective_from: "2026-08-10", week: emptyWeek };
-  const older = { effective_from: update.effective_from, week: { ...emptyWeek, monday: { kind: "rest" } } };
   const client = new WorkoutApiClient({
     origin: "https://workout.example",
     token: "local-test-token",
     fetchImpl: async (url) => {
       if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ applied: true, effective_from: update.effective_from }), { headers: { "Content-Type": "application/json" } });
-      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ current: null, future: [older, update] }), { headers: { "Content-Type": "application/json" } });
-      const entries = Array.from({ length: 7 }, (_, index) => { const date = new Date("2026-08-10T00:00:00Z"); date.setUTCDate(date.getUTCDate() + index); return { date: date.toISOString().slice(0, 10) }; });
-      return new Response(JSON.stringify({ from: "2026-08-10", to: "2026-08-16", entries }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(effectivePlan([update])), { headers: { "Content-Type": "application/json" } });
     },
   });
   const bridge = new McpBridge({ client });
@@ -348,15 +421,14 @@ test("workout MCP applies a Planned Day move and verifies provenance plus the fu
   assert.equal(requests[1].options.headers["Idempotency-Key"], "move-2026-08-29-to-30");
 });
 
-test("workout MCP accepts an applied revision when it is now the Current Plan", async () => {
+test("workout MCP accepts an applied update when its dated result is effective", async () => {
   const packageValue = { schema_version: 2, effective_from: "2026-08-09", week: { monday: null, tuesday: { kind: "rest" }, wednesday: null, thursday: null, friday: null, saturday: null, sunday: null } };
   const client = new WorkoutApiClient({
     origin: "https://workout.example",
     token: "local-test-token",
     fetchImpl: async (url) => {
       if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ applied: true, effective_from: "2026-08-09" }), { headers: { "Content-Type": "application/json" } });
-      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ source_ref: "plan", current: { effective_from: "2026-08-09", week: packageValue.week }, future: [] }), { headers: { "Content-Type": "application/json" } });
-      return new Response(JSON.stringify({ source_ref: "schedule", from: "2026-08-09", to: "2026-08-15", entries: ["2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14", "2026-08-15"].map((date) => ({ date })) }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(effectivePlan([packageValue])), { headers: { "Content-Type": "application/json" } });
     },
   });
   const result = await client.applyPlanUpdate({ package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-current" });
@@ -379,7 +451,7 @@ test("workout MCP preserves a successful apply when post-apply readback fails", 
   assert.equal(result.applied, true);
   assert.equal(result.readback.status, "failed");
   assert.equal(result.readback.error.code, "readback_unavailable");
-  assert.equal(calls, 3);
+  assert.equal(calls, 2);
 });
 
 test("workout MCP reports a readback mismatch instead of claiming verification", async () => {
@@ -389,8 +461,7 @@ test("workout MCP reports a readback mismatch instead of claiming verification",
     token: "local-test-token",
     fetchImpl: async (url) => {
       if (String(url).endsWith("/plan-updates/apply")) return new Response(JSON.stringify({ applied: true, effective_from: "2026-08-09" }), { headers: { "Content-Type": "application/json" } });
-      if (String(url).endsWith("/plan")) return new Response(JSON.stringify({ source_ref: "plan", future: [] }), { headers: { "Content-Type": "application/json" } });
-      return new Response(JSON.stringify({ source_ref: "schedule", from: "2026-08-09", to: "2026-08-15", entries: ["2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14", "2026-08-15"].map((date) => ({ date })) }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(effectivePlan([], { from: "2026-08-03", to: "2026-08-16" })), { headers: { "Content-Type": "application/json" } });
     },
   });
   const result = await client.applyPlanUpdate({ package: packageValue, package_digest: "a".repeat(64), base_plan_digest: "b".repeat(64), confirmed: true, idempotency_key: "apply-mismatch" });
