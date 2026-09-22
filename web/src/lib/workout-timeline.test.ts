@@ -22,6 +22,7 @@ interface FakeSourceRecord {
 function installBrowserAudioHarness() {
   const starts: number[] = [];
   const sources: FakeSourceRecord[] = [];
+  const contexts: FakeAudioContext[] = [];
 
   class FakeSource {
     buffer: AudioBuffer | null = null;
@@ -56,12 +57,17 @@ function installBrowserAudioHarness() {
     state: AudioContextState = "suspended";
     currentTime = 10;
     destination = {} as AudioDestinationNode;
+    resumeGate: Promise<void> | null = null;
+    constructor() { contexts.push(this); }
+
+    async close(): Promise<void> { this.state = "closed"; }
 
     async decodeAudioData(): Promise<AudioBuffer> {
       return {} as AudioBuffer;
     }
 
     async resume(): Promise<void> {
+      if (this.resumeGate) await this.resumeGate;
       this.state = "running";
     }
 
@@ -82,7 +88,7 @@ function installBrowserAudioHarness() {
   vi.stubGlobal("AudioContext", FakeAudioContext as unknown as typeof AudioContext);
   vi.stubGlobal("fetch", fetchMock);
 
-  return { fetchMock, sources, starts };
+  return { fetchMock, sources, starts, contexts };
 }
 
 function eventRows(events: CueEvent[]) {
@@ -127,6 +133,29 @@ describe("WorkoutTimeline browser audio scheduling", () => {
       20,
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers independently of a stuck old resume and reuses decoded cues", async () => {
+    const { contexts, starts, sources, fetchMock } = installBrowserAudioHarness();
+    const timeline = createWorkoutTimeline({ now: () => 1000, sources: cueSources });
+    await timeline.activateAudio();
+    await timeline.scheduleRest({ remainingMs: 3000 }).result;
+    contexts[0].state = "suspended";
+    let finishOldResume!: () => void;
+    contexts[0].resumeGate = new Promise<void>((resolve) => { finishOldResume = resolve; });
+    const obsoleteActivation = timeline.activateAudio();
+    timeline.resetAudio();
+    timeline.resetAudio();
+    expect(sources.every((source) => source.stopped)).toBe(true);
+    expect(contexts[0].state).toBe("closed");
+    await expect(timeline.activateAudio()).resolves.toEqual({ ok: true });
+    expect(contexts).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const before = starts.length;
+    await timeline.scheduleRest({ remainingMs: 3000 }).result;
+    expect(starts.length).toBeGreaterThan(before);
+    finishOldResume();
+    await expect(obsoleteActivation).resolves.toMatchObject({ ok: false });
   });
 
   it("invalidates a pending rendering-graph replacement when lifecycle cancellation wins", async () => {

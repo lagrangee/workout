@@ -550,7 +550,8 @@ defineExpose({ ensurePaused, executionFocused });
         <span class="rest-label">组间休息</span><h2>放松，准备下一项</h2>
         <div class="rest-time" data-rest-remaining aria-live="polite" aria-label="休息剩余时间">{{ view.restRemainingLabel }}</div>
         <div class="next-context">
-          <span>接下来</span><strong>{{ view.itemLabel(view.detail, view.restNextItem) }}</strong><small>{{ view.focusTarget(view.restNextItem.target) }}</small>
+          <span>接下来</span><strong>{{ view.itemLabel(view.detail, view.restNextItem) }}</strong>
+          <small>{{ view.focusTarget(view.restNextItem.target) }}<template v-if="plannedResistance(view.restNextItem)"> · {{ view.focusResistance(plannedResistance(view.restNextItem)) }}</template></small>
         </div>
         <button class="secondary" data-action="skip-rest" @click="send({ type: 'skip-rest' })">跳过休息</button>
       </section>
