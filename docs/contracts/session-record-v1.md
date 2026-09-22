@@ -135,6 +135,14 @@ accepts `{}` and creates a fresh open interval only for today's paused
 in-progress Session. Both commands require an `Idempotency-Key` and return the
 complete Session detail.
 
+For both record versions, leaving the visible execution page pauses its local
+timers and closes the active Training Interval through the pause command.
+Returning does not automatically resume training. Browser audio output is
+released on visibility loss or pagehide, including while already paused; the
+next explicit resume activates fresh output and schedules only the remaining
+cues. An audio failure must not prevent the Session or visual timer from
+resuming, and resuming must not replay elapsed cues or count time spent hidden.
+
 The private Calendar maintenance command `POST /api/private/sessions/normalize-expired`
 is the one explicit exception to the normal end derivation: for an `in_progress`
 Session whose Scheduled Workout date is earlier than the Athlete's current local

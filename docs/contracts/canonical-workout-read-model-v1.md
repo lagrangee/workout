@@ -35,6 +35,12 @@ Exercise Category stored at creation. An alternating occurrence is displayed
 as one counter by the page but remains two side-specific Completion Items in
 the assembled object.
 
+The Session rest preview uses the next executable Completion Item's target and
+snapshotted Prescribed Set resistance, with Completion Item resistance as a
+fallback. It displays the prescribed kg per implement and quantity, or
+bodyweight, using the same formatting as the active exercise. It never
+substitutes the completed set's load or an editable actual result.
+
 ## Exercise history
 
 History is keyed only by global `exercise_id`. Snapshot names and definition

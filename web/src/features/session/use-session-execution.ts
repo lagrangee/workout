@@ -1264,6 +1264,9 @@ export function useSessionExecution(
 
   function handleVisibilityChange(): void {
     if (!documentIsVisible()) {
+      invalidateAudioActivation();
+      timeline.resetAudio();
+      state.audio = { status: "idle", error: null };
       if (
         pendingActiveMutation
         || resumeRequestPromise
@@ -1291,6 +1294,9 @@ export function useSessionExecution(
   }
 
   function handlePageHide(): void {
+    invalidateAudioActivation();
+    timeline.resetAudio();
+    state.audio = { status: "idle", error: null };
     const hiddenBoundary = state.timerPauseReason === "visibility" && state.timerPauseStartedAt !== null
       ? state.timerPauseStartedAt
       : clockNow();
@@ -2620,6 +2626,8 @@ export function useSessionExecution(
 
   onBeforeUnmount(() => {
     disposed = true;
+    invalidateAudioActivation();
+    timeline.resetAudio();
     detailLoadGeneration += 1;
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", handleVisibilityChange);

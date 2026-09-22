@@ -12,7 +12,7 @@ import type {
 import { WorkoutApiError } from "../../core/api-client";
 import type { AudioOutput, CueEvent } from "../../lib/workout-timeline";
 import TodayPage from "./TodayPage.vue";
-import type { CompletionItem, SessionDetail } from "./session-types";
+import type { CompletionItem, SessionDetail, ResistanceValue, ResistanceMode } from "./session-types";
 
 const initialNow = Date.parse("2026-08-29T04:00:00.000Z");
 
@@ -278,7 +278,7 @@ function componentAudio(overrides: Partial<AudioOutput> = {}): ComponentAudio {
   return audio;
 }
 
-function installSeams(clock: ComponentClock, audio: AudioOutput): void {
+function installSeams(clock: ComponentClock, audio?: AudioOutput): void {
   Object.defineProperty(window, "__workoutTestSeams", {
     configurable: true,
     value: {
@@ -313,6 +313,7 @@ afterEach(async () => {
   Reflect.deleteProperty(window, "__workoutTestSeams");
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
   Object.defineProperty(navigator, "wakeLock", { configurable: true, value: undefined });
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -650,6 +651,7 @@ describe("TodayPage", () => {
       completion_results: [{ actual: { metric: "duration_sec", value: 4 } }],
     });
     expect(wrapper.get(".rest-screen").text()).toContain("组间休息");
+    expect(wrapper.get(".next-context").text()).toContain("12 kg");
     expect(wrapper.get("[data-rest-remaining]").text()).toBe("00:01");
 
     await clock.advance(1_000);
@@ -657,6 +659,115 @@ describe("TodayPage", () => {
     expect(wrapper.get(".focus-exercise-head h2").text()).toContain("第 2 组");
     expect(audio.schedules.at(-1)?.at(-1)).toMatchObject({ kind: "rest-complete", value: 0 });
   });
+
+  test.each<{ label: string; resistance?: ResistanceValue; resistance_mode?: ResistanceMode; resistance_kg?: number; expected: string }>([
+    { label: "external weight", resistance: { mode: "external_weight", load_kg: 18, quantity: 2 }, expected: "18 kg × 2" },
+    { label: "bodyweight", resistance: { mode: "bodyweight" }, expected: "自重" },
+    { label: "canonical load", resistance_mode: "external_load", resistance_kg: 22.5, expected: "22.5 kg" },
+    { label: "canonical bodyweight", resistance_mode: "bodyweight", expected: "自重" },
+    { label: "no resistance", expected: "6 次" },
+  ])("rest preview uses the next prescribed set's $label", async (scenario) => {
+    installSeams(componentClock(), componentAudio());
+    const started = detail();
+    const nextSet = started.snapshot.blocks![0].exercises![0].sets![1];
+    const nextItem = started.snapshot.completion_items![1];
+    nextSet.resistance = scenario.resistance ?? null;
+    nextItem.resistance = null;
+    nextSet.resistance_mode = scenario.resistance_mode;
+    nextSet.resistance_kg = scenario.resistance_kg;
+    const updated = completedFirst(started, 8);
+    const harness = appHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/record")) return clone(updated);
+      if (path.endsWith("/pause")) return paused(updated);
+      throw new Error(path);
+    });
+    const wrapper = mount(TodayPage, { props: { app: harness.app } });
+    wrappers.push(wrapper);
+    await wrapper.get('[data-action="start"]').trigger("click");
+    await settle();
+    await wrapper.get('[data-action="complete"]').trigger("click");
+    await settle();
+    const preview = wrapper.get(".next-context");
+    expect(preview.text()).toContain("第 2 组");
+    expect(preview.get("small").text()).toBe(`6 次${scenario.expected === "6 次" ? "" : ` · ${scenario.expected}`}`);
+    expect(preview.text()).not.toContain("12 kg");
+  });
+
+  test.each(["visibility", "pagehide", "already-paused"])(
+    "restores audible cues after %s interrupts the browser audio context",
+    async (interruption) => {
+      const contexts: FakeAudioContext[] = [];
+      class FakeAudioContext {
+        state = "suspended";
+        currentTime = 0;
+        destination = {};
+        silent = false;
+        audibleStarts = 0;
+        constructor() { contexts.push(this); }
+        async decodeAudioData() { return {}; }
+        async resume() { this.state = "running"; }
+        async close() { this.state = "closed"; }
+        createBufferSource() {
+          return {
+            buffer: null,
+            connect() {},
+            addEventListener() {},
+            stop() {},
+            start: () => { if (!this.silent) this.audibleStarts += 1; },
+          };
+        }
+      }
+      vi.stubGlobal("AudioContext", FakeAudioContext);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([1]))));
+      const clock = componentClock();
+      installSeams(clock);
+      let serverDetail = detail({ timed: true });
+      const harness = appHarness(async (path) => {
+        if (path.endsWith("/pause")) serverDetail = paused(serverDetail, new Date(clock.now()).toISOString());
+        else if (path.endsWith("/resume")) serverDetail.training_intervals.push({
+          interval_key: "resumed", started_at: new Date(clock.now()).toISOString(), ended_at: null,
+        });
+        else if (!path.endsWith("/start") && path !== "/api/private/sessions/session-1") throw new Error(path);
+        return clone(serverDetail);
+      });
+      const wrapper = mount(TodayPage, { props: { app: harness.app } });
+      wrappers.push(wrapper);
+      await wrapper.get('[data-action="start"]').trigger("click");
+      await settle();
+      await wrapper.get('[data-action="start-timed"]').trigger("click");
+      await settle();
+      expect(contexts[0].audibleStarts).toBeGreaterThan(0);
+      await clock.advance(1_000);
+      if (interruption === "already-paused") {
+        await wrapper.get('[data-action="toggle-timer"]').trigger("click");
+        await settle();
+      }
+      // WebKit can report running after resume while its old output stays silent.
+      contexts[0].silent = true;
+      const startsBeforeInterruption = contexts[0].audibleStarts;
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      if (interruption === "pagehide") window.dispatchEvent(new Event("pagehide"));
+      else document.dispatchEvent(new Event("visibilitychange"));
+      await settle();
+      await clock.advance(30_000);
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+      if (interruption === "pagehide") {
+        const event = new Event("pageshow");
+        Object.defineProperty(event, "persisted", { value: true });
+        window.dispatchEvent(event);
+      } else document.dispatchEvent(new Event("visibilitychange"));
+      await settle();
+      expect(wrapper.get('[data-action="toggle-timer"]').text()).toBe("继续");
+      await wrapper.get('[data-action="toggle-timer"]').trigger("click");
+      await settle();
+      expect(contexts.reduce((total, context) => total + context.audibleStarts, 0))
+        .toBeGreaterThan(startsBeforeInterruption);
+      expect(wrapper.find(".timed-audio-notice").exists()).toBe(false);
+      expect(wrapper.get('[data-action="toggle-timer"]').text()).toBe("暂停");
+      expect(wrapper.get("[data-action-remaining]").text()).toBe("04");
+    },
+  );
 
   test("keeps the visual timer usable after audio activation fails and clears the notice after unmute retry", async () => {
     const clock = componentClock();

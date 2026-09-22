@@ -17,6 +17,7 @@ export interface AudioOutput {
   activate?: () => AudioResultValue;
   replace?: (events: CueEvent[]) => AudioResultValue;
   cancel?: () => void;
+  reset?: () => void;
 }
 
 export interface WorkoutTimelineOptions {
@@ -102,6 +103,7 @@ function createBrowserAudioOutput({ sources, now }: { sources: Record<string, st
     try {
       if (audioContext.state !== "running") await audioContext.resume();
       const preparedResult = await prepared;
+      if (audioContext !== context) return { ok: false, error: "音频播放已中断，请重试" };
       if (!preparedResult.ok) return preparedResult;
       if (audioContext.state !== "running") return { ok: false, error: "音频播放被浏览器拒绝" };
       return { ok: true };
@@ -120,6 +122,22 @@ function createBrowserAudioOutput({ sources, now }: { sources: Record<string, st
       }
     }
     activeSources.clear();
+  }
+
+  function reset(): void {
+    cancel();
+    const interruptedContext = context;
+    context = null;
+    // WebKit may resume an interrupted context without restoring its output.
+    // Retire it now; create and resume the replacement in the next user gesture.
+    // Decoded AudioBuffers can be reused across contexts.
+    if (interruptedContext && interruptedContext.state !== "closed") {
+      try {
+        void interruptedContext.close().catch(() => {});
+      } catch {
+        // A frozen context must not block recovery or Session pause persistence.
+      }
+    }
   }
 
   function contextTimeFor(audioContext: AudioContext, atMs: number): number {
@@ -163,7 +181,7 @@ function createBrowserAudioOutput({ sources, now }: { sources: Record<string, st
     }
   }
 
-  return { prepare, activate, replace, cancel };
+  return { prepare, activate, replace, cancel, reset };
 }
 
 function normalizeResult(result: AudioResultLike, fallback: string): AudioResult {
@@ -264,5 +282,10 @@ export function createWorkoutTimeline({
     }
   }
 
-  return { prepareAudio, activateAudio, scheduleAction, scheduleRest, cancel };
+  function resetAudio(): void {
+    cancel();
+    output.reset?.();
+  }
+
+  return { prepareAudio, activateAudio, scheduleAction, scheduleRest, cancel, resetAudio };
 }
