@@ -78,9 +78,13 @@ open interval. The server derives
 Start, continue, and restart commands create the interval and return its
 server-issued `interval_key`. `POST .../pause` closes the active interval and
 leaves the Session `in_progress`; it is idempotent when the Session is already
-paused. `POST .../resume` opens a new server-issued interval for today's
+paused. `POST .../resume` opens a new server-issued interval for an existing
 paused Session; a repeated resume while an interval is already open returns the
-current Session without opening a second interval. Record replacement may adjust or remove an existing interval
+current Session without opening a second interval. Resuming an already-started
+in-progress Session is allowed after local midnight; its immutable Scheduled
+Workout date and `timezone_at_session` are retained. This does not permit
+creating a past-date Session or reopening a terminal past-date Session.
+Record replacement may adjust or remove an existing interval
 only while an active open interval exists; a paused in-progress Session must
 resume before recording a Completion Item. A terminal correction may add a
 closed interval with a client-generated UUID v4 key; an in-progress replacement
@@ -131,7 +135,7 @@ with its already-closed intervals.
 
 `POST .../pause` accepts `{ "close_at": "..." }` or `{}` and closes the
 server-owned open interval without changing Session status. `POST .../resume`
-accepts `{}` and creates a fresh open interval only for today's paused
+accepts `{}` and creates a fresh open interval for an existing paused
 in-progress Session. Both commands require an `Idempotency-Key` and return the
 complete Session detail.
 

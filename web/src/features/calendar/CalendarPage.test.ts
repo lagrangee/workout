@@ -15,6 +15,8 @@ import type {
   RecordsOverviewResponse,
 } from "../records/records-types";
 import CalendarPage from "./CalendarPage.vue";
+// @ts-expect-error The shared server validator is JavaScript without a declaration file.
+import { validateSessionRecord } from "../../../../src/validation.js";
 
 type RequestHandler = (path: string, options?: RequestInit) => unknown | Promise<unknown>;
 
@@ -218,6 +220,7 @@ function correctionSession(
   const snapshot = {
     schema_version: 2,
     title,
+    exercise_occurrence_keys: ["squat"],
     blocks: [{
       title: "力量",
       exercises: [{
@@ -257,6 +260,7 @@ function correctionSession(
     }],
     completion_fraction: 1,
     training_intervals: [{
+      interval_key: `interval-${sessionKey}`,
       started_at: `${date}T02:00:00.000Z`,
       ended_at: `${date}T02:30:00.000Z`,
     }],
@@ -399,6 +403,96 @@ async function settle(): Promise<void> {
 }
 
 describe("CalendarPage", () => {
+  it("submits historical cross-midnight corrections that pass canonical server validation", async () => {
+    const harness = createCorrectionHarness();
+    const detail = harness.details["session-b"];
+    detail.training_intervals[0].started_at = `${secondSessionDate}T15:45:00.000Z`;
+    detail.training_intervals[0].ended_at = `${secondSessionDate}T16:30:00.000Z`;
+    detail.completion_results[0].completed_at = `${secondSessionDate}T16:15:00.000Z`;
+    detail.updated_at = `${secondSessionDate}T16:30:00.000Z`;
+    const errors: string[][] = [];
+    harness.onPut = ({ body }) => {
+      const validation = validateSessionRecord(body, detail, `${targetDate}T04:00:00.000Z`, "terminal");
+      errors.push(validation);
+      if (validation.length) throw new Error(`The canonical Session Record is invalid: ${validation.join(", ")}`);
+      return cloneFixture(detail);
+    };
+    const { app } = createTestApp(harness.handler);
+    const wrapper = mount(CalendarPage, { props: { app } });
+    await settle();
+    await wrapper.get(`[data-date="${secondSessionDate}"]`).trigger("click");
+    await settle();
+    await openCorrection(wrapper);
+    await wrapper.get<HTMLInputElement>("#correction-value-shared-item").setValue("9");
+    await wrapper.get<HTMLInputElement>("#correction-weight-shared-item").setValue("42");
+    await wrapper.get('[data-action="save-correction"]').trigger("click");
+    await settle();
+
+    expect(errors).toEqual([[]]);
+    expect(app.setError).not.toHaveBeenCalled();
+    expect(harness.writes[0]?.sessionKey).toBe("session-b");
+    expect(harness.writes[0]?.body).toMatchObject({
+      record_schema_version: 2,
+      training_intervals: detail.training_intervals,
+      set_results: [{
+        actual: { metric: "reps", value: 9 },
+        resistance: { mode: "external_load", value: 42, unit: "kg" },
+        completed_at: detail.completion_results[0].completed_at,
+      }],
+    });
+    expect(detail.scheduled_date).toBe(secondSessionDate);
+    wrapper.unmount();
+  });
+
+  it("timestamps a newly corrected result inside the last closed interval after midnight", async () => {
+    const harness = createCorrectionHarness();
+    const detail = harness.details["session-b"];
+    detail.status = "partial";
+    detail.training_intervals = [
+      { interval_key: "interval-before-pause", started_at: `${secondSessionDate}T15:39:00.000Z`, ended_at: `${secondSessionDate}T15:49:00.000Z` },
+      { interval_key: "interval-after-pause", started_at: `${secondSessionDate}T15:51:00.000Z`, ended_at: `${secondSessionDate}T16:00:49.000Z` },
+    ];
+    detail.updated_at = `${secondSessionDate}T16:03:28.000Z`;
+    detail.completion_results[0].completed_at = `${secondSessionDate}T15:45:00.000Z`;
+    detail.snapshot.completion_items.push({
+      ...detail.snapshot.completion_items[0],
+      completion_item_key: "missing-item",
+      set_id: "set-2",
+    });
+    detail.snapshot.blocks[0].exercises[0].sets.push({
+      ...detail.snapshot.blocks[0].exercises[0].sets[0],
+      set_id: "set-2",
+    });
+    const errors: string[][] = [];
+    harness.onPut = ({ body }) => {
+      const validation = validateSessionRecord(body, detail, `${targetDate}T04:00:00.000Z`, "terminal");
+      errors.push(validation);
+      if (validation.length) throw new Error(`The canonical Session Record is invalid: ${validation.join(", ")}`);
+      return cloneFixture(detail);
+    };
+    const { app } = createTestApp(harness.handler);
+    const wrapper = mount(CalendarPage, { props: { app } });
+    await settle();
+    await wrapper.get(`[data-date="${secondSessionDate}"]`).trigger("click");
+    await settle();
+    await openCorrection(wrapper);
+    await wrapper.get<HTMLInputElement>("#correction-value-missing-item").setValue("8");
+    await wrapper.get('[data-action="save-correction"]').trigger("click");
+    await settle();
+
+    expect(errors).toEqual([[]]);
+    expect(app.setError).not.toHaveBeenCalled();
+    expect(harness.writes[0]?.body).toMatchObject({
+      training_intervals: detail.training_intervals,
+      set_results: [
+        { completed_at: `${secondSessionDate}T15:45:00.000Z` },
+        { completion_item_key: "missing-item", completed_at: `${secondSessionDate}T16:00:49.000Z` },
+      ],
+    });
+    expect(detail.scheduled_date).toBe(secondSessionDate);
+    wrapper.unmount();
+  });
+
   it("shows when a workout was moved from another date", async () => {
     const movedWorkout = {
       date: targetDate,

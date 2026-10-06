@@ -1975,9 +1975,14 @@ export function useSessionExecution(
     if (rawWeight !== undefined) writeExecutionDraft("resistance", item.completion_item_key, rawWeight);
     writeExecutionDraft("rir", item.completion_item_key, rawRir);
     const inputFingerprint = JSON.stringify({ rawValue, rawWeight: rawWeight ?? null, rawRir });
+    const attemptedAt = Date.parse(completionAttempt?.completedAt ?? "");
     const completedAt = completionAttempt?.sessionKey === detail.session_key
       && completionAttempt.itemKey === item.completion_item_key
       && completionAttempt.inputFingerprint === inputFingerprint
+      // An uncertain write may be reconciled against an earlier server pause.
+      // Reuse its timing only while it still belongs to an authoritative interval.
+      && detail.training_intervals.some((interval) => attemptedAt >= Date.parse(interval.started_at)
+        && (interval.ended_at === null || attemptedAt <= Date.parse(interval.ended_at)))
       ? completionAttempt.completedAt
       : isoNow();
     completionAttempt = {
