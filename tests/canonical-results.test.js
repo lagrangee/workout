@@ -4,8 +4,8 @@ import { WEEKDAYS, weekdayKey } from "../src/util.js";
 import { agentRequest, appFixture, call, createAgentToken, TEST_NOW, testInstant, today } from "./helpers.js";
 
 /** @param {"start"|"skip"} [command] */
-async function seedAlternatingSession(command = "start") {
-  let current = Date.parse(TEST_NOW);
+async function seedAlternatingSession(command = "start", startedAt = TEST_NOW) {
+  let current = Date.parse(startedAt);
   const fixture = appFixture({ clock: () => new Date(current) });
   const state = await fixture.store.getByEmail("athlete-a@example.invalid");
   const slot = {
@@ -35,8 +35,70 @@ async function seedAlternatingSession(command = "start") {
   assert.equal(created.response.status, 201);
   const detail = await call(fixture.handler, `/api/private/sessions/${created.body.session_key}`);
   assert.equal(detail.response.status, 200);
-  return { ...fixture, sessionKey: created.body.session_key, detail: detail.body, advanceTo: (offsetMs) => { current = Date.parse(TEST_NOW) + offsetMs; } };
+  return { ...fixture, sessionKey: created.body.session_key, detail: detail.body, advanceTo: (offsetMs) => { current = Date.parse(startedAt) + offsetMs; } };
 }
+
+test("a late-night canonical Session records after midnight and permits next-day historical correction", async () => {
+  const startedAt = `${today}T15:55:00.000Z`;
+  const completedAt = `${today}T16:05:00.000Z`;
+  const fixture = await seedAlternatingSession("start", startedAt);
+  fixture.advanceTo(10 * 60_000);
+  const record = {
+    record_schema_version: 2,
+    set_results: fixture.detail.snapshot.completion_items.map((item) => ({ completion_item_key: item.completion_item_key, status: "completed", actual: { metric: "reps", value: 5 }, resistance: { mode: "bodyweight" }, rir: null, note: null, completed_at: completedAt })),
+    training_intervals: fixture.detail.training_intervals,
+    session_rpe: null, note: null, exercise_feedback: [], skip_reason: null,
+  };
+  const saved = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify(record) });
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.scheduled_date, today);
+  fixture.advanceTo(11 * 60_000);
+  const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "midnight-end" }, body: JSON.stringify({ record, ended_at: `${today}T16:06:00.000Z` }) });
+  assert.equal(ended.response.status, 200, JSON.stringify(ended.body));
+  fixture.advanceTo(24 * 60 * 60_000);
+  record.training_intervals = ended.body.training_intervals;
+  record.set_results[0].actual.value = 6;
+  const corrected = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify(record) });
+  assert.equal(corrected.response.status, 200, JSON.stringify(corrected.body));
+  assert.equal(corrected.body.scheduled_date, today);
+  assert.equal(corrected.body.local_date, today);
+  assert.equal(corrected.body.completion_results[0].actual.value, 6);
+});
+
+test("a late-night canonical Session can pause and resume after midnight without changing its date", async () => {
+  const fixture = await seedAlternatingSession("start", `${today}T15:55:00.000Z`);
+  fixture.advanceTo(10 * 60_000);
+  const paused = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/pause`, { method: "POST", headers: { "Idempotency-Key": "midnight-pause" }, body: "{}" });
+  assert.equal(paused.response.status, 200);
+  fixture.advanceTo(11 * 60_000);
+  const resumed = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/resume`, { method: "POST", headers: { "Idempotency-Key": "midnight-resume" }, body: "{}" });
+  assert.equal(resumed.response.status, 200, JSON.stringify(resumed.body));
+  assert.equal(resumed.body.scheduled_date, today);
+  assert.equal(resumed.body.local_date, today);
+  assert.equal(resumed.body.training_intervals.length, 2);
+  const replay = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/resume`, { method: "POST", headers: { "Idempotency-Key": "midnight-resume-again" }, body: "{}" });
+  assert.deepEqual(replay.body.training_intervals, resumed.body.training_intervals);
+  fixture.advanceTo(12 * 60_000);
+  const record = {
+    record_schema_version: 2,
+    set_results: resumed.body.snapshot.completion_items.map((item) => ({ completion_item_key: item.completion_item_key, status: "completed", actual: { metric: "reps", value: 5 }, resistance: { mode: "bodyweight" }, rir: null, note: null, completed_at: `${today}T16:07:00.000Z` })),
+    training_intervals: resumed.body.training_intervals,
+    session_rpe: null, note: null, exercise_feedback: [], skip_reason: null,
+  };
+  const saved = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/record`, { method: "PUT", body: JSON.stringify(record) });
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+  fixture.advanceTo(13 * 60_000);
+  const ended = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/end`, { method: "POST", headers: { "Idempotency-Key": "midnight-resumed-end" }, body: JSON.stringify({ record, ended_at: `${today}T16:08:00.000Z` }) });
+  assert.equal(ended.response.status, 200, JSON.stringify(ended.body));
+  assert.equal(ended.body.status, "completed");
+  assert.equal(ended.body.scheduled_date, today);
+  assert.equal(ended.body.training_duration_sec, 720);
+  const terminalResume = await call(fixture.handler, `/api/private/sessions/${fixture.sessionKey}/resume`, { method: "POST", headers: { "Idempotency-Key": "midnight-terminal-resume" }, body: "{}" });
+  assert.equal(terminalResume.response.status, 409);
+  const pastCreation = await call(fixture.handler, `/api/private/scheduled-workouts/${today}/start`, { method: "POST", headers: { "Idempotency-Key": "midnight-new-start" }, body: "{}" });
+  assert.equal(pastCreation.response.status, 400);
+  assert.equal(pastCreation.body.error.code, "session_date_not_today");
+});
 
 async function seedExternalLoadSession() {
   let current = Date.parse(TEST_NOW);

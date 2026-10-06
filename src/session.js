@@ -302,8 +302,6 @@ export function resumeSession(state, sessionKey, now) {
   const session = state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey);
   if (!session) return { error: { code: "not_found", message: "Session not found" } };
   if (session.status !== "in_progress") return { error: { code: "session_state_conflict", message: "Only an in-progress Session can resume" } };
-  const today = localDate(now, state.timezone);
-  if (session.scheduled_date !== today) return { error: { code: "session_date_not_today", message: "Only today's Session can resume" } };
   const open = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
   if (open) return { session, replay: true };
   session.training_intervals.push({ interval_key: opaqueKey("ti"), started_at: now.toISOString(), ended_at: null });

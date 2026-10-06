@@ -61,3 +61,15 @@ Each canonical snapshot Exercise also retains the Registry `category` selected
 by its Plan Revision: `strength`, `endurance`, `mobility`, or `recovery`.
 Category is not writable through Session Record v2. A later Registry category
 change therefore cannot rewrite the historical meaning of this Session.
+
+Training Intervals and result timestamps may cross local midnight. Recording,
+pausing, resuming an existing in-progress Session, and ending it retain its
+original Scheduled Workout date and `timezone_at_session`. Resume is governed
+by Session Status, not the current calendar date. Past-date terminal corrections
+remain allowed; timestamps must fall inside the submitted Training Intervals.
+After an uncertain completion write, a retry preserves its original timestamp
+only if that timestamp is still inside a server-returned Training Interval.
+If pause reconciliation has excluded it, the retry uses the current completion
+instant after resume rather than submitting a timestamp in the paused gap.
+The lifecycle, interval ownership, and explicit expiry rules are shared with
+[Session Record v1](session-record-v1.md).

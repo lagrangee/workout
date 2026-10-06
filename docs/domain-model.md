@@ -123,6 +123,8 @@ _Avoid_: Target set count, result row
 
 **Workout Session**:
 One Athlete's actual execution or explicit skip of exactly one Scheduled Workout. It owns the execution lifecycle and all recorded results, preserves the Athlete timezone used to assign its immutable Scheduled Workout date, and is never created for plan-free or ad-hoc training.
+Training Intervals may cross local midnight; an existing in-progress Session
+can pause and resume without changing that date.
 _Avoid_: Scheduled Workout status, plan item, free workout
 
 **Training Interval**:

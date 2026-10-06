@@ -13,6 +13,8 @@ import { WorkoutApiError } from "../../core/api-client";
 import type { AudioOutput, CueEvent } from "../../lib/workout-timeline";
 import TodayPage from "./TodayPage.vue";
 import type { CompletionItem, SessionDetail, ResistanceValue, ResistanceMode } from "./session-types";
+// @ts-expect-error The shared server validator is JavaScript without a declaration file.
+import { validateSessionRecord } from "../../../../src/validation.js";
 
 const initialNow = Date.parse("2026-08-29T04:00:00.000Z");
 
@@ -235,8 +237,8 @@ function appHarness(
   };
 }
 
-function componentClock(): ComponentClock {
-  let current = initialNow;
+function componentClock(start = initialNow): ComponentClock {
+  let current = start;
   let nextHandle = 0;
   const frames = new Map<number, FrameRequestCallback>();
   return {
@@ -318,6 +320,68 @@ afterEach(async () => {
 });
 
 describe("TodayPage", () => {
+  test.each([
+    { label: "excluded by an earlier authoritative pause", pauseOffset: 8_000, completedOffset: 20_000 },
+    { label: "still inside the closed interval", pauseOffset: 10_000, completedOffset: 10_000 },
+  ])("retries an uncommitted completion when its old timestamp is $label", async ({ pauseOffset, completedOffset }) => {
+    const startedAt = Date.parse("2026-08-29T15:59:55.000Z");
+    vi.setSystemTime(new Date(startedAt));
+    const clock = componentClock(startedAt);
+    installSeams(clock, componentAudio());
+    let serverDetail = detail();
+    serverDetail.snapshot.schema_version = 2;
+    serverDetail.training_intervals[0].started_at = new Date(startedAt).toISOString();
+    serverDetail.updated_at = new Date(startedAt).toISOString();
+    for (const item of serverDetail.snapshot.completion_items ?? []) {
+      item.resistance_mode = "external_load";
+      item.resistance_kg = 12;
+      item.resistance = { mode: "external_load", value: 12, unit: "kg" };
+    }
+    let recordAttempts = 0;
+    const validationErrors: string[][] = [];
+    const harness = appHarness(async (path, options) => {
+      if (path.endsWith("/start")) return clone(serverDetail) as unknown as JsonRecord;
+      if (path.endsWith("/pause")) {
+        // Reconciliation can reveal a pause already committed by another surface.
+        serverDetail = paused(serverDetail, new Date(startedAt + pauseOffset).toISOString());
+        return clone(serverDetail) as unknown as JsonRecord;
+      }
+      if (path.endsWith("/resume")) {
+        serverDetail.training_intervals.push({ interval_key: "interval-2", started_at: new Date(clock.now()).toISOString(), ended_at: null });
+        return clone(serverDetail) as unknown as JsonRecord;
+      }
+      if (path.endsWith("/record")) {
+        recordAttempts += 1;
+        if (recordAttempts === 1) throw new Error("连接中断，写入结果未知");
+        const body = JSON.parse(String(options?.body));
+        const errors = validateSessionRecord(body, serverDetail, new Date(clock.now()).toISOString(), "in_progress");
+        validationErrors.push(errors);
+        if (errors.length) throw new WorkoutApiError("The canonical Session Record is invalid", 400, {});
+        serverDetail.completion_results = body.set_results;
+        serverDetail.completion_fraction = 0.5;
+        return clone(serverDetail) as unknown as JsonRecord;
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+    const wrapper = mount(TodayPage, { props: { app: harness.app } });
+    wrappers.push(wrapper);
+    await wrapper.get('[data-action="start"]').trigger("click");
+    await settle();
+    await clock.advance(10_000);
+    await wrapper.get('[data-action="complete"]').trigger("click");
+    await settle();
+    expect(wrapper.get('[data-action="toggle-timer"]').text()).toBe("继续");
+    await clock.advance(10_000);
+    await wrapper.get('[data-action="toggle-timer"]').trigger("click");
+    await settle();
+    await wrapper.get('[data-action="complete"]').trigger("click");
+    await settle();
+
+    expect(validationErrors).toEqual([[]]);
+    expect(serverDetail.completion_results[0]?.completed_at).toBe(new Date(startedAt + completedOffset).toISOString());
+    expect(serverDetail.scheduled_date).toBe("2026-08-29");
+  });
+
   test("renders summary and overview progress with native semantics and no inline style", async () => {
     const clock = componentClock();
     installSeams(clock, componentAudio());
