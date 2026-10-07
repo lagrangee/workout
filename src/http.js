@@ -34,7 +34,17 @@ export function createHandler(initialEnv = {}, options = {}) {
   const getStore = () => (storePromise ??= createStore(initialEnv, initialEnv.DB));
   const clock = options?.clock ?? (() => new Date());
   const loginAttempts = new Map();
-  return { fetch: (/** @type {Request} */ request, /** @type {HttpEnv} */ env = initialEnv, /** @type {any} */ ctx) => route(request, env, getStore, ctx, requestInstant(clock), loginAttempts) };
+  return { fetch: async (/** @type {Request} */ request, /** @type {HttpEnv} */ env = initialEnv, /** @type {any} */ ctx) => {
+    const started = performance.now();
+    const response = await route(request, env, getStore, ctx, requestInstant(clock), loginAttempts);
+    const pathname = new URL(request.url).pathname;
+    if (pathname.startsWith("/api/private/") || pathname.startsWith("/api/agent/")) {
+      // Only a coarse duration is exposed: no path, identity, request body,
+      // database identifier, or training facts become timing metadata.
+      response.headers.set("Server-Timing", `workout;dur=${Math.max(0, performance.now() - started).toFixed(1)}`);
+    }
+    return response;
+  } };
 }
 
 /** @param {Request} request @param {Record<string, any>} env @param {() => Promise<any>} getStore @param {any} ctx @param {Date} now @param {Map<string, { count: number, resetAt: number }>} loginAttempts */
