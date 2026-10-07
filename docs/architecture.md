@@ -18,6 +18,12 @@ still rejects a concurrent winner. Core canonical Plan and Session tables are
 read with one D1 batch to avoid a network round trip for each table; optional
 later-migration reads retain their compatibility handling.
 
+Private and Agent API responses expose a coarse `Server-Timing` metric named
+`workout`, measured around the awaited Worker request handler. It includes
+authentication, reads, validation, and persistence performed by that handler;
+network transit outside the handler is excluded. The metric contains only a
+duration in milliseconds, with no Athlete, request, or training identifiers.
+
 ## Derived read models
 
 Calendar, progress, Coach, Agent, and Athlete Export views are projections of
