@@ -402,7 +402,7 @@ async function privateMutation(request, env, store, originalState, path, url, no
     return response;
   };
   try {
-    return store.transaction ? await store.transaction(execute, { now }) : await execute(store);
+    return store.transaction ? await store.transaction(execute, { now, initialState: originalState }) : await execute(store);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "D1_CONCURRENCY_CONFLICT") {
       emitSecurityEvent(env, "mutation_conflict", now, { surface: "private", reason: "state_concurrency" });

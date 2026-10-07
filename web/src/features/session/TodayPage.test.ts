@@ -822,9 +822,11 @@ describe("TodayPage", () => {
         window.dispatchEvent(event);
       } else document.dispatchEvent(new Event("visibilitychange"));
       await settle();
-      expect(wrapper.get('[data-action="toggle-timer"]').text()).toBe("继续");
-      await wrapper.get('[data-action="toggle-timer"]').trigger("click");
-      await settle();
+      if (interruption === "already-paused") {
+        expect(wrapper.get('[data-action="toggle-timer"]').text()).toBe("继续");
+        await wrapper.get('[data-action="toggle-timer"]').trigger("click");
+        await settle();
+      }
       expect(contexts.reduce((total, context) => total + context.audibleStarts, 0))
         .toBeGreaterThan(startsBeforeInterruption);
       expect(wrapper.find(".timed-audio-notice").exists()).toBe(false);

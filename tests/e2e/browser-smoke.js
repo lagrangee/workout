@@ -55,6 +55,7 @@ export default async function runBrowserSmoke(page) {
 
   page.setDefaultTimeout(12_000);
   page.setDefaultNavigationTimeout(12_000);
+  await page.setViewportSize({ width: 390, height: 844 });
   page.on("console", (message) => {
     if (!["error", "warning"].includes(message.type())) return;
     if (/401\s*\(Unauthorized\)/i.test(message.text())) return;
@@ -310,17 +311,58 @@ export default async function runBrowserSmoke(page) {
       requestPath(response.request()) === `/api/private/sessions/${sessionKey}`
       && response.request().method() === "GET"
     ));
+    const resumeResponse = page.waitForResponse((response) => (
+      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/resume`
+      && response.request().method() === "POST"
+    ));
     await page.evaluate(() => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
     });
     invariant((await reconciliationResponse).status() === 200, "pageshow did not reconcile the Session read model");
+    invariant((await resumeResponse).status() === 200, "pageshow did not automatically resume through the server");
     const timerToggle = page.locator('[data-action="toggle-timer"]');
-    await timerToggle.waitFor();
-    invariant((await timerToggle.innerText()).trim() === "继续", "pageshow silently resumed the visible timer");
-    invariant(await timerToggle.getAttribute("aria-pressed") === "true", "pageshow changed the paused control state");
-    invariant(mutationRequests.filter((request) => request.path.endsWith("/resume")).length === resumeCountBeforePageShow, "pageshow sent an automatic resume request");
+    await page.locator('[data-action="toggle-timer"]:not([aria-pressed="true"])').waitFor();
+    invariant((await timerToggle.innerText()).trim() === "暂停", "pageshow did not resume the visible timer");
+    invariant(mutationRequests.filter((request) => request.path.endsWith("/resume")).length === resumeCountBeforePageShow + 1, "pageshow did not issue exactly one automatic resume");
     const readback = await sessionReadback(sessionKey);
-    invariant(readback.responseStatus === 200 && readback.openIntervalCount === 0, "pageshow reopened the authoritative Session interval");
+    invariant(readback.responseStatus === 200 && readback.openIntervalCount === 1 && readback.intervalCount === 3, "pageshow did not open exactly one authoritative Session interval");
+  });
+
+  await safeStage("manual-pause-pageshow", async () => {
+    const pauseResponse = page.waitForResponse((response) => (
+      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/pause`
+      && response.request().method() === "POST"
+    ));
+    await page.locator('[data-action="toggle-timer"]').click();
+    invariant((await pauseResponse).status() === 200, "manual pause failed");
+    await page.locator('[data-action="toggle-timer"][aria-pressed="true"]').waitFor();
+    const resumeCount = mutationRequests.filter((request) => request.path.endsWith("/resume")).length;
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+    const reconciliationResponse = page.waitForResponse((response) => (
+      requestPath(response.request()) === `/api/private/sessions/${sessionKey}`
+      && response.request().method() === "GET"
+    ));
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
+    invariant((await reconciliationResponse).status() === 200, "manual pause did not reconcile after pageshow");
+    const readback = await sessionReadback(sessionKey);
+    invariant(readback.openIntervalCount === 0, "pageshow resumed a manually paused Session");
+    invariant(mutationRequests.filter((request) => request.path.endsWith("/resume")).length === resumeCount, "pageshow resumed a manual pause");
+  });
+
+  await safeStage("session-end", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.locator('[data-action="end"]').click();
+    await page.locator('[data-action="save-end"]').waitFor();
+    await page.locator("#end-note").fill("Synthetic browser End verification");
+    const endResponse = page.waitForResponse((response) => (
+      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/end`
+      && response.request().method() === "POST"
+    ));
+    await page.locator('[data-action="save-end"]').click();
+    invariant((await endResponse).status() === 200, "End did not commit");
+    await page.locator('[data-action="end"]').waitFor({ state: "hidden" });
+    const readback = await sessionReadback(sessionKey);
+    invariant(readback.sessionStatus === "partial" && readback.openIntervalCount === 0, "End failed to persist a terminal Session");
   });
 
   await safeStage("cookie-expiry", async () => {

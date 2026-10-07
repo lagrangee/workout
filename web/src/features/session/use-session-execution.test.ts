@@ -8,7 +8,9 @@ import type {
   JsonRecord,
   WorkoutAppStore,
 } from "../../core/contracts";
-import { WorkoutApiError } from "../../core/api-client";
+import { createApiClient, WorkoutApiError } from "../../core/api-client";
+// @ts-expect-error The production HTTP fixture is JavaScript; this test exercises its actual response formatter.
+import { appFixture } from "../../../../tests/helpers.js";
 import type { AudioOutput, CueEvent } from "../../lib/workout-timeline";
 import type { CompletionItem, SessionDetail } from "./session-types";
 import { useSessionExecution } from "./use-session-execution";
@@ -382,6 +384,508 @@ afterEach(async () => {
 });
 
 describe("useSessionExecution", () => {
+  test.each(["none", "before-commit", "after-commit"] as const)(
+    "real HTTP and API client accept canonical pause, midnight resume, and End with %s failure",
+    async (failure) => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const fixture = appFixture({ clock: () => new Date(clock.now()) });
+    const state = await fixture.store.getByEmail("athlete-a@example.invalid");
+    const slot = { kind: "workout", title: "交替核心", start_time: "21:00", estimated_duration_min: 15,
+      blocks: [{ title: "核心", exercises: [{ occurrence_key: "dead_bug_main", exercise_id: "dead_bug",
+        execution_mode: "alternating", name: "死虫", definition_version: 1,
+        sets: [{ set_id: "dead_bug_set_1", ordinal: 1, target: { metric: "reps", value: 5 },
+          resistance_mode: "bodyweight", resistance_kg: null, tempo: null, rest_after_sec: 0 }] }] }] };
+    state.plan_revisions = [{ revision_key: "rev-http-ui", revision_sequence: 1,
+      created_at: new Date(initialNow).toISOString(), effective_from: "2026-08-29",
+      week: { monday: null, tuesday: null, wednesday: null, thursday: null, friday: null, saturday: slot, sunday: null } }];
+    await fixture.store.save(state);
+    const harness = createApiHarness(async () => { throw new Error("use the real HTTP boundary"); });
+    const paths: string[] = [];
+    const endRequests: RequestInit[] = [];
+    const unavailable = () => new Response(JSON.stringify({ error: {
+      code: "service_unavailable", message: "写入服务暂时不可用", details: [],
+    } }), { status: 503, headers: { "Content-Type": "application/json" } });
+    const pendingHttp = new Set<Promise<Response>>();
+    const fetchHttp: typeof fetch = async (input, options) => {
+      paths.push(String(input));
+      const headers = new Headers(options?.headers);
+      headers.set("x-athlete-email", "athlete-a@example.invalid");
+      const isEnd = String(input).endsWith("/end");
+      if (isEnd) endRequests.push(options ?? {});
+      if (isEnd && endRequests.length === 1 && failure === "before-commit") return unavailable();
+      const response = await fixture.handler.fetch(new Request(`https://workout.example${input}`, { ...options, headers }),
+        { LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example" });
+      if (isEnd && endRequests.length === 1 && failure === "after-commit") {
+        expect(response.status).toBe(200);
+        return unavailable();
+      }
+      return response;
+    };
+    harness.app.api = createApiClient((input, options) => {
+      const response = fetchHttp(input, options);
+      pendingHttp.add(response);
+      void response.finally(() => { pendingHttp.delete(response); });
+      return response;
+    });
+    async function settleHttp() {
+      await settle();
+      while (pendingHttp.size) {
+        await Promise.all([...pendingHttp]);
+        await settle();
+      }
+    }
+    const { execution } = mountExecution(harness.app);
+    await clock.advance(11 * 60 * 60_000 + 59 * 60_000 + 59_000);
+    await execution.dispatch({ type: "start" });
+    expect(execution.view.detail?.snapshot.schema_version).toBe(2);
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settleHttp();
+    await clock.advance(30_000);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settleHttp();
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.detail?.scheduled_date).toBe("2026-08-29");
+    expect(execution.view.detail?.training_intervals).toHaveLength(2);
+    await clock.advance(1_000);
+    await execution.dispatch({ type: "complete" });
+    expect(execution.view.detail?.completion_fraction).toBe(1);
+    expect(execution.view.state.endSheet).toBe(true);
+    await execution.dispatch({ type: "save-end" });
+    expect(execution.view.state.endError).toBeNull();
+    expect(execution.view.state.endSheet).toBe(false);
+    expect(execution.view.detail?.status).toBe("completed");
+    expect(execution.view.detail?.session_rpe).toBe(8);
+    expect(paths.filter((path) => path.endsWith("/end"))).toHaveLength(failure === "none" ? 1 : 2);
+    if (failure !== "none") {
+      expect(endRequests[1].body).toBe(endRequests[0].body);
+      expect(new Headers(endRequests[1].headers).get("Idempotency-Key"))
+        .toBe(new Headers(endRequests[0].headers).get("Idempotency-Key"));
+    }
+    const saved = await fixture.store.getByEmail("athlete-a@example.invalid");
+    expect(saved.sessions[0].status).toBe("completed");
+    expect(saved.sessions[0].completion_results).toHaveLength(2);
+  });
+
+  test.each(["resolve", "reject"] as const)(
+    "BFCache restore ignores a frozen automatic resume that later %ss after the next interval opens", async (settlement) => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    let server = clone(started);
+    let resumeAttempts = 0;
+    const frozenResume = deferred<SessionDetail>();
+    const resumeOutcomes = new Map<string, SessionDetail>();
+    const harness = createApiHarness(async (path, options) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path === "/api/private/sessions/session-1") return clone(server);
+      if (path.endsWith("/pause")) {
+        server = pausedDetail(server, String(requestBody({ path, options }).close_at));
+        return clone(server);
+      }
+      if (path.endsWith("/resume")) {
+        const key = new Headers(options?.headers).get("Idempotency-Key")!;
+        if (!resumeOutcomes.has(key)) {
+          server = resumedDetail(server, new Date(clock.now()).toISOString());
+          resumeOutcomes.set(key, clone(server));
+        }
+        if (++resumeAttempts === 1) return frozenResume.promise;
+        return clone(resumeOutcomes.get(key)!);
+      }
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("pagehide"));
+    await settle();
+    expect(server.training_intervals.at(-1)?.ended_at).not.toBeNull();
+    await clock.advance(30_000);
+    setDocumentHidden(false);
+    const pageshow = new Event("pageshow");
+    Object.defineProperty(pageshow, "persisted", { value: true });
+    window.dispatchEvent(pageshow);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(server.training_intervals).toHaveLength(3);
+    const resumes = harness.calls.filter((call) => call.path.endsWith("/resume"));
+    expect(new Headers(resumes[1].options?.headers).get("Idempotency-Key"))
+      .toBe(new Headers(resumes[0].options?.headers).get("Idempotency-Key"));
+    expect(new Headers(resumes.at(-1)?.options?.headers).get("Idempotency-Key"))
+      .not.toBe(new Headers(resumes[0].options?.headers).get("Idempotency-Key"));
+    if (settlement === "resolve") frozenResume.resolve(clone(resumeOutcomes.values().next().value!));
+    else frozenResume.reject(new Error("late old resume rejection"));
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.detail?.training_intervals).toHaveLength(3);
+    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBeNull();
+  });
+
+  test.each([408, 503])("End retains its frozen submission after HTTP %s and a conflicting reconciliation replay", async (status) => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    const ended = { ...clone(closed), status: "partial" as const, session_rpe: 8, note: "首次提交备注" };
+    let attempts = 0;
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) return clone(closed);
+      if (path.endsWith("/end")) {
+        if (++attempts === 1) throw new WorkoutApiError("写入响应未确认", status, {});
+        if (attempts === 2) throw new WorkoutApiError("并发写入，请重试", 409, { error: { code: "session_state_conflict" } });
+        return clone(ended);
+      }
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    await execution.dispatch({ type: "end" });
+    await execution.dispatch({ type: "draft-end-note", value: "首次提交备注" });
+    await execution.dispatch({ type: "save-end" });
+    expect(attempts).toBe(2);
+    expect(execution.view.state.endReconciliationRequired).toBe(true);
+    expect(execution.view.state.endSheet).toBe(true);
+    expect(execution.view.state.endError).toContain("并发写入");
+    await execution.dispatch({ type: "draft-end-note", value: "不应替换未确认的首次提交" });
+    expect(execution.view.state.endNote).toBe("首次提交备注");
+    await clock.advance(30_000);
+    await execution.dispatch({ type: "save-end" });
+    const requests = harness.calls.filter((call) => call.path.endsWith("/end"));
+    expect(requests).toHaveLength(3);
+    for (const request of requests.slice(1)) {
+      expect(request.options?.body).toBe(requests[0].options?.body);
+      expect(new Headers(request.options?.headers).get("Idempotency-Key"))
+        .toBe(new Headers(requests[0].options?.headers).get("Idempotency-Key"));
+    }
+    expect(execution.view.state.endError).toBeNull();
+    expect(execution.view.state.endSheet).toBe(false);
+    expect(execution.view.detail?.note).toBe("首次提交备注");
+  });
+
+  test("a first End conflict is a definitive rejection and permits a corrected new submission", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    let attempts = 0;
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) return clone(closed);
+      if (path.endsWith("/end")) {
+        if (++attempts === 1) throw new WorkoutApiError("并发写入，请重试", 409, { error: { code: "session_state_conflict" } });
+        return { ...clone(closed), status: "partial", session_rpe: 8, note: "校正后备注" };
+      }
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    await execution.dispatch({ type: "end" });
+    await execution.dispatch({ type: "save-end" });
+    expect(execution.view.state.endReconciliationRequired).toBe(false);
+    expect(execution.view.state.endError).toContain("并发写入");
+    await execution.dispatch({ type: "draft-end-note", value: "校正后备注" });
+    expect(execution.view.state.endNote).toBe("校正后备注");
+    await execution.dispatch({ type: "save-end" });
+    const requests = harness.calls.filter((call) => call.path.endsWith("/end"));
+    expect(requests).toHaveLength(2);
+    expect(requests[1].options?.body).not.toBe(requests[0].options?.body);
+    expect(new Headers(requests[1].options?.headers).get("Idempotency-Key"))
+      .not.toBe(new Headers(requests[0].options?.headers).get("Idempotency-Key"));
+    expect(execution.view.state.endSheet).toBe(false);
+  });
+
+  test("End replays the identical submission after a server failure with an uncertain commit outcome", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    const ended = { ...clone(closed), status: "partial" as const, session_rpe: 8 };
+    let attempts = 0;
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) return clone(closed);
+      if (path.endsWith("/end")) {
+        if (++attempts <= 2) throw new WorkoutApiError("写入服务暂时不可用", 503, { error: { code: "service_unavailable" } });
+        return clone(ended);
+      }
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    await execution.dispatch({ type: "end" });
+    await execution.dispatch({ type: "save-end" });
+    expect(attempts).toBe(2);
+    expect(execution.view.state.endReconciliationRequired).toBe(true);
+    expect(execution.view.state.endSheet).toBe(true);
+    expect(execution.view.state.endError).toContain("写入服务暂时不可用");
+    await execution.dispatch({ type: "save-end" });
+    const endCalls = harness.calls.filter((call) => call.path.endsWith("/end"));
+    expect(endCalls).toHaveLength(3);
+    for (const call of endCalls.slice(1)) {
+      expect(call.options?.body).toBe(endCalls[0].options?.body);
+      expect(new Headers(call.options?.headers).get("Idempotency-Key"))
+        .toBe(new Headers(endCalls[0].options?.headers).get("Idempotency-Key"));
+    }
+    expect(execution.view.state.endError).toBeNull();
+    expect(execution.view.state.endSheet).toBe(false);
+    expect(execution.view.detail?.status).toBe("partial");
+  });
+
+  test("End displays its authoritative result without waiting for unrelated dashboard reads", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    const ended = { ...clone(closed), status: "partial" as const, session_rpe: 8 };
+    const dashboard = deferred<void>();
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) return clone(closed);
+      if (path.endsWith("/end")) return clone(ended);
+      throw new Error(`redundant detail read: ${path}`);
+    });
+    harness.app.refresh = () => dashboard.promise;
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    await execution.dispatch({ type: "end" });
+    let settled = false;
+    const saving = execution.dispatch({ type: "save-end" }).then(() => { settled = true; });
+    await settle();
+    expect(execution.view.detail?.status).toBe("partial");
+    expect(execution.view.state.endSheet).toBe(false);
+    expect(settled).toBe(true);
+    expect(execution.view.state.endSaving).toBe(false);
+    dashboard.resolve();
+    await saving;
+    await settle();
+    expect(harness.calls.some((call) => call.path === "/api/private/sessions/session-1")).toBe(false);
+  });
+
+  test("a blocked foreground return does not retain a settled task across later manual and automatic resumes", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    let server = sessionDetail();
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(server);
+      if (path.endsWith("/record")) throw new WorkoutApiError("组结果校验失败", 400, { error: { code: "invalid_session_record" } });
+      if (path.endsWith("/pause")) server = pausedDetail(server, new Date(clock.now()).toISOString());
+      else if (path.endsWith("/resume")) server = resumedDetail(server, new Date(clock.now()).toISOString());
+      else throw new Error(path);
+      return clone(server);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    await execution.dispatch({ type: "complete" });
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(true);
+    expect(execution.view.state.mutation.error).toBe("组结果校验失败");
+    await execution.dispatch({ type: "toggle-timer" });
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.state.mutation.error).toBeNull();
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    await clock.advance(30_000);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(2);
+  });
+
+  test("foreground retries an uncertain automatic pause with the same key before opening an interval", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    let pauses = 0;
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) {
+        if (++pauses === 1) throw new Error("response lost after pause committed");
+        return clone(closed);
+      }
+      if (path.endsWith("/resume")) return resumedDetail(closed, new Date(clock.now()).toISOString());
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.mutation.error).toContain("response lost");
+    await clock.advance(30_000);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    const pauseCalls = harness.calls.filter((call) => call.path.endsWith("/pause"));
+    expect(pauseCalls).toHaveLength(2);
+    expect(pauseCalls[1].options?.body).toBe(pauseCalls[0].options?.body);
+    expect(new Headers(pauseCalls[1].options?.headers).get("Idempotency-Key"))
+      .toBe(new Headers(pauseCalls[0].options?.headers).get("Idempotency-Key"));
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.state.mutation.error).toBeNull();
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(1);
+  });
+
+  test("a failed automatic pause retry leaves the Session paused and does not resume", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) throw new Error("pause still uncertain");
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(2);
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
+    expect(execution.view.state.timerPaused).toBe(true);
+    expect(execution.view.state.mutation.error).toBe("pause still uncertain");
+  });
+
+  test.each(["manual", "end-form"] as const)("foreground preserves an existing %s pause", async (reason) => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) return pausedDetail(started, new Date(clock.now()).toISOString());
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    await execution.dispatch({ type: reason === "manual" ? "toggle-timer" : "end" });
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("pagehide"));
+    await settle();
+    await clock.advance(30_000);
+    setDocumentHidden(false);
+    const pageshow = new Event("pageshow");
+    Object.defineProperty(pageshow, "persisted", { value: true });
+    // Reconciliation still reads the real paused Session, even when its
+    // original pause did not come from a browser interruption.
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    harness.app.api.request = async <T>(path: string): Promise<T> => {
+      harness.calls.push({ path });
+      if (path === "/api/private/sessions/session-1") return clone(closed) as T;
+      throw new Error(path);
+    };
+    window.dispatchEvent(pageshow);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(true);
+    expect(execution.view.state.timerPauseReason).toBe(reason);
+    expect(execution.view.state.endSheet).toBe(reason === "end-form");
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
+  });
+
+  test("returning twice while pause is pending does not resume until the latest visible return", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail();
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    const pauseGate = deferred<SessionDetail>();
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) return pauseGate.promise;
+      if (path.endsWith("/resume")) return resumedDetail(closed, new Date(clock.now()).toISOString());
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    pauseGate.resolve(clone(closed));
+    await settle();
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
+    expect(execution.view.state.timerPaused).toBe(true);
+    await clock.advance(30_000);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(1);
+    expect(execution.view.elapsedLabel).toBe("00:01");
+    expect(execution.view.state.timerPaused).toBe(false);
+  });
+
+  test("foreground waits for a pending automatic pause before resuming the same Session", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail({ timed: true });
+    const pauseGate = deferred<SessionDetail>();
+    const closed = pausedDetail(started, "2026-08-29T04:00:01.000Z");
+    const harness = createApiHarness(async (path) => {
+      if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/pause")) return pauseGate.promise;
+      if (path.endsWith("/resume")) return resumedDetail(closed, new Date(clock.now()).toISOString());
+      throw new Error(path);
+    });
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await execution.dispatch({ type: "start-timed" });
+    await clock.advance(1_000);
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    await clock.advance(30_000);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(true);
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
+    pauseGate.resolve(clone(closed));
+    await settle();
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(1);
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.actionRemainingLabel).toBe("04");
+    expect(execution.view.elapsedLabel).toBe("00:01");
+  });
+
   function mixedEnduranceSession(options: { laterVisibleDone?: boolean } = {}): SessionDetail {
     const detail = sessionDetail();
     const block = detail.snapshot.blocks?.[0];
@@ -1106,7 +1610,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.state.timerPaused).toBe(true);
   });
 
-  test("visibility and pagehide pause the server interval and foreground waits for manual continue", async () => {
+  test("visibility pauses the server interval and foreground automatically continues the remaining timer", async () => {
     const clock = frameClock();
     const audio = testAudio();
     installSeams(clock, audio);
@@ -1115,6 +1619,7 @@ describe("useSessionExecution", () => {
     const harness = createApiHarness(async (path) => {
       if (path.endsWith("/start")) return clone(started);
       if (path.endsWith("/pause")) return clone(paused);
+      if (path.endsWith("/resume")) return resumedDetail(paused, new Date(clock.now()).toISOString());
       throw new Error(`unexpected request: ${path}`);
     });
     const { execution } = mountExecution(harness.app);
@@ -1139,8 +1644,10 @@ describe("useSessionExecution", () => {
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
     await settle();
-    expect(execution.view.state.timerPaused).toBe(true);
-    expect(execution.view.wakeNotice?.title).toBe("已回到前台，计时仍暂停");
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(1);
+    expect(execution.view.actionRemainingLabel).toBe(remainingBeforeHidden);
+    expect(execution.view.elapsedLabel).toBe(elapsedAtPause);
 
     window.dispatchEvent(new Event("pagehide"));
     await settle();
@@ -1308,7 +1815,10 @@ describe("useSessionExecution", () => {
         pauseAttempts += 1;
         return pauseAttempts === 1 ? neverSettlingPause : clone(closed);
       }
-      if (path.endsWith("/resume")) throw new Error("resume is forbidden before BFCache recovery closes the interval");
+      if (path.endsWith("/resume")) {
+        expect(pauseAttempts).toBe(2);
+        return resumedDetail(closed, new Date(clock.now()).toISOString());
+      }
       throw new Error(`unexpected request: ${path}`);
     });
     const { execution } = mountExecution(harness.app);
@@ -1331,9 +1841,10 @@ describe("useSessionExecution", () => {
       .toBe(new Headers(pauseCalls[0].options?.headers).get("Idempotency-Key"));
     expect(pauseCalls[1].options?.body).toBe(pauseCalls[0].options?.body);
     expect(pauseCalls[1].options?.keepalive).toBe(true);
-    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:01.000Z");
-    expect(execution.view.state.timerPaused).toBe(true);
-    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
+    expect(execution.view.detail?.training_intervals[0].ended_at).toBe("2026-08-29T04:00:01.000Z");
+    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBeNull();
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(1);
   });
 
   test("a late response from the abandoned pagehide pause cannot overwrite BFCache authority", async () => {
@@ -1344,6 +1855,7 @@ describe("useSessionExecution", () => {
     const stalePause = deferred<SessionDetail>();
     const harness = createApiHarness(async (path) => {
       if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/resume")) return resumedDetail(closed, new Date(clock.now()).toISOString());
       if (path === "/api/private/sessions/session-1") return clone(closed);
       if (path.endsWith("/pause")) return stalePause.promise;
       throw new Error(`unexpected request: ${path}`);
@@ -1358,13 +1870,13 @@ describe("useSessionExecution", () => {
     Object.defineProperty(pageshow, "persisted", { value: true });
     window.dispatchEvent(pageshow);
     await settle();
-    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:01.000Z");
+    expect(execution.view.detail?.training_intervals[0].ended_at).toBe("2026-08-29T04:00:01.000Z");
 
     stalePause.resolve(clone(started));
     await settle();
 
-    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:01.000Z");
-    expect(execution.view.state.timerPaused).toBe(true);
+    expect(execution.view.detail?.training_intervals[0].ended_at).toBe("2026-08-29T04:00:01.000Z");
+    expect(execution.view.state.timerPaused).toBe(false);
     expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(1);
   });
 
@@ -1378,6 +1890,7 @@ describe("useSessionExecution", () => {
     let pauseAttempts = 0;
     const harness = createApiHarness(async (path) => {
       if (path.endsWith("/start")) return clone(started);
+      if (path.endsWith("/resume")) return resumedDetail(closed, new Date(clock.now()).toISOString());
       if (path === "/api/private/sessions/session-1") return authority.promise;
       if (path.endsWith("/pause")) {
         pauseAttempts += 1;
@@ -1404,7 +1917,7 @@ describe("useSessionExecution", () => {
     await settle();
     expect(harness.calls.filter((call) => call.path === "/api/private/sessions/session-1")).toHaveLength(1);
     expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(2);
-    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:01.000Z");
+    expect(execution.view.detail?.training_intervals[0].ended_at).toBe("2026-08-29T04:00:01.000Z");
   });
 
   test("a failed BFCache authority read blocks resume and the first Continue retries reconciliation", async () => {

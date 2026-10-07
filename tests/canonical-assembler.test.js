@@ -28,10 +28,11 @@ class D1TestDb {
   }
   /** @param {any[]} statements */
   async batch(statements) {
-    return statements.map((statement) => {
+    return Promise.all(statements.map(async (statement) => {
+      if (/^SELECT\b/i.test(statement.sql.trim())) return statement.all();
       const result = statement.run();
       return { meta: { changes: Number(result.changes ?? 0) } };
-    });
+    }));
   }
 }
 

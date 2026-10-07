@@ -511,21 +511,29 @@ async function allRows(db, sql, params = []) {
 
 /** @param {any} db @param {string} athleteKey */
 async function readCanonicalRows(db, athleteKey) {
-  const plans = await allRows(db, "SELECT * FROM plans WHERE athlete_key = ?1", [athleteKey]);
-  const revisions = await allRows(db, "SELECT * FROM plan_revisions WHERE athlete_key = ?1 ORDER BY revision_sequence", [athleteKey]);
-  const sessions = await allRows(db, "SELECT * FROM sessions WHERE athlete_key = ?1 ORDER BY scheduled_date, session_key", [athleteKey]);
+  // D1 executes a batch in one network round trip and one read transaction.
+  // These tables share the canonical migration boundary; optional later
+  // migrations below retain their existing compatibility handling.
+  const queries = [
+    "SELECT * FROM plans WHERE athlete_key = ?1",
+    "SELECT * FROM plan_revisions WHERE athlete_key = ?1 ORDER BY revision_sequence",
+    "SELECT * FROM sessions WHERE athlete_key = ?1 ORDER BY scheduled_date, session_key",
+    "SELECT ps.* FROM plan_slots AS ps JOIN plan_revisions AS pr ON pr.revision_key = ps.revision_key WHERE pr.athlete_key = ?1",
+    "SELECT * FROM plan_exercises WHERE athlete_key = ?1",
+    "SELECT ps.* FROM plan_sets AS ps JOIN plan_revisions AS pr ON pr.revision_key = ps.revision_key WHERE pr.athlete_key = ?1",
+    "SELECT se.* FROM session_exercises AS se JOIN sessions AS s ON s.session_key = se.session_key WHERE s.athlete_key = ?1",
+    "SELECT ci.* FROM completion_items AS ci JOIN sessions AS s ON s.session_key = ci.session_key WHERE s.athlete_key = ?1",
+    "SELECT sr.* FROM set_results AS sr JOIN sessions AS s ON s.session_key = sr.session_key WHERE s.athlete_key = ?1",
+  ];
+  const groups = await db.batch(queries.map((query) => db.prepare(query).bind(athleteKey)));
+  const [plans, revisions, sessions, slots, exercises, sets, sessionExercises, completionItems, results] = groups.map((/** @type {any} */ group) => group.results ?? []);
   if (plans.length === 0 && revisions.length === 0 && sessions.length === 0) return null;
   /** @type {Record<string, any>} */
   const rows = {
     plan: plans[0] ?? null,
     revisions,
     sessions,
-    slots: await allRows(db, "SELECT ps.* FROM plan_slots AS ps JOIN plan_revisions AS pr ON pr.revision_key = ps.revision_key WHERE pr.athlete_key = ?1", [athleteKey]),
-    exercises: await allRows(db, "SELECT * FROM plan_exercises WHERE athlete_key = ?1", [athleteKey]),
-    sets: await allRows(db, "SELECT ps.* FROM plan_sets AS ps JOIN plan_revisions AS pr ON pr.revision_key = ps.revision_key WHERE pr.athlete_key = ?1", [athleteKey]),
-    sessionExercises: await allRows(db, "SELECT se.* FROM session_exercises AS se JOIN sessions AS s ON s.session_key = se.session_key WHERE s.athlete_key = ?1", [athleteKey]),
-    completionItems: await allRows(db, "SELECT ci.* FROM completion_items AS ci JOIN sessions AS s ON s.session_key = ci.session_key WHERE s.athlete_key = ?1", [athleteKey]),
-    results: await allRows(db, "SELECT sr.* FROM set_results AS sr JOIN sessions AS s ON s.session_key = sr.session_key WHERE s.athlete_key = ?1", [athleteKey]),
+    slots, exercises, sets, sessionExercises, completionItems, results,
   };
   try {
     const ancillary = await allRows(db, `SELECT 'note' AS row_type, sn.session_key, NULL AS occurrence_key, sn.note, sn.skip_reason, sn.session_rpe, NULL AS text, NULL AS schema_version, NULL AS completed_at, NULL AS recording_source

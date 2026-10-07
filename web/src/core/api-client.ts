@@ -54,6 +54,12 @@ function apiErrorBody(value: unknown): ApiErrorBody {
   if (typeof source.message === "string") error.message = source.message;
   if (Array.isArray(source.details)) {
     error.details = source.details.flatMap((detail) => {
+      // The production validators return path-prefixed strings, while other
+      // endpoints use structured details. Keep both forms at this boundary.
+      if (typeof detail === "string" && detail.trim()) {
+        const match = /^(\/[^:]*|\$[^:]*):\s*(.*)$/.exec(detail);
+        return [match ? { path: match[1], message: match[2] } : { message: detail }];
+      }
       if (typeof detail !== "object" || detail === null || Array.isArray(detail)) return [];
       const record = detail as Record<string, unknown>;
       const normalized: { path?: string; message?: string } = {};
@@ -231,7 +237,12 @@ export function validateWorkoutJsonResponse(path: string, value: unknown): JsonR
   else if (pathname === "/api/private/today") validateToday(path, value);
   else if (pathname === "/api/private/plan") validatePlan(path, value);
   else if (pathname === "/api/private/progress") validateProgress(path, value);
-  else if (isSessionDetailPath(pathname)) validateSessionDetail(path, value);
+  else if (isSessionDetailPath(pathname)) {
+    validateSessionDetail(path, value);
+    if (pathname.endsWith("/end") && !["completed", "partial"].includes(String(value.status))) {
+      protocolFailure(path, "end response must contain a terminal Session");
+    }
+  }
   return value;
 }
 
@@ -288,7 +299,12 @@ export function createApiClient(fetchImpl: typeof fetch = fetch): ApiClient {
 }
 
 export function errorMessage(error: unknown): string {
-  if (error instanceof WorkoutApiError) return error.message;
+  if (error instanceof WorkoutApiError) {
+    const details = error.data.error?.details?.slice(0, 5).map((detail) => (
+      [detail.path, detail.message].filter(Boolean).join(": ")
+    )).filter(Boolean) ?? [];
+    return details.length ? `${error.message}（${details.join("；")}）` : error.message;
+  }
   if (typeof error === "string" && error.trim()) return error;
   return error instanceof Error ? error.message : "请求失败";
 }

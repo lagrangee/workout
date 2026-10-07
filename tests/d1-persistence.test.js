@@ -35,6 +35,8 @@ class D1SqliteDb {
     this.db = db;
     this.batchStatementCounts = [];
     this.queryExecutionCount = 0;
+    this.roundTripCount = 0;
+    this.inBatch = false;
   }
 
   /** @param {string} sql */
@@ -42,6 +44,7 @@ class D1SqliteDb {
     const statement = this.db.prepare(sql);
     const execute = (callback) => {
       this.queryExecutionCount += 1;
+      if (!this.inBatch) this.roundTripCount += 1;
       return callback();
     };
     const bound = (params = []) => ({
@@ -64,17 +67,22 @@ class D1SqliteDb {
   /** @param {any[]} statements */
   async batch(statements) {
     this.batchStatementCounts.push(statements.length);
+    this.roundTripCount += 1;
+    this.inBatch = true;
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const results = statements.map((statement) => {
+      const results = await Promise.all(statements.map(async (statement) => {
+        if (/^SELECT\b/i.test(statement.sql.trim())) return statement.all();
         const result = statement.run();
         return { meta: { changes: Number(result.changes ?? 0) } };
-      });
+      }));
       this.db.exec("COMMIT");
       return results;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
+    } finally {
+      this.inBatch = false;
     }
   }
 }
@@ -582,6 +590,74 @@ test("a cold private mutation with 201 Sessions stays below the whole Worker inv
   } finally {
     sqlite.close();
   }
+});
+
+test("a warm private Session End avoids repeated hydration and sequential D1 read round trips", async (t) => {
+  const { sqlite, db, store } = createDatabase();
+  try {
+    const state = await seedCanonicalHistory(store, 201);
+    const session = state.sessions.at(-1);
+    session.status = "in_progress";
+    session.session_rpe = null;
+    const exercise = session.snapshot.blocks[0].exercises[0];
+    exercise.sets = Array.from({ length: 8 }, (_, index) => ({ ...exercise.sets[0], set_id: `end-set-${index}`, ordinal: index + 1 }));
+    session.snapshot.completion_items = exercise.sets.flatMap((set) => ["left", "right"].map((side) => ({
+      ...session.snapshot.completion_items[0], completion_item_key: `${set.set_id}-${side}`, set_id: set.set_id, set_ordinal: set.ordinal, side,
+    })));
+    session.completion_results = session.snapshot.completion_items.map((item) => ({ ...session.completion_results[0], completion_item_key: item.completion_item_key }));
+    session.training_intervals = Array.from({ length: 6 }, (_, index) => ({
+      interval_key: `end-interval-${index}`,
+      started_at: `2026-08-29T00:${String(index * 3).padStart(2, "0")}:00.000Z`,
+      ended_at: `2026-08-29T00:${String(index * 3 + 2).padStart(2, "0")}:00.000Z`,
+    }));
+    session.completion_results.forEach((result) => { result.completed_at = "2026-08-29T00:01:00.000Z"; });
+    session.set_results = session.completion_results;
+    await store.save(state);
+    const env = { DB: db, LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", ATHLETE_A_EMAIL: state.email, DEFAULT_TIMEZONE: "Asia/Shanghai" };
+    const handler = createHandler(env, { clock: () => new Date("2026-08-29T00:20:00.000Z") });
+    await handler.fetch(new Request("https://workout.example/api/private/settings", { headers: { "x-athlete-email": state.email } }), env);
+    const record = {
+      record_schema_version: 2,
+      set_results: session.completion_results.map((result) => ({ completion_item_key: result.completion_item_key, status: result.status, actual: result.actual, resistance: { mode: "bodyweight" }, rir: result.rir, note: result.note, completed_at: result.completed_at })),
+      training_intervals: session.training_intervals,
+      session_rpe: 8, note: null, exercise_feedback: [], skip_reason: null,
+    };
+    db.queryExecutionCount = 0;
+    db.roundTripCount = 0;
+    const response = await handler.fetch(new Request(`https://workout.example/api/private/sessions/${session.session_key}/end`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "https://workout.example", "x-athlete-email": state.email, "Idempotency-Key": "end-performance" },
+      body: JSON.stringify({ record, ended_at: "2026-08-29T00:20:00.000Z" }),
+    }), env);
+    assert.equal(response.status, 200, await response.clone().text());
+    t.diagnostic(`warm Session End used ${db.queryExecutionCount} statements in ${db.roundTripCount} D1 round trips`);
+    assert.ok(db.queryExecutionCount < D1_INVOCATION_LIMIT);
+    assert.ok(db.roundTripCount <= 8, `Session End used ${db.roundTripCount} D1 round trips`);
+    assert.equal((await store.getByEmail(state.email)).sessions.at(-1).status, "completed");
+  } finally { sqlite.close(); }
+});
+
+test("a private mutation reusing authenticated D1 state still rejects a concurrent winning write", async () => {
+  const { sqlite, db, store } = createDatabase();
+  try {
+    const state = await seedCanonicalHistory(store, 1);
+    const env = { DB: db, LOCAL_AUTH: "true", PUBLIC_ORIGIN: "https://workout.example", ATHLETE_A_EMAIL: state.email, DEFAULT_TIMEZONE: "Asia/Shanghai" };
+    const handler = createHandler(env);
+    const request = new Request("https://workout.example/api/private/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json", Origin: "https://workout.example", "x-athlete-email": state.email },
+      body: JSON.stringify({ display_name: "Stale attempt", timezone: "Asia/Shanghai" }),
+    });
+    const readBody = request.text.bind(request);
+    request.text = async () => {
+      // The competing writer commits after authentication and before this
+      // mutation begins; the captured revision must still guard the batch.
+      sqlite.prepare("UPDATE athlete_state SET state_revision = state_revision + 1, state_json = json_set(state_json, '$.display_name', 'Winning write') WHERE email = ?").run(state.email);
+      return readBody();
+    };
+    const response = await handler.fetch(request, env);
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.code, "session_state_conflict");
+    assert.equal((await store.getByEmail(state.email)).display_name, "Winning write");
+  } finally { sqlite.close(); }
 });
 
 test("a cold Agent Planned Day move reuses authenticated D1 state and stays below the Worker query budget", async (t) => {
