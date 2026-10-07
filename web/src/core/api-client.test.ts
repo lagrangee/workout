@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWorkoutAppStore } from "./app-store";
 import {
   createApiClient,
+  errorMessage,
   WorkoutApiError,
   WorkoutProtocolError,
 } from "./api-client";
@@ -100,6 +101,28 @@ afterEach(() => {
 });
 
 describe("createApiClient success protocol", () => {
+  it("retains the actual HTTP validator string details and shows the failing field", async () => {
+    const api = createApiClient(async () => new Response(JSON.stringify({ error: {
+      code: "invalid_session_record", message: "The canonical Session Record is invalid",
+      details: ["/session_rpe: must be null or 0-10", "/set_results/2/completed_at: must fall inside a Session interval"],
+    } }), { status: 400, headers: { "Content-Type": "application/json" } }));
+    const error = await api.request("/api/private/sessions/session-1/end").catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(WorkoutApiError);
+    expect((error as WorkoutApiError).data.error?.details).toEqual([
+      { path: "/session_rpe", message: "must be null or 0-10" },
+      { path: "/set_results/2/completed_at", message: "must fall inside a Session interval" },
+    ]);
+    expect(errorMessage(error)).toContain("/session_rpe: must be null or 0-10");
+    expect(errorMessage(error)).toContain("/set_results/2/completed_at");
+  });
+
+  it("rejects an End success response that still contains an in-progress Session", async () => {
+    const api = createApiClient(async () => jsonResponse(sessionDetail));
+    await expect(api.request("/api/private/sessions/session-1/end")).rejects.toMatchObject({
+      name: "WorkoutProtocolError", issue: "end response must contain a terminal Session",
+    });
+  });
+
   it("keeps GET and bodyless requests free of a synthetic Content-Type header", async () => {
     vi.stubGlobal("localStorage", { getItem: vi.fn(() => "athlete@example.invalid") });
     vi.stubGlobal("location", { hostname: "localhost" });

@@ -498,6 +498,9 @@ export function useSessionExecution(
   let pagehideBoundaryMs: number | null = null;
   let bfcacheRecoveryRequired = false;
   let bfcacheRecoveryPromise: Promise<boolean> | null = null;
+  let resumeOnForeground = false;
+  let foregroundResumePromise: Promise<void> | null = null;
+  let foregroundReturnGeneration = 0;
   let draftAuthEpoch = app.state.authEpoch;
   let draftSessionKey: string | null = null;
 
@@ -1117,13 +1120,26 @@ export function useSessionExecution(
     const interruptedAt = boundaryOverride ?? clockNow();
     const urgentLifecycle = reason === "pagehide" || disposed;
     const detailAtInterruption = state.detail;
+    const lifecycleInterruption = reason === "visibility" || reason === "pagehide";
+    if (lifecycleInterruption) {
+      // Only the execution that this mounted page was actively running can
+      // resume automatically. Preserve a prior manual/end/navigation pause.
+      if (isExecutionSurface() && !state.endSheet && (
+        !state.timerPaused || resumeRequestPromise
+      )) resumeOnForeground = true;
+    } else {
+      resumeOnForeground = false;
+    }
     invalidateAudioActivation();
     if (detailAtInterruption?.status === "in_progress" && !state.timerPaused) {
       pauseExecutionTimers();
       state.timerPaused = true;
       state.timerPauseStartedAt = interruptedAt;
     }
-    state.timerPauseReason = reason;
+    if (!lifecycleInterruption || resumeOnForeground || state.timerPauseReason === null
+      || state.timerPauseReason === "visibility" || state.timerPauseReason === "pagehide") {
+      state.timerPauseReason = reason;
+    }
     timeline.cancel();
     releaseWakeLock();
     stopSessionClock();
@@ -1172,7 +1188,12 @@ export function useSessionExecution(
           urgentLifecycle,
         ),
         settlePotentiallyCommittedRequest(pendingResume, resumeRecovery, () => {
-          if (retryableResumeRequest === retryableResume) retryableResumeRequest = null;
+          if (retryableResumeRequest === retryableResume) {
+            retryableResumeRequest = null;
+            if (resumeRequestPromise === pendingResume) resumeRequestPromise = null;
+            resumeRequestRecovery = null;
+            if (state.mutation.action === "resume") clearMutation();
+          }
         }, urgentLifecycle),
         urgentLifecycle ? Promise.resolve(null) : Promise.resolve(pendingPause).catch(() => null),
       ]);
@@ -1262,6 +1283,52 @@ export function useSessionExecution(
     }
   }
 
+  function resumeAfterForeground(): Promise<void> {
+    if (foregroundResumePromise) return foregroundResumePromise;
+    if (!resumeOnForeground || disposed || !documentIsVisible() || !isExecutionSurface() || state.endSheet) {
+      return Promise.resolve();
+    }
+    const returnGeneration = foregroundReturnGeneration;
+    const sessionKey = state.detail?.session_key;
+    const authEpoch = app.state.authEpoch;
+    let task!: Promise<void>;
+    task = (async () => {
+      // Establish ownership before even a synchronous guard can finish.
+      await Promise.resolve();
+      try {
+        if (bfcacheRecoveryRequired || bfcacheRecoveryPromise) {
+          if (!await reconcileAfterBfcacheRestore()) return;
+        } else if (interruptionPausePromise) {
+          await interruptionPausePromise;
+        } else if (pendingPauseRequest) {
+          await pendingPauseRequest;
+        } else if (retryablePauseRequest) {
+          await pauseForInterruption(state.timerPauseReason ?? "visibility");
+        }
+        if (!resumeOnForeground || disposed || authEpoch !== app.state.authEpoch
+          || sessionKey !== state.detail?.session_key || !documentIsVisible() || !isExecutionSurface()
+          || state.endSheet || state.endSaving || !state.timerPaused
+          || state.pausePending || state.mutation.pending || state.mutation.error) return;
+        await toggleTimer(true);
+      } catch {
+        // Pause and resume expose their retryable errors on the execution
+        // surface. An uncertain pause never permits a new interval.
+      } finally {
+        const ownsForegroundReturn = foregroundResumePromise === task;
+        if (ownsForegroundReturn) foregroundResumePromise = null;
+        // A second foreground event may arrive during the first resume. Its
+        // hidden boundary must finish closing before the latest return opens
+        // another interval. Do not loop on request failure.
+        if (ownsForegroundReturn && returnGeneration !== foregroundReturnGeneration && resumeOnForeground
+          && documentIsVisible() && !state.mutation.error) {
+          void resumeAfterForeground();
+        }
+      }
+    })();
+    foregroundResumePromise = task;
+    return task;
+  }
+
   function handleVisibilityChange(): void {
     if (!documentIsVisible()) {
       invalidateAudioActivation();
@@ -1280,9 +1347,13 @@ export function useSessionExecution(
       }
       return;
     }
+    foregroundReturnGeneration += 1;
     if (!executionFocused.value || state.detail?.status !== "in_progress") return;
     if (state.timerPaused) {
-      if (state.timerPauseReason === "visibility") state.wakeLockStatus = "idle";
+      if (resumeOnForeground) {
+        state.wakeLockStatus = "idle";
+        void resumeAfterForeground();
+      }
       return;
     }
     if (wakeLockSupported()) {
@@ -1294,6 +1365,9 @@ export function useSessionExecution(
   }
 
   function handlePageHide(): void {
+    // A foreground task may be awaiting a normal request whose response is
+    // frozen with this document. Pagehide recovery owns the keepalive replay.
+    foregroundResumePromise = null;
     invalidateAudioActivation();
     timeline.resetAudio();
     state.audio = { status: "idle", error: null };
@@ -1316,7 +1390,7 @@ export function useSessionExecution(
     state.pausePending = true;
     pauseExecutionTimers();
     state.timerPaused = true;
-    state.timerPauseReason = "pagehide";
+    if (resumeOnForeground || state.timerPauseReason === null) state.timerPauseReason = "pagehide";
     state.timerPauseStartedAt = pagehideBoundaryMs ?? clockNow();
     timeline.cancel();
     releaseWakeLock();
@@ -1355,7 +1429,7 @@ export function useSessionExecution(
         }
         const boundary = pagehideBoundaryMs ?? clockNow();
         state.timerPaused = true;
-        state.timerPauseReason = "pagehide";
+        if (resumeOnForeground || state.timerPauseReason === null) state.timerPauseReason = "pagehide";
         state.timerPauseStartedAt = boundary;
         const closeAt = interruptionBoundary(authoritative, boundary);
         const paused = await persistSessionPause(closeAt, true);
@@ -1387,7 +1461,9 @@ export function useSessionExecution(
 
   function handlePageShow(event: Event): void {
     if ((event as PageTransitionEvent).persisted !== true) return;
-    void reconcileAfterBfcacheRestore();
+    foregroundReturnGeneration += 1;
+    if (resumeOnForeground) void resumeAfterForeground();
+    else void reconcileAfterBfcacheRestore();
   }
 
   async function loadDetail(explicit: boolean): Promise<SessionDetail | null> {
@@ -1810,7 +1886,8 @@ export function useSessionExecution(
     await rescheduleCurrentAudio();
   }
 
-  async function toggleTimer(): Promise<void> {
+  async function toggleTimer(automatic = false): Promise<void> {
+    if (!automatic) resumeOnForeground = false;
     if (bfcacheRecoveryRequired || bfcacheRecoveryPromise) {
       await reconcileAfterBfcacheRestore();
       return;
@@ -1864,6 +1941,8 @@ export function useSessionExecution(
         });
       }
       const result = await requestPromise;
+      if (command === "resume" && currentResumeGeneration !== resumeGeneration
+        && retryableResumeRequest !== resumeRequest) return;
       const reconciliationBoundary = command === "resume"
         ? resumeRequest?.uncertainAtMs ?? null
         : null;
@@ -1891,6 +1970,7 @@ export function useSessionExecution(
       if (command === "resume" && resumeRequestRecovery === requestRecovery) resumeRequestRecovery = null;
       syncDetail(result);
       if (command === "resume") {
+        resumeOnForeground = false;
         if (!state.muted) state.audio = { status: "starting", error: null };
         state.timerPaused = false;
         state.timerPauseReason = null;
@@ -1915,6 +1995,8 @@ export function useSessionExecution(
         clearMutation();
       }
     } catch (error: unknown) {
+      if (command === "resume" && currentResumeGeneration !== resumeGeneration
+        && retryableResumeRequest !== resumeRequest) return;
       if (state.mutation.action === "pause" && state.mutation.error) return;
       if (command === "resume" && !(error instanceof WorkoutApiError)) {
         const reconciliationBoundary = markOutcomeUnknown(resumeRequest);
@@ -2163,19 +2245,29 @@ export function useSessionExecution(
     state.endSheet = false;
     state.timerPauseReason = null;
     state.mode = "overview";
-    await app.refresh();
-    if (app.state.error) {
-      state.navigationPauseError = app.state.error;
-      app.clearError();
-      return;
-    }
-    try {
-      await loadDetail(true);
-    } catch (error: unknown) {
-      // End is already authoritative and terminal. A readback failure must not
-      // reopen or lock the End transaction; keep the returned detail visible.
-      state.navigationPauseError = errorMessage(error) || "训练已结束，但最新详情暂时无法重新读取";
-    }
+    // The End response is the full committed Session. Dashboard projections
+    // can refresh independently; another detail read adds no authority and
+    // must not keep the saved End transaction busy.
+    const authEpoch = app.state.authEpoch;
+    void app.refresh().then(() => {
+      if (disposed || authEpoch !== app.state.authEpoch || state.detail?.session_key !== ended.session_key) return;
+      if (app.state.error) {
+        state.navigationPauseError = app.state.error;
+        app.clearError();
+      }
+    }).catch((error: unknown) => {
+      if (disposed || authEpoch !== app.state.authEpoch || state.detail?.session_key !== ended.session_key) return;
+      state.navigationPauseError = errorMessage(error) || "训练已结束，但汇总暂时无法刷新";
+    });
+  }
+
+  function endWasRejected(error: unknown): boolean {
+    if (!(error instanceof WorkoutApiError)) return false;
+    // A same-key replay can race the still-committing original request. Its
+    // concurrency rejection does not resolve that earlier unknown outcome.
+    if (state.endReconciliationRequired && error.status === 409
+      && error.data.error?.code === "session_state_conflict") return false;
+    return error.status < 500 && error.status !== 408;
   }
 
   async function endCurrent(): Promise<void> {
@@ -2227,18 +2319,18 @@ export function useSessionExecution(
         try {
           ended = await sendRetryableRequest(request);
         } catch (error: unknown) {
-          if (error instanceof WorkoutApiError) throw error;
+          if (endWasRejected(error)) throw error;
           state.endReconciliationRequired = true;
-          // A transport error leaves the End outcome unknown. Replay the
-          // exact frozen body/key once immediately; if transport is still
-          // unavailable the sheet becomes a locked reconciliation surface.
+          // Transport, timeout, and server failures leave the commit outcome
+          // unknown. Replay the same frozen body/key; never turn a retry into
+          // a second End with different inputs.
           ended = await sendRetryableRequest(request);
         }
       } catch (error: unknown) {
-        if (error instanceof WorkoutApiError && retryableEndRequest === request) {
+        if (endWasRejected(error) && retryableEndRequest === request) {
           retryableEndRequest = null;
           state.endReconciliationRequired = false;
-        } else if (!(error instanceof WorkoutApiError)) {
+        } else if (!endWasRejected(error)) {
           state.endReconciliationRequired = true;
         }
         throw error;
@@ -2249,7 +2341,7 @@ export function useSessionExecution(
     } catch (error: unknown) {
       if (app.state.authRequired || (error instanceof WorkoutApiError && error.status === 401)) throw error;
       state.endError = state.endReconciliationRequired
-        ? "上次结束提交的结果尚未确认。表单已锁定；请重试确认同一份提交。"
+        ? `上次结束提交的结果尚未确认。表单已锁定；请重试确认同一份提交。${errorMessage(error)}`
         : errorMessage(error) || "结束训练失败，请重试";
     } finally {
       state.endSaving = false;
@@ -2593,6 +2685,7 @@ export function useSessionExecution(
       draftAuthEpoch = authEpoch;
       draftSessionKey = state.detail?.session_key ?? null;
       completionAttempt = null;
+      resumeOnForeground = false;
       resetExecutionDraftState();
     },
   );

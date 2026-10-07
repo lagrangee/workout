@@ -71,5 +71,7 @@ After an uncertain completion write, a retry preserves its original timestamp
 only if that timestamp is still inside a server-returned Training Interval.
 If pause reconciliation has excluded it, the retry uses the current completion
 instant after resume rather than submitting a timestamp in the paused gap.
-The lifecycle, interval ownership, and explicit expiry rules are shared with
-[Session Record v1](session-record-v1.md).
+The lifecycle, interval ownership, foreground resume, and explicit expiry rules
+are shared with [Session Record v1](session-record-v1.md). Only a visibility or
+pagehide pause owned by the mounted execution page resumes automatically on
+return; an existing manual pause and an open End form remain paused.

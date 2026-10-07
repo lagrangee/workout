@@ -141,11 +141,29 @@ complete Session detail.
 
 For both record versions, leaving the visible execution page pauses its local
 timers and closes the active Training Interval through the pause command.
-Returning does not automatically resume training. Browser audio output is
-released on visibility loss or pagehide, including while already paused; the
-next explicit resume activates fresh output and schedules only the remaining
-cues. An audio failure must not prevent the Session or visual timer from
-resuming, and resuming must not replay elapsed cues or count time spent hidden.
+Returning to the visible execution page automatically resumes only training
+that this page paused for visibility loss or pagehide. A manual pause, an open
+End form, navigation away from execution, or a recovered Session without local
+browser ownership remains paused. The page waits for its pending pause, and an
+uncertain pause must be reconciled with the same idempotency key before a resume
+may create the next server-owned interval. A BFCache restore first reads and
+reconciles the authoritative Session; failure leaves training paused with a
+retryable error. A second interruption during recovery must close the returned
+interval before another visible return can resume it.
+
+Browser audio output is released on visibility loss or pagehide, including
+while already paused; either automatic or explicit resume activates fresh output
+and schedules only the remaining cues. An audio failure must not prevent the
+Session or visual timer from resuming. Resume must not replay elapsed cues or
+count time spent hidden. A successful End response contains the full terminal
+Session detail; refreshing other read projections does not delay confirmation
+of that committed End. A transport error, HTTP timeout, or server failure leaves
+the End outcome unconfirmed; the client retries the same frozen body and
+idempotency key. Repeated uncertain failures keep the End form locked until that
+submission is confirmed. A concurrency conflict on a replay of an already
+unconfirmed End retains that same frozen submission; it does not prove that
+the original End was rejected. A first definitive rejection keeps the draft
+editable and surfaces the failing fields.
 
 The private Calendar maintenance command `POST /api/private/sessions/normalize-expired`
 is the one explicit exception to the normal end derivation: for an `in_progress`

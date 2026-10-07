@@ -12,6 +12,12 @@ Mutations go through authenticated application or Agent interfaces and update
 their canonical records atomically. Public schemas and contracts describe the
 portable boundary; D1 row shapes remain an implementation detail.
 
+Private mutations reuse the Athlete state already read for authentication in
+that request, including its captured `state_revision`. The conditional write
+still rejects a concurrent winner. Core canonical Plan and Session tables are
+read with one D1 batch to avoid a network round trip for each table; optional
+later-migration reads retain their compatibility handling.
+
 ## Derived read models
 
 Calendar, progress, Coach, Agent, and Athlete Export views are projections of
