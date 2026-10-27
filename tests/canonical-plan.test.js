@@ -88,6 +88,27 @@ test("canonical Plan Update validates registry references and returns fixed pres
   assert.equal(bridge.sets[0].resistance_mode, "external_load");
 });
 
+test("standing cable leg curl accepts loaded per-side prescriptions and rejects bilateral execution", async () => {
+  const { handler } = appFixture();
+  const packageValue = canonicalPackage();
+  const occurrence = packageValue.week.monday.blocks[0].exercises[0];
+  occurrence.exercise_id = "standing_cable_leg_curl";
+  occurrence.execution_mode = "per_side";
+  occurrence.sets[0].resistance = { mode: "external_load", value: 7.5, unit: "kg" };
+
+  const result = await call(handler, "/api/private/plan-updates/validate", json({ method: "POST" }, { package_text: JSON.stringify(packageValue) }));
+  assert.equal(result.body.valid, true);
+  const exercise = result.body.preview.week.monday.blocks[0].exercises[0];
+  assert.equal(exercise.name, "站姿单腿绳索腿弯举");
+  assert.equal(exercise.execution_mode, "per_side");
+  assert.equal(exercise.sets[0].resistance_kg, 7.5);
+
+  occurrence.execution_mode = "bilateral";
+  const invalid = await call(handler, "/api/private/plan-updates/validate", json({ method: "POST" }, { package_text: JSON.stringify(packageValue) }));
+  assert.equal(invalid.response.status, 400);
+  assert.equal(invalid.body.error.code, "invalid_plan_package");
+});
+
 test("canonical Plan Update accepts an explicit COROS route recording intent", async () => {
   const { handler } = appFixture();
   const result = await call(handler, "/api/private/plan-updates/validate", json({ method: "POST" }, { package_text: JSON.stringify(routeRecordingPackage()) }));

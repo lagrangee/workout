@@ -54,6 +54,19 @@
       "capabilities": {}
     },
     {
+      "exercise_id": "standing_cable_leg_curl",
+      "slug": "standing-cable-leg-curl",
+      "name": "站姿单腿绳索腿弯举",
+      "definition_version": 1,
+      "status": "active",
+      "category": "strength",
+      "execution": { "side_modes": ["per_side"] },
+      "target": { "metrics": ["reps"] },
+      "resistance": { "modes": ["external_load"], "units": ["kg", "lb"] },
+      "equipment": { "required": ["cable_machine", "ankle_strap"], "optional": [] },
+      "capabilities": {}
+    },
+    {
       "exercise_id": "straight_knee_single_leg_calf_raise",
       "slug": "straight-knee-single-leg-calf-raise",
       "name": "平地直膝单腿提踵",
