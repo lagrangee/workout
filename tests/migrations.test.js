@@ -116,7 +116,8 @@ function createCategoryMigrationDatabase(exerciseIds) {
 }
 
 test("Exercise category migration backfills its 26 historical pinned IDs and requires future frozen values", () => {
-  const expected = new Map(exerciseRegistry.exercises.filter((exercise) => exercise.exercise_id !== "stability_ball_hamstring_curl").map((exercise) => [exercise.exercise_id, exercise.category]));
+  const laterExerciseIds = new Set(["stability_ball_hamstring_curl", "standing_cable_leg_curl"]);
+  const expected = new Map(exerciseRegistry.exercises.filter((exercise) => !laterExerciseIds.has(exercise.exercise_id)).map((exercise) => [exercise.exercise_id, exercise.category]));
   assert.equal(expected.size, 26);
   const db = createCategoryMigrationDatabase([...expected.keys()]);
   try {
