@@ -163,6 +163,7 @@ interface RuntimeState {
   timerPauseStartedAt: number | null;
   pausePending: boolean;
   wakeLockStatus: WakeLockStatus;
+  wakeLockRetrying: boolean;
   endSheet: boolean;
   endRpe: number;
   endNote: string;
@@ -193,6 +194,7 @@ export type SessionIntent =
   | { type: "toggle-adjust" }
   | { type: "toggle-progress" }
   | { type: "toggle-timer" }
+  | { type: "retry-wake-lock" }
   | { type: "retry-sync" }
   | { type: "discard-sync" }
   | { type: "toggle-mute" }
@@ -418,11 +420,8 @@ export function useSessionExecution(
     ? {}
     : ((window as Window & { __workoutTestSeams?: WorkoutTestSeams }).__workoutTestSeams ?? {});
   const clockNow = (): number => typeof seams.now === "function" ? Number(seams.now()) : Date.now();
-  const countdownNow = (): number => typeof seams.now === "function"
-    ? Number(seams.now())
-    : typeof performance !== "undefined" && typeof performance.now === "function"
-      ? performance.now()
-      : Date.now();
+  // Wall deadlines keep advancing when the browser freezes background frames.
+  const countdownNow = clockNow;
   const requestFrame: (callback: FrameRequestCallback) => number = seams.requestAnimationFrame
     ?? (typeof requestAnimationFrame === "function"
       ? requestAnimationFrame.bind(globalThis)
@@ -435,6 +434,7 @@ export function useSessionExecution(
     audioOutput: seams.audio ?? null,
     now: countdownNow,
     leadTimeMs: seams.audio ? 0 : 50,
+    clock: "wall",
   });
 
   const state = reactive<RuntimeState>({
@@ -460,6 +460,7 @@ export function useSessionExecution(
     timerPauseStartedAt: null,
     pausePending: false,
     wakeLockStatus: "idle",
+    wakeLockRetrying: false,
     endSheet: false,
     endRpe: 8,
     endNote: "",
@@ -477,6 +478,9 @@ export function useSessionExecution(
   });
 
   let timerHandle: number | null = null;
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  let inactivityDeadlineMs: number | null = null;
+  const inactivityGraceMs = 120_000;
   let wakeLockSentinel: WakeLockSentinel | null = null;
   let wakeLockRequestPending = false;
   let wakeLockRequestId = 0;
@@ -641,7 +645,6 @@ export function useSessionExecution(
 
   function currentInterruptionReason(): PauseReason {
     if (disposed) return "navigation";
-    if (!documentIsVisible()) return "visibility";
     return state.timerPauseReason ?? "navigation";
   }
 
@@ -649,8 +652,51 @@ export function useSessionExecution(
     return executionFocused.value && !state.endSheet;
   }
 
+  function isRunningSession(): boolean {
+    return !disposed && isExecutionSurface() && !state.timerPaused;
+  }
+
   function isVisibleSession(): boolean {
-    return isExecutionSurface() && !state.timerPaused && documentIsVisible();
+    return isRunningSession() && documentIsVisible();
+  }
+
+  function clearInactivityTimer(): void {
+    if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+  }
+
+  function checkInactivity(): boolean {
+    if (!isRunningSession() || inactivityDeadlineMs === null || clockNow() < inactivityDeadlineMs) return false;
+    const boundary = inactivityDeadlineMs;
+    clearInactivityTimer();
+    // Advance visual state to the cutoff before freezing it. Never count the
+    // delay caused by a suspended document as additional Training Interval time.
+    updateExecutionTimers(boundary);
+    void pauseForInterruption("inactivity", boundary).catch(() => {});
+    return true;
+  }
+
+  function armInactivityTimer(): void {
+    clearInactivityTimer();
+    if (!isRunningSession() || inactivityDeadlineMs === null) return;
+    inactivityTimer = setTimeout(() => {
+      inactivityTimer = null;
+      if (!checkInactivity()) armInactivityTimer();
+    }, Math.max(0, inactivityDeadlineMs - clockNow()));
+  }
+
+  function noteTrainingActivity(): void {
+    if (!isRunningSession()) return;
+    const now = clockNow();
+    const timer = state.timedAction;
+    const actionEnd = timer.deadlineMs === null ? now : timer.deadlineMs
+      + (timer.phase === "preparing" ? Number(timer.targetSec) * 1000 : 0);
+    const next = restActive.value ? restNextItem.value : focusedItem.value;
+    const plannedDuration = restActive.value || timer.phase === "idle"
+      ? canonicalDurationSeconds(next?.target) ?? 0 : 0;
+    const workEnd = Math.max(now, state.restUntil ?? now) + plannedDuration * 1000;
+    inactivityDeadlineMs = Math.max(now, actionEnd, workEnd) + inactivityGraceMs;
+    armInactivityTimer();
   }
 
   function wakeLockSupported(): boolean {
@@ -890,9 +936,9 @@ export function useSessionExecution(
     if (audible) void observeAudioResult(scheduled.result);
   }
 
-  function pauseExecutionTimers(): void {
+  function pauseExecutionTimers(now = countdownNow()): void {
+    clearInactivityTimer();
     invalidateAudioActivation();
-    const now = countdownNow();
     pauseTimedAction(now);
     pauseRestCountdown(now);
     timeline.cancel();
@@ -935,9 +981,8 @@ export function useSessionExecution(
     return String(Math.max(0, Math.ceil(Number(timer.remainingSec) || 0))).padStart(2, "0");
   }
 
-  function updateSessionClock(): void {
-    if (!isVisibleSession()) return stopSessionClock();
-    state.nowMs = countdownNow();
+  function updateExecutionTimers(now = countdownNow()): void {
+    state.nowMs = now;
     if (state.restUntil !== null) {
       const remaining = Math.max(0, Math.ceil((state.restUntil - state.nowMs) / 1000));
       if (remaining === 0) {
@@ -947,6 +992,11 @@ export function useSessionExecution(
       return;
     }
     updateTimedAction(state.nowMs);
+  }
+
+  function updateSessionClock(): void {
+    if (checkInactivity() || !isVisibleSession()) return stopSessionClock();
+    updateExecutionTimers();
   }
 
   function runSessionClockFrame(): void {
@@ -965,6 +1015,7 @@ export function useSessionExecution(
     const sentinel = wakeLockSentinel;
     wakeLockSentinel = null;
     wakeLockRequestPending = false;
+    state.wakeLockRetrying = false;
     wakeLockRequestId += 1;
     try {
       const released = sentinel?.release?.();
@@ -981,10 +1032,9 @@ export function useSessionExecution(
     wakeLockSentinel = null;
     wakeLockRequestPending = false;
     state.wakeLockStatus = documentIsVisible() ? "released" : "hidden";
-    void pauseForInterruption(documentIsVisible() ? "wake-lock" : "visibility").catch(() => {});
   }
 
-  async function requestWakeLock({ force = false }: { force?: boolean } = {}): Promise<boolean> {
+  async function requestWakeLock({ force = false, userInitiated = false }: { force?: boolean; userInitiated?: boolean } = {}): Promise<boolean> {
     if (!isVisibleSession() || !wakeLockSupported()) {
       if (isVisibleSession() && !wakeLockSupported()) state.wakeLockStatus = "unsupported";
       return false;
@@ -997,6 +1047,7 @@ export function useSessionExecution(
     if (!force && ["unsupported", "denied", "released"].includes(state.wakeLockStatus)) return false;
     const requestId = ++wakeLockRequestId;
     wakeLockRequestPending = true;
+    state.wakeLockRetrying = userInitiated;
     state.wakeLockStatus = "requesting";
     try {
       const sentinel = await navigator.wakeLock.request("screen");
@@ -1007,7 +1058,6 @@ export function useSessionExecution(
       if (sentinel.released) {
         wakeLockRequestPending = false;
         state.wakeLockStatus = "released";
-        void pauseForInterruption(documentIsVisible() ? "wake-lock" : "visibility").catch(() => {});
         return false;
       }
       wakeLockSentinel = sentinel;
@@ -1022,7 +1072,7 @@ export function useSessionExecution(
       wakeLockRequestPending = false;
       state.wakeLockStatus = "denied";
       // Permission/platform failure is a visible degraded mode, not an
-      // execution interruption. Only losing an acquired sentinel pauses.
+      // execution interruption. Training continues without screen retention.
       return false;
     }
   }
@@ -1237,7 +1287,7 @@ export function useSessionExecution(
     }
     invalidateAudioActivation();
     if (detailAtInterruption?.status === "in_progress" && !state.timerPaused) {
-      pauseExecutionTimers();
+      pauseExecutionTimers(interruptedAt);
       state.timerPaused = true;
       state.timerPauseStartedAt = interruptedAt;
     }
@@ -1356,7 +1406,7 @@ export function useSessionExecution(
       const lastResult = Math.max(0, ...detail.completion_results.map((result) => Date.parse(result.completed_at ?? "") || 0));
       const at = Math.max(boundary ?? clockNow(), Date.parse(open.started_at) + 1, lastResult);
       syncDetail(queueExecution(detail, { type: "pause", at: new Date(at).toISOString() }));
-      pauseExecutionTimers();
+      pauseExecutionTimers(at);
       state.timerPauseStartedAt = at;
     } else if (!lifecycle) {
       resumeOnForeground = false;
@@ -1460,21 +1510,26 @@ export function useSessionExecution(
 
   function handleVisibilityChange(): void {
     if (!documentIsVisible()) {
-      invalidateAudioActivation();
-      timeline.resetAudio();
-      state.audio = { status: "idle", error: null };
-      if (
-        pendingActiveMutation
-        || resumeRequestPromise
-        || retryableActiveRequests.size > 0
-        || retryableResumeRequest
-        || (state.detail?.status === "in_progress" && hasOpenTrainingInterval(state.detail))
-      ) {
-        state.wakeLockStatus = "hidden";
-        releaseWakeLock();
-        void pauseForInterruption("visibility").catch(() => {});
+      if (state.timerPaused) {
+        invalidateAudioActivation();
+        timeline.resetAudio();
+        state.audio = { status: "idle", error: null };
       }
+      state.wakeLockStatus = "hidden";
+      releaseWakeLock();
+      stopSessionClock();
+      // Keep deadlines and already scheduled audio alive while using another App.
+      if (!checkInactivity()) armInactivityTimer();
+      void flushExecution(true).catch(() => {});
       return;
+    }
+    if (checkInactivity()) return;
+    syncSessionClock();
+    // Retire any delayed cues before reactivating output; never replay sounds
+    // whose wall deadlines elapsed while the OS suspended the audio context.
+    if (isRunningSession() && !state.muted) {
+      timeline.resetAudio();
+      void activateQueuedAudio();
     }
     retryExecutionSync();
     foregroundReturnGeneration += 1;
@@ -1495,13 +1550,14 @@ export function useSessionExecution(
   }
 
   function handlePageHide(): void {
+    checkInactivity();
     // A foreground task may be awaiting a normal request whose response is
     // frozen with this document. Pagehide recovery owns the keepalive replay.
     foregroundResumePromise = null;
     invalidateAudioActivation();
     timeline.resetAudio();
     state.audio = { status: "idle", error: null };
-    const hiddenBoundary = state.timerPauseReason === "visibility" && state.timerPauseStartedAt !== null
+    const hiddenBoundary = state.timerPaused && state.timerPauseStartedAt !== null
       ? state.timerPauseStartedAt
       : clockNow();
     pagehideBoundaryMs = pagehideBoundaryMs === null
@@ -1767,6 +1823,7 @@ export function useSessionExecution(
       state.wakeLockStatus = "idle";
     }
     state.nowMs = countdownNow();
+    noteTrainingActivity();
     syncSessionClock();
     syncWakeLock();
   }
@@ -1828,8 +1885,7 @@ export function useSessionExecution(
       const reconciliationBoundary = requestDescriptor.uncertainAtMs ?? null;
       if (reconciliationBoundary !== null
         || mutationGeneration !== resumeGeneration
-        || disposed
-        || !documentIsVisible()) {
+        || disposed) {
         if (state.mutation.action === "start") clearMutation();
         await pauseForInterruption(
           reconciliationBoundary === null
@@ -1929,8 +1985,7 @@ export function useSessionExecution(
       const reconciliationBoundary = requestDescriptor.uncertainAtMs ?? null;
       if (reconciliationBoundary !== null
         || mutationGeneration !== resumeGeneration
-        || disposed
-        || !documentIsVisible()) {
+        || disposed) {
         if (state.mutation.action === command) clearMutation();
         await pauseForInterruption(
           reconciliationBoundary === null
@@ -1988,14 +2043,14 @@ export function useSessionExecution(
       remainingSec: preparationDurationSec,
     };
     state.audio = state.muted ? state.audio : { status: "starting", error: null };
+    noteTrainingActivity();
     syncSessionClock();
     const activation = state.muted ? Promise.resolve({ ok: true }) : timeline.activateAudio();
     void Promise.resolve(activation).then((result) => {
       if (activationGeneration !== audioActivationGeneration
         || state.timedAction.itemKey !== itemKey
         || state.timerPaused
-        || !isExecutionSurface()
-        || !documentIsVisible()) return;
+        || !isExecutionSurface()) return;
       const failure = audioFailureFor(result);
       if (!state.muted) state.audio = failure ? { status: "error", error: failure } : { status: "ready", error: null };
       const now = countdownNow();
@@ -2082,6 +2137,7 @@ export function useSessionExecution(
         state.timerPauseStartedAt = null;
         state.wakeLockStatus = "idle";
         resumeExecutionTimers();
+        noteTrainingActivity();
         syncSessionClock();
         syncWakeLock();
         if (!state.muted) void activateQueuedAudio();
@@ -2143,7 +2199,6 @@ export function useSessionExecution(
       if (command === "resume" && (
         reconciliationBoundary !== null
         || currentResumeGeneration !== resumeGeneration
-        || !documentIsVisible()
         || !isExecutionSurface()
       )) {
         if (state.mutation.action === command) clearMutation();
@@ -2171,6 +2226,7 @@ export function useSessionExecution(
         state.timerPauseStartedAt = null;
         state.wakeLockStatus = "idle";
         resumeExecutionTimers();
+        noteTrainingActivity();
         syncSessionClock();
         syncWakeLock();
         clearMutation();
@@ -2178,7 +2234,7 @@ export function useSessionExecution(
           if (!audioResult
             || currentAudioGeneration !== audioActivationGeneration
             || state.muted
-            || !isVisibleSession()) return;
+            || !isRunningSession()) return;
           const failure = audioFailureFor(audioResult);
           state.audio = failure ? { status: "error", error: failure } : { status: "ready", error: null };
           if (!failure) await rescheduleCurrentAudio();
@@ -2229,7 +2285,7 @@ export function useSessionExecution(
     const generation = ++audioActivationGeneration;
     state.audio = { status: "starting", error: null };
     const result = await timeline.activateAudio();
-    if (generation !== audioActivationGeneration || !isVisibleSession()) return;
+    if (generation !== audioActivationGeneration || !isRunningSession()) return;
     const failure = audioFailureFor(result);
     state.audio = failure ? { status: "error", error: failure } : { status: "ready", error: null };
     if (!failure) await rescheduleCurrentAudio();
@@ -2353,7 +2409,7 @@ export function useSessionExecution(
       const updated = await recordRequest;
       clearSubmittedExecutionDrafts(detail.session_key, keys, Object.keys(state.feedbackDraft));
       completionAttempt = null;
-      if (mutationGeneration !== resumeGeneration || disposed || !documentIsVisible()) {
+      if (mutationGeneration !== resumeGeneration || disposed) {
         if (!state.detail || hasOpenTrainingInterval(state.detail)) syncDetail(updated);
         if (state.mutation.action === "complete") clearMutation();
         await pauseForInterruption(currentInterruptionReason());
@@ -2424,7 +2480,7 @@ export function useSessionExecution(
     } else {
       const generation = ++audioActivationGeneration;
       void audioActivation.then(async (result) => {
-        if (!result || generation !== audioActivationGeneration || state.muted || !isVisibleSession() || !restActive.value) return;
+        if (!result || generation !== audioActivationGeneration || state.muted || !isRunningSession() || !restActive.value) return;
         const failure = audioFailureFor(result);
         state.audio = failure ? { status: "error", error: failure } : { status: "ready", error: null };
         if (!failure) await rescheduleCurrentAudio();
@@ -2744,6 +2800,9 @@ export function useSessionExecution(
       "draft-end-note",
       "draft-end-feedback",
     ].includes(intent.type)) return;
+    // A return event alone is not activity. A late click first reconciles
+    // inactivity, so it cannot silently extend an abandoned interval.
+    if (checkInactivity()) return;
     try {
       switch (intent.type) {
         case "start": await startSession(); break;
@@ -2773,6 +2832,7 @@ export function useSessionExecution(
         case "toggle-adjust": state.adjust = !state.adjust; break;
         case "toggle-progress": state.progressOpen = !state.progressOpen; break;
         case "toggle-timer": await toggleTimer(); break;
+        case "retry-wake-lock": await requestWakeLock({ force: true, userInitiated: true }); break;
         case "retry-sync":
           if (retryableEndRequest) await endCurrent();
           else await flushExecution().catch(() => {});
@@ -2822,6 +2882,7 @@ export function useSessionExecution(
         case "draft-correction-note": state.correctionDraft.note = intent.value; break;
         case "draft-correction-skip-reason": state.correctionDraft.skipReason = intent.value; break;
       }
+      if (intent.type !== "retry-sync" && intent.type !== "discard-sync") noteTrainingActivity();
     } catch (error: unknown) {
       app.setError(error);
     }
@@ -2829,25 +2890,11 @@ export function useSessionExecution(
 
   const wakeNotice = computed(() => {
     const status = state.wakeLockStatus === "idle" && !wakeLockSupported() ? "unsupported" : state.wakeLockStatus;
-    if (state.timerPaused && state.timerPauseReason === "visibility") {
-      const foreground = documentIsVisible();
-      return {
-        className: "is-paused",
-        title: foreground ? "已回到前台，计时仍暂停" : "页面已离开前台，计时已暂停",
-        detail: foreground
-          ? "准备好后点击顶部“继续”；后台时间不会计入动作或 Session 计时。"
-          : "回到训练后点击顶部“继续”；后台时间不会计入动作或 Session 计时。",
-      };
-    }
-    if (state.timerPaused && state.timerPauseReason === "wake-lock") {
-      return {
-        className: "is-paused",
-        title: status === "active" ? "已回到前台，计时仍暂停" : "屏幕保持已中断，计时已暂停",
-        detail: status === "active"
-          ? "屏幕保持已重新请求。准备好后点击顶部“继续”。"
-          : "准备好后点击顶部“继续”；未保持期间的时间不会计入动作或 Session 计时。",
-      };
-    }
+    if (state.timerPaused && state.timerPauseReason === "inactivity") return {
+      className: "is-paused",
+      title: "较长时间未操作，训练已暂停",
+      detail: "已扣除超时后的时间；准备好后点击顶部“继续”。",
+    };
     if (state.timerPaused) return {
       className: "is-paused",
       title: "训练已暂停，计时已停止",
@@ -2856,19 +2903,24 @@ export function useSessionExecution(
     if (status === "unsupported") return {
       className: "is-fallback",
       title: "无法保持屏幕常亮",
-      detail: "当前浏览器不支持屏幕保持。计时仍可手动执行；若页面隐藏或锁屏，回到训练后会暂停并等待你继续。",
+      detail: "当前浏览器不支持屏幕常亮。切换 App 不会暂停计时。",
     };
-    if (status === "denied") return {
+    if (status === "released") return {
       className: "is-fallback",
-      title: "屏幕保持未获允许",
-      detail: "应用不能保证屏幕常亮，但“开始动作”和手动计时仍可使用；若页面隐藏或锁屏，回到训练后会暂停并等待你继续。",
+      title: "屏幕常亮已释放",
+      detail: "计时继续运行，可重新保持常亮。",
+    };
+    if (status === "denied" || (status === "requesting" && state.wakeLockRetrying)) return {
+      className: "is-fallback",
+      title: status === "requesting" ? "正在请求屏幕常亮…" : "屏幕保持未获允许",
+      detail: "计时继续运行，可点击下方按钮重新请求屏幕常亮。",
     };
     return null;
   });
 
   const elapsedLabel = computed(() => {
     // The wall-clock calculation stays server-authoritative; reading the
-    // monotonic frame tick makes Vue refresh the visible label each frame.
+    // presentation tick makes Vue refresh the visible label each frame.
     void state.nowMs;
     return sessionElapsed();
   });
@@ -2897,6 +2949,7 @@ export function useSessionExecution(
     get focusFeedbackDraft() { return focusFeedbackDraft.value; },
     get completeBlocked() { return completeBlocked.value; },
     get wakeNotice() { return wakeNotice.value; },
+    get canRetryWakeLock() { return wakeLockSupported() && !state.timerPaused && ["denied", "released", "requesting"].includes(state.wakeLockStatus); },
     get audioFailed() { return !state.muted && state.audio.status === "error"; },
     get elapsedLabel() { return elapsedLabel.value; },
     get restRemainingLabel() { return restRemainingLabel(); },
@@ -2928,6 +2981,8 @@ export function useSessionExecution(
       draftSessionKey = state.detail?.session_key ?? null;
       completionAttempt = null;
       resumeOnForeground = false;
+      clearInactivityTimer();
+      inactivityDeadlineMs = null;
       if (syncTimer !== null) clearTimeout(syncTimer);
       syncTimer = null;
       state.executionSync = "idle";
@@ -2970,6 +3025,7 @@ export function useSessionExecution(
 
   onBeforeUnmount(() => {
     disposed = true;
+    clearInactivityTimer();
     invalidateAudioActivation();
     timeline.resetAudio();
     detailLoadGeneration += 1;

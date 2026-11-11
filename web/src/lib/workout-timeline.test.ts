@@ -377,3 +377,16 @@ describe("WorkoutTimeline fixed deadlines and lifecycle controls", () => {
     expect(cancel).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("wall-clock background deadlines", () => {
+  it("maps epoch deadlines to the audio presentation clock without scheduling epoch seconds", async () => {
+    const { starts } = installBrowserAudioHarness();
+    const performanceNow = vi.spyOn(performance, "now").mockReturnValue(1000);
+    try {
+      const timeline = createWorkoutTimeline({ now: () => 1_800_000_000_000, clock: "wall", sources: cueSources });
+      await timeline.activateAudio();
+      await timeline.scheduleRest({ remainingMs: 3000 }).result;
+      expect(starts).toEqual([10, 11, 12, 13]);
+    } finally { performanceNow.mockRestore(); }
+  });
+});

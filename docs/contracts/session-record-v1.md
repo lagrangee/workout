@@ -139,23 +139,42 @@ accepts `{}` and creates a fresh open interval for an existing paused
 in-progress Session. Both commands require an `Idempotency-Key` and return the
 complete Session detail.
 
-For both record versions, leaving the visible execution page pauses its local
-timers and records a pause to close the active Training Interval.
-Returning to the visible execution page automatically resumes only training
-that this page paused for visibility loss or pagehide. A manual pause, an open
-End form, navigation away from execution, or a recovered Session without local
-browser ownership remains paused. Direct command clients reconcile an uncertain
-pause with its original idempotency key before resuming. The browser execution
-queue can show a local resume while a pause is pending. The server receives the
-two actions in order and creates the next interval after closing the prior one.
-After BFCache restore, the browser reuses the ordered queue and its existing
-keys. A second interruption records another pause at its own boundary.
+For both record versions, switching Apps, hiding the document, or losing Screen
+Wake Lock does not pause the Session, rest countdown, or timed action. The
+mounted execution page keeps absolute wall-clock deadlines. It releases Screen
+Wake Lock while hidden and reacquires it when visible. An unsupported, denied,
+or released Wake Lock is a degraded display capability, not an execution
+interruption; supported browsers expose an explicit retry without a page reload.
 
-Browser audio output is released on visibility loss or pagehide, including
-while already paused; either automatic or explicit resume activates fresh output
-and schedules only the remaining cues. An audio failure must not prevent the
-Session or visual timer from resuming. Resume must not replay elapsed cues or
-count time spent hidden. A successful End response contains the full terminal
+The mounted execution page detects inactivity in the foreground and background.
+Its allowance is the current rest countdown, the next prescribed duration (if
+present), and a two-minute grace period. A started timed action includes its
+remaining preparation and action duration before that grace period. Training
+interactions renew the allowance; a visibility event or frame tick does not.
+Expiry freezes local timers and closes the active Training Interval at the
+absolute cutoff, even when a frozen document detects it later. The Session
+stays `in_progress` and requires explicit resume. Timed actions never record
+Completion Items automatically.
+
+Navigation away from execution, document departure (`pagehide`), opening the End
+form, and manual pause still close the active Training Interval. Returning to
+an existing mounted page automatically resumes only its own pagehide pause;
+manual, inactivity, End-form, navigation and recovered Sessions remain paused.
+Direct command clients reconcile an uncertain pause with its original
+idempotency key before resuming. The browser execution queue can show a local
+resume while a pause is pending. The server receives both actions in order and
+creates the next interval after closing the prior one. BFCache restoration
+reconciles the existing queue or authoritative interval before resuming.
+
+Already scheduled browser audio is retained on visibility loss so supported
+platforms can deliver action and rest cues while another App is open. Background
+audio remains best effort: an OS may suspend the document or its audio output;
+this is not a system-notification guarantee. Foreground return recreates output,
+aligns remaining cues to their existing deadlines, and skips elapsed cues.
+Manual pause, inactivity, navigation and pagehide cancel scheduled cues. Audio
+failure never blocks visual timing or Session execution.
+
+A successful End response contains the full terminal
 Session detail; refreshing other read projections does not delay confirmation
 of that committed End. A transport error, HTTP timeout, or server failure leaves
 the End outcome unconfirmed; the client retries the same frozen body and

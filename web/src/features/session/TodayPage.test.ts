@@ -814,7 +814,7 @@ describe("TodayPage", () => {
       if (interruption === "pagehide") window.dispatchEvent(new Event("pagehide"));
       else document.dispatchEvent(new Event("visibilitychange"));
       await settle();
-      await clock.advance(30_000);
+      await clock.advance(interruption === "visibility" ? 1_000 : 30_000);
       Object.defineProperty(document, "hidden", { configurable: true, value: false });
       if (interruption === "pagehide") {
         const event = new Event("pageshow");
@@ -831,7 +831,7 @@ describe("TodayPage", () => {
         .toBeGreaterThan(startsBeforeInterruption);
       expect(wrapper.find(".timed-audio-notice").exists()).toBe(false);
       expect(wrapper.get('[data-action="toggle-timer"]').text()).toBe("暂停");
-      expect(wrapper.get("[data-action-remaining]").text()).toBe("04");
+      expect(wrapper.get("[data-action-remaining]").text()).toBe(interruption === "visibility" ? "03" : "04");
     },
   );
 

@@ -441,7 +441,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.detail?.snapshot.schema_version).toBe(2);
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settleHttp();
     await clock.advance(30_000);
     setDocumentHidden(false);
@@ -501,14 +501,14 @@ describe("useSessionExecution", () => {
     await execution.dispatch({ type: "start" });
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
     await settle();
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     window.dispatchEvent(new Event("pagehide"));
     await settle();
     expect(server.training_intervals.at(-1)?.ended_at).not.toBeNull();
@@ -696,7 +696,7 @@ describe("useSessionExecution", () => {
     await clock.advance(1_000);
     await execution.dispatch({ type: "complete" });
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
@@ -708,7 +708,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.state.mutation.error).toBeNull();
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     await clock.advance(30_000);
     setDocumentHidden(false);
@@ -737,7 +737,7 @@ describe("useSessionExecution", () => {
     await execution.dispatch({ type: "start" });
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     expect(execution.view.state.mutation.error).toContain("response lost");
     await clock.advance(30_000);
@@ -767,7 +767,7 @@ describe("useSessionExecution", () => {
     await execution.dispatch({ type: "start" });
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
@@ -792,7 +792,7 @@ describe("useSessionExecution", () => {
     await clock.advance(1_000);
     await execution.dispatch({ type: reason === "manual" ? "toggle-timer" : "end" });
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     window.dispatchEvent(new Event("pagehide"));
     await settle();
     await clock.advance(30_000);
@@ -832,13 +832,13 @@ describe("useSessionExecution", () => {
     await execution.dispatch({ type: "start" });
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
     await settle();
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     pauseGate.resolve(clone(closed));
     await settle();
     expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
@@ -869,7 +869,7 @@ describe("useSessionExecution", () => {
     await execution.dispatch({ type: "start-timed" });
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     await clock.advance(30_000);
     setDocumentHidden(false);
@@ -1034,7 +1034,7 @@ describe("useSessionExecution", () => {
     expect(harness.calls.filter((call) => call.options?.method !== "POST")).toHaveLength(0);
   });
 
-  test("a start response that arrives after the page is hidden is compensating-paused at the hidden boundary", async () => {
+  test("a start response that arrives after an explicit lifecycle pause is closed at that boundary", async () => {
     const clock = frameClock();
     const audio = testAudio();
     installSeams(clock, audio);
@@ -1057,6 +1057,7 @@ describe("useSessionExecution", () => {
     const start = execution.dispatch({ type: "start" });
     await clock.advance(1_000);
     setDocumentHidden(true);
+    void execution.ensurePaused("visibility").catch(() => {});
     expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(0);
 
     startResolved = true;
@@ -1551,7 +1552,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.state.timerPaused).toBe(true);
     expect(execution.view.state.mutation).toEqual({ action: "pause", pending: true, error: null });
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
     await execution.dispatch({ type: "toggle-timer" });
@@ -1595,7 +1596,7 @@ describe("useSessionExecution", () => {
     await settle();
 
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await clock.advance(1_000);
     window.dispatchEvent(new Event("pagehide"));
     await settle();
@@ -1610,7 +1611,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.state.timerPaused).toBe(true);
   });
 
-  test("visibility pauses the server interval and foreground automatically continues the remaining timer", async () => {
+  test("an explicit lifecycle pause closes the server interval and foreground continues the remaining timer", async () => {
     const clock = frameClock();
     const audio = testAudio();
     installSeams(clock, audio);
@@ -1630,7 +1631,7 @@ describe("useSessionExecution", () => {
     const remainingBeforeHidden = execution.view.actionRemainingLabel;
 
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     const elapsedAtPause = execution.view.elapsedLabel;
     await clock.advance(30_000);
@@ -1774,7 +1775,7 @@ describe("useSessionExecution", () => {
     await settle();
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
 
     expect(harness.calls.filter((call) => call.path.endsWith("/start"))).toHaveLength(1);
@@ -1993,7 +1994,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.state.mutation.error).toBe("暂停写入失败");
   });
 
-  test("a pending resume response self-compensates when hidden changes without a visibility event", async () => {
+  test("a pending resume response stays active when the document becomes hidden", async () => {
     const clock = frameClock();
     const audio = testAudio();
     installSeams(clock, audio);
@@ -2026,15 +2027,9 @@ describe("useSessionExecution", () => {
     await resume;
     await settle();
 
-    const pauses = harness.calls.filter((call) => call.path.endsWith("/pause"));
-    expect(pauses).toHaveLength(2);
-    expect(requestBody(pauses[0])).toEqual({ close_at: "2026-08-29T04:00:01.000Z" });
-    expect(requestBody(pauses[1])).toEqual({ close_at: "2026-08-29T04:00:03.000Z" });
-    expect(pauses[1].options?.keepalive).toBe(true);
-    expect(execution.view.state.timerPaused).toBe(true);
-    expect(execution.view.state.timerPauseReason).toBe("visibility");
-    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:03.000Z");
-    expect(audio.schedules).toHaveLength(0);
+    expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(1);
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBeNull();
   });
 
   test("pagehide recovers a never-settling resume with the same keepalive request before pausing", async () => {
@@ -2092,7 +2087,7 @@ describe("useSessionExecution", () => {
     expect(originalDispatchSettled).toBe(false);
   });
 
-  test("a second visibility interruption closes a deferred resume at the second hidden boundary", async () => {
+  test("a second explicit lifecycle pause closes a deferred resume at its own boundary", async () => {
     const clock = frameClock();
     const audio = testAudio();
     installSeams(clock, audio);
@@ -2116,7 +2111,7 @@ describe("useSessionExecution", () => {
     await clock.advance(1_000);
 
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
@@ -2125,7 +2120,7 @@ describe("useSessionExecution", () => {
     const resume = execution.dispatch({ type: "toggle-timer" });
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     resumeGate.resolve(clone(resumed));
     await resume;
     await settle();
@@ -2140,7 +2135,7 @@ describe("useSessionExecution", () => {
     expect(audio.schedules).toHaveLength(0);
   });
 
-  test("a record response that returns open after visibility loss is reconciled through an authoritative pause", async () => {
+  test("a record response after an explicit lifecycle pause is reconciled through an authoritative pause", async () => {
     const clock = frameClock();
     installSeams(clock, testAudio());
     const started = sessionDetail();
@@ -2160,7 +2155,7 @@ describe("useSessionExecution", () => {
     const complete = execution.dispatch({ type: "complete" });
     expect(execution.view.state.mutation).toMatchObject({ action: "complete", pending: true });
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(0);
 
@@ -2269,7 +2264,7 @@ describe("useSessionExecution", () => {
 
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(2);
     expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:03.000Z");
@@ -2319,7 +2314,7 @@ describe("useSessionExecution", () => {
 
     await clock.advance(1_000);
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(1);
     expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:01.000Z");
@@ -2395,7 +2390,7 @@ describe("useSessionExecution", () => {
     await settle();
   });
 
-  test("late audio activation cannot re-arm cues after a visibility interruption", async () => {
+  test("late audio activation cannot re-arm cues after an explicit lifecycle pause", async () => {
     const clock = frameClock();
     const activation = deferred<{ ok: true }>();
     const audio = testAudio({ activate: () => activation.promise });
@@ -2415,7 +2410,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.actionRemainingLabel).toBe("03");
 
     setDocumentHidden(true);
-    document.dispatchEvent(new Event("visibilitychange"));
+    void execution.ensurePaused("visibility").catch(() => {});
     await settle();
     activation.resolve({ ok: true });
     await settle();
@@ -2464,7 +2459,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.actionRemainingLabel).toBe("00");
   });
 
-  test("Wake Lock release pauses execution and manual continue requests a new lock", async () => {
+  test("Wake Lock release keeps execution running and an explicit retry requests a new lock", async () => {
     const clock = frameClock();
     installSeams(clock, testAudio());
     const listeners: Array<() => void> = [];
@@ -2502,17 +2497,17 @@ describe("useSessionExecution", () => {
     listeners[0]();
     await settle();
 
-    expect(execution.view.state.timerPaused).toBe(true);
-    expect(execution.view.state.timerPauseReason).toBe("wake-lock");
-    expect(execution.view.wakeNotice?.title).toBe("屏幕保持已中断，计时已暂停");
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.state.timerPauseReason).toBeNull();
+    expect(execution.view.wakeNotice?.title).toBe("屏幕常亮已释放");
 
-    await execution.dispatch({ type: "toggle-timer" });
+    await execution.dispatch({ type: "retry-wake-lock" });
     await settle();
     expect(execution.view.state.timerPaused).toBe(false);
     expect(requests).toEqual(["screen", "screen"]);
   });
 
-  test("an already-released sentinel pauses reps, while a new start requests a fresh Wake Lock", async () => {
+  test("an already-released sentinel keeps reps active, while a new start requests a fresh Wake Lock", async () => {
     const clock = frameClock();
     installSeams(clock, testAudio());
     const firstWakeRequest = deferred<{
@@ -2568,15 +2563,12 @@ describe("useSessionExecution", () => {
     firstWakeRequest.resolve(alreadyReleasedSentinel);
     await settle();
 
-    const firstPause = harness.calls.find((call) => call.path === "/api/private/sessions/session-1/pause");
-    expect(firstPause).toBeDefined();
-    expect(firstPause?.options?.keepalive).toBe(true);
-    expect(requestBody(firstPause!)).toEqual({ close_at: "2026-08-29T04:00:01.000Z" });
+    expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(0);
     expect(firstAddEventListener).not.toHaveBeenCalled();
-    expect(execution.view.state.timerPaused).toBe(true);
-    expect(execution.view.state.timerPauseReason).toBe("wake-lock");
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.state.timerPauseReason).toBeNull();
     expect(execution.view.state.wakeLockStatus).toBe("released");
-    expect(execution.view.detail?.training_intervals.some((interval) => interval.ended_at === null)).toBe(false);
+    expect(execution.view.detail?.training_intervals.some((interval) => interval.ended_at === null)).toBe(true);
 
     await clock.advance(1_000);
     await execution.dispatch({ type: "start" });
@@ -2589,7 +2581,7 @@ describe("useSessionExecution", () => {
     expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBeNull();
     expect(execution.view.state.timerPaused).toBe(false);
     expect(execution.view.state.wakeLockStatus).toBe("active");
-    expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(1);
+    expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(0);
   });
 
   test("unsupported Wake Lock is visible but never blocks a timed action", async () => {
@@ -2793,7 +2785,7 @@ describe("useSessionExecution", () => {
     },
   );
 
-  test("a pending continue response self-compensates when hidden changes without a visibility event", async () => {
+  test("a pending continue response stays active when the document becomes hidden", async () => {
     const clock = frameClock();
     const audio = testAudio();
     installSeams(clock, audio);
@@ -2829,17 +2821,9 @@ describe("useSessionExecution", () => {
     await continuing;
     await settle();
 
-    const pauses = harness.calls.filter((call) => call.path.endsWith("/pause"));
-    expect(pauses).toHaveLength(1);
-    expect(pauses[0].options?.method).toBe("POST");
-    expect(pauses[0].options?.keepalive).toBe(true);
-    expect(pauses[0].options?.headers).toMatchObject({
-      "Idempotency-Key": expect.stringMatching(/^ui-test-\d+$/),
-    });
-    expect(requestBody(pauses[0])).toEqual({ close_at: "2026-08-29T04:00:01.000Z" });
-    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBe("2026-08-29T04:00:01.000Z");
-    expect(execution.view.state.timerPaused).toBe(true);
-    expect(execution.view.state.timerPauseReason).toBe("visibility");
+    expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(0);
+    expect(execution.view.detail?.training_intervals.at(-1)?.ended_at).toBeNull();
+    expect(execution.view.state.timerPaused).toBe(false);
     expect(execution.view.executionFocused).toBe(true);
     expect(audio.schedules).toHaveLength(0);
     expect(harness.calls.filter((call) => call.path === "/api/private/sessions/session-1")).toHaveLength(detailReadsBefore);
@@ -2934,5 +2918,145 @@ describe("useSessionExecution", () => {
 
     expect(execution.view.state.muted).toBe(true);
     expect(audio.schedules).toHaveLength(0);
+  });
+});
+
+
+describe("background training and inactivity", () => {
+  function runningHarness(started = sessionDetail()) {
+    let server = clone(started);
+    return createApiHarness(async (path, options) => {
+      if (path.endsWith("/start")) return clone(server);
+      if (path.endsWith("/record")) server = completedFirstItem(server);
+      else if (path.endsWith("/pause")) server = pausedDetail(server, JSON.parse(String(options?.body)).close_at);
+      else if (path.endsWith("/resume")) server = resumedDetail(server, new Date(Date.now()).toISOString());
+      else throw new Error(path);
+      return clone(server);
+    });
+  }
+
+  test("rest keeps its deadline and scheduled sound while hidden, and returning does not open another interval", async () => {
+    const clock = frameClock();
+    const audio = testAudio();
+    installSeams(clock, audio);
+    const harness = runningHarness(sessionDetail({ restSeconds: 60 }));
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(10_000);
+    await execution.dispatch({ type: "complete" });
+    await settle();
+    const cancellations = audio.cancellations;
+    const deadline = execution.view.state.restUntil;
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await clock.advance(30_000);
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.state.restUntil).toBe(deadline);
+    expect(audio.cancellations).toBe(cancellations);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.restRemainingLabel).toBe("00:30");
+    expect(execution.view.elapsedLabel).toBe("00:40");
+    expect(harness.calls.filter((call) => /\/(pause|resume)$/.test(call.path))).toHaveLength(0);
+  });
+
+  test.each([false, true])("inactivity closes at rest end plus two minutes after a frozen page (hidden=%s)", async (hidden) => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const harness = runningHarness(sessionDetail({ restSeconds: 60 }));
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(10_000);
+    await execution.dispatch({ type: "complete" });
+    setDocumentHidden(hidden);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await clock.advance(179_999);
+    expect(execution.view.state.timerPaused).toBe(false);
+    await clock.advance(60_001);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(true);
+    expect(execution.view.state.timerPauseReason).toBe("inactivity");
+    const pause = harness.calls.find((call) => call.path.endsWith("/pause"));
+    expect(requestBody(pause!)).toEqual({ close_at: new Date(initialNow + 190_000).toISOString() });
+    expect(execution.view.elapsedLabel).toBe("03:10");
+    expect(execution.view.restActive).toBe(false);
+    expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
+  });
+
+  test("a long timed action gets its full duration and grace before inactivity pause", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const started = sessionDetail({ timed: true });
+    started.snapshot.completion_items![0].target = { metric: "duration_sec", min: 300, max: 300 };
+    const harness = runningHarness(started);
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await execution.dispatch({ type: "start-timed" });
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await clock.advance(350_000);
+    setDocumentHidden(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(execution.view.state.timedAction.phase).toBe("complete");
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(execution.view.completedCount).toBe(0);
+    await clock.advance(75_000);
+    expect(execution.view.state.timerPauseReason).toBe("inactivity");
+    expect(execution.view.state.timerPauseStartedAt).toBe(initialNow + 425_000);
+  });
+
+  test("editing a result renews the inactivity grace without counting a return as activity", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const harness = runningHarness();
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(110_000);
+    await execution.dispatch({ type: "draft-actual", key: "item-1", value: "9" });
+    await clock.advance(119_999);
+    expect(execution.view.state.timerPaused).toBe(false);
+    await clock.advance(1);
+    expect(execution.view.state.timerPauseStartedAt).toBe(initialNow + 230_000);
+  });
+
+  test("a start response received in the background keeps its active interval", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const gate = deferred<SessionDetail>();
+    const harness = createApiHarness(async () => gate.promise);
+    const { execution } = mountExecution(harness.app);
+    const starting = execution.dispatch({ type: "start" });
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    gate.resolve(sessionDetail());
+    await starting;
+    await settle();
+    expect(execution.view.state.timerPaused).toBe(false);
+    expect(harness.calls.filter((call) => call.path.endsWith("/pause"))).toHaveLength(0);
+  });
+
+  test("retry Wake Lock recovers a denial and deduplicates a pending user retry", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const gate = deferred<WakeLockSentinel>();
+    const request = vi.fn().mockRejectedValueOnce(new Error("denied")).mockImplementation(() => gate.promise);
+    installWakeLock({ request });
+    const harness = runningHarness();
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await settle();
+    expect(execution.view.state.wakeLockStatus).toBe("denied");
+    const retry = execution.dispatch({ type: "retry-wake-lock" });
+    await execution.dispatch({ type: "retry-wake-lock" });
+    expect(request).toHaveBeenCalledTimes(2);
+    gate.resolve({ released: false, release: async () => {}, addEventListener() {} } as unknown as WakeLockSentinel);
+    await retry;
+    await settle();
+    expect(execution.view.state.wakeLockStatus).toBe("active");
+    expect(execution.view.state.timerPaused).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive } from "vue";
+import SessionSyncStatus from "./SessionSyncStatus.vue";
 
 import type { WorkoutAppStore } from "../../core/contracts";
 import { canonicalSetResistance } from "./session-model";
@@ -167,8 +168,7 @@ const focusPrescription = computed(() => {
 
 const timedStatus = computed(() => {
   if (view.state.timerPaused) {
-    if (view.state.timerPauseReason === "visibility") return "页面已离开前台 · 计时已暂停 · 回到前台后点击顶部继续";
-    if (view.state.timerPauseReason === "wake-lock") return "屏幕保持已中断 · 计时已暂停 · 点击顶部继续";
+    if (view.state.timerPauseReason === "inactivity") return "较长时间未操作 · 已暂停 · 点击顶部继续";
     return "已暂停 · 点击顶部继续";
   }
   if (view.timedAction.phase === "preparing") return "准备中 · 5 秒后开始";
@@ -214,14 +214,7 @@ defineExpose({ ensurePaused, executionFocused });
   <div v-if="view.state.navigationPauseError" class="mutation-feedback is-error" role="alert">
     <strong>{{ view.state.navigationPauseError }}</strong><span>当前页面会保留；确认暂停后再离开。</span>
   </div>
-  <div v-if="view.state.executionSync === 'pending' || view.state.executionSync === 'saved'" class="mutation-feedback" role="status" data-sync-status>
-    {{ view.state.executionSync === "pending" ? "已记在本机，待同步" : "训练操作已同步" }}
-  </div>
-  <div v-else-if="view.state.executionSync === 'error' || view.state.executionSync === 'conflict'" class="mutation-feedback is-error" role="alert" data-sync-status>
-    <strong>{{ view.state.executionSync === "conflict" ? "云端训练已更新，本机操作仍保留" : "训练操作仍在本机，暂未同步" }}</strong>
-    <button type="button" class="text-button" data-action="retry-sync" @click="send({ type: 'retry-sync' })">重试同步</button>
-    <button type="button" class="text-button" data-action="discard-sync" @click="send({ type: 'discard-sync' })">采用云端记录</button>
-  </div>
+  <SessionSyncStatus v-if="view.state.mode !== 'execution'" class="sync-floating" :status="view.state.executionSync" @retry="send({ type: 'retry-sync' })" @discard="send({ type: 'discard-sync' })" />
   <section v-if="!view.entry || (view.entry.kind === 'no_plan' && !view.summary)" class="today-page">
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
@@ -491,7 +484,10 @@ defineExpose({ ensurePaused, executionFocused });
     <template v-else-if="view.state.mode === 'execution' && view.detail.status === 'in_progress'">
       <header class="session-header">
         <button class="session-header-side" data-action="minimize" aria-label="返回今日" @click="send({ type: 'minimize' })">‹</button>
-        <strong>{{ view.restActive ? "组间休息" : view.elapsedLabel }}</strong>
+        <div class="session-heading">
+          <strong>{{ view.restActive ? "组间休息" : view.elapsedLabel }}</strong>
+          <SessionSyncStatus :status="view.state.executionSync" @retry="send({ type: 'retry-sync' })" @discard="send({ type: 'discard-sync' })" />
+        </div>
         <div class="session-header-actions">
           <button
             class="session-mute-toggle"
@@ -549,6 +545,7 @@ defineExpose({ ensurePaused, executionFocused });
 
       <div v-if="view.wakeNotice" class="notice session-wake-notice" :class="view.wakeNotice.className" role="status" aria-live="polite">
         <strong>{{ view.wakeNotice.title }}</strong><span>{{ view.wakeNotice.detail }}</span>
+        <button v-if="view.canRetryWakeLock" type="button" class="text-button wake-lock-retry" data-action="retry-wake-lock" :disabled="view.state.wakeLockStatus === 'requesting'" :aria-busy="view.state.wakeLockStatus === 'requesting' || undefined" @click="send({ type: 'retry-wake-lock' })">{{ view.state.wakeLockStatus === 'requesting' ? '请求中…' : '重新保持常亮' }}</button>
       </div>
       <div v-if="view.audioFailed" class="notice timed-audio-notice" role="alert">
         <strong>声音未开启</strong><span>提示音播放失败，计时仍可继续。请检查 iPhone 的音量和静音开关后，再点击开始动作重试。</span>

@@ -2066,3 +2066,70 @@ button[aria-busy="true"] {
     padding-inline: 48px;
   }
 }
+
+/* Saving belongs to the existing header; it never adds a row above training. */
+.session-heading {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-width: 0;
+  min-height: 58px;
+  grid-template-rows: 20px 24px;
+  gap: 0;
+}
+
+.session-sync {
+  position: relative;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.session-sync summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  list-style: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.session-sync summary::after { content: ""; position: absolute; inset: -10px 0; }
+.session-sync summary::-webkit-details-marker { display: none; }
+.session-sync summary:hover { background: var(--paper); color: var(--ink); }
+.session-sync summary:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
+.session-sync svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.session-sync.is-saved { color: var(--green); }
+.session-sync.is-error, .session-sync.is-conflict { color: var(--accent-dark); }
+
+.session-sync-detail {
+  position: fixed;
+  z-index: 6;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(288px, calc(100vw - 36px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  text-align: left;
+  white-space: normal;
+}
+
+.session-header .session-sync-detail strong { font-size: 13px; letter-spacing: 0; }
+.session-sync-detail p { margin: 6px 0 0; color: var(--muted); line-height: 1.55; }
+.session-sync-actions { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
+.session-sync-actions .text-button { min-height: 44px; padding: 8px 0; font-size: 12px; }
+.sync-floating { position: fixed; z-index: 4; right: max(18px, calc((100vw - 716px) / 2)); bottom: calc(100px + env(safe-area-inset-bottom)); background: var(--card); border-radius: 10px; }
+.sync-floating summary { min-height: 44px; padding: 0 12px; }
+.sync-floating .session-sync-detail { position: absolute; top: auto; bottom: calc(100% + 8px); left: auto; right: 0; transform: none; }
+.wake-lock-retry { justify-self: start; min-height: 44px; padding: 8px 0; font-size: 13px; color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.wake-lock-retry:disabled { opacity: .6; cursor: wait; }

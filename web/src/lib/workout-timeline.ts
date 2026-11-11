@@ -25,6 +25,7 @@ export interface WorkoutTimelineOptions {
   now?: () => number;
   leadTimeMs?: number;
   sources?: Record<string, string>;
+  clock?: "performance" | "wall";
 }
 
 export interface ActionSchedule {
@@ -59,7 +60,7 @@ function failure(error: unknown, fallback: string): AudioResult {
   return { ok: false, error: typeof error === "string" ? error : fallback };
 }
 
-function createBrowserAudioOutput({ sources, now }: { sources: Record<string, string>; now: () => number }): AudioOutput {
+function createBrowserAudioOutput({ sources, now, clock }: { sources: Record<string, string>; now: () => number; clock: "performance" | "wall" }): AudioOutput {
   const audioGlobal = globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext };
   const AudioContextClass = globalThis.AudioContext || audioGlobal.webkitAudioContext;
   let context: AudioContext | null = null;
@@ -145,7 +146,8 @@ function createBrowserAudioOutput({ sources, now }: { sources: Record<string, st
     const contextTime = Number(timestamp?.contextTime);
     const performanceTime = Number(timestamp?.performanceTime);
     if (Number.isFinite(contextTime) && Number.isFinite(performanceTime) && performanceTime > 0) {
-      return contextTime + (atMs - performanceTime) / 1000;
+      const presentationTime = clock === "wall" ? performance.now() + (atMs - now()) : atMs;
+      return contextTime + (presentationTime - performanceTime) / 1000;
     }
     return audioContext.currentTime + (atMs - now()) / 1000;
   }
@@ -195,8 +197,9 @@ export function createWorkoutTimeline({
   now = () => performance.now(),
   leadTimeMs = 50,
   sources = defaultAudioSources,
+  clock = "performance",
 }: WorkoutTimelineOptions = {}) {
-  const output = audioOutput || createBrowserAudioOutput({ sources, now });
+  const output = audioOutput || createBrowserAudioOutput({ sources, now, clock });
 
   function prepareAudio(): Promise<AudioResult> {
     try {

@@ -373,6 +373,7 @@ export default async function runBrowserSmoke(page) {
       ];
     });
     invariant(Math.max(...timings) <= 150, "weak-network feedback exceeded 150 ms");
+    await page.locator('[data-sync-status].is-error summary').click();
     await page.locator('[data-action="retry-sync"]').waitFor();
     invariant(sent.length === 1 && JSON.parse(sent[0].body).actions.length === 4, "rapid actions were not coalesced in one request");
     const afterLostReceipt = await sessionReadback(sessionKey);
@@ -390,7 +391,7 @@ export default async function runBrowserSmoke(page) {
     await page.getByRole("heading", { name: "本地演示训练 B", exact: true }).waitFor();
     invariant(sent.length === 1, "another Athlete attempted to send the pending operation");
     await loginAs("athlete-a@example.invalid");
-    await page.locator('[data-sync-status]').getByText("训练操作已同步", { exact: true }).waitFor();
+    await page.locator('[data-sync-status].is-saved summary').waitFor();
     invariant(sent.length >= 2 && sent[1].key === sent[0].key && sent[1].body === sent[0].body, "the lost receipt was not retried with the original key and body");
     const restored = await sessionReadback(sessionKey);
     invariant(restored.resultCount === 1 && restored.openIntervalCount === 0, "recovery duplicated the result or left an open interval");
