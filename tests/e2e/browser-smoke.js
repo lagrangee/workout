@@ -9,6 +9,7 @@ export default async function runBrowserSmoke(page) {
   const consoleProblems = [];
   const pageErrors = [];
   let unauthorizedResponses = 0;
+  let simulateLostReceipt = false;
 
   const invariant = (condition, message) => {
     if (!condition) throw new Error(`[browser-smoke:${stage}] ${message}`);
@@ -23,16 +24,23 @@ export default async function runBrowserSmoke(page) {
     }
   };
   const requestPath = (request) => new URL(request.url()).pathname;
+  const syncActions = (request) => {
+    if (request.method() !== "POST" || !/^\/api\/private\/sessions\/[^/]+\/sync$/.test(requestPath(request))) return [];
+    return request.postDataJSON()?.actions ?? [];
+  };
+  const syncResponseFor = (type) => page.waitForResponse((response) => (
+    syncActions(response.request()).some((action) => action.type === type)
+  ));
   const mutationFor = (command, offset = 0) => mutationRequests.filter(
     (request) => request.path.endsWith(`/${command}`),
   ).at(offset);
   const validMutationKey = (value) => typeof value === "string"
     && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
-  const pauseBoundary = (body) => {
+  const timerBoundary = (body, type) => {
     try {
       const parsed = JSON.parse(body);
-      if (Object.keys(parsed).length !== 1 || typeof parsed.close_at !== "string") return null;
-      return Number.isNaN(Date.parse(parsed.close_at)) ? null : parsed.close_at;
+      if (parsed.type !== type || typeof parsed.at !== "string") return null;
+      return Number.isNaN(Date.parse(parsed.at)) ? null : parsed.at;
     } catch {
       return null;
     }
@@ -50,6 +58,8 @@ export default async function runBrowserSmoke(page) {
       openIntervalCount: Array.isArray(detail.training_intervals)
         ? detail.training_intervals.filter((interval) => interval.ended_at === null).length
         : -1,
+      resultCount: detail.completion_results?.length ?? -1,
+      note: detail.note ?? null,
     };
   }, sessionKey);
 
@@ -59,14 +69,18 @@ export default async function runBrowserSmoke(page) {
   page.on("console", (message) => {
     if (!["error", "warning"].includes(message.type())) return;
     if (/401\s*\(Unauthorized\)/i.test(message.text())) return;
+    if (simulateLostReceipt && /503/.test(message.text())) return;
     consoleProblems.push(message.type());
   });
   page.on("pageerror", () => pageErrors.push("pageerror"));
   page.on("request", (request) => {
     const path = requestPath(request);
     if (request.method() !== "POST") return;
-    if (!/^\/api\/private\/(?:scheduled-workouts\/\d{4}-\d{2}-\d{2}\/start|sessions\/[^/]+\/(?:pause|resume))$/.test(path)) return;
     const headers = request.headers();
+    for (const action of syncActions(request)) {
+      mutationRequests.push({ path: path.slice(0, -4) + action.type, body: JSON.stringify(action), key: headers["idempotency-key"] ?? "" });
+    }
+    if (!/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/start$/.test(path)) return;
     mutationRequests.push({
       path,
       body: request.postData() ?? "",
@@ -237,17 +251,14 @@ export default async function runBrowserSmoke(page) {
   let sessionKey = "";
   let firstPauseKey = "";
   await safeStage("minimize-pause", async () => {
-    const pauseResponse = page.waitForResponse((response) => (
-      /^\/api\/private\/sessions\/[^/]+\/pause$/.test(requestPath(response.request()))
-      && response.request().method() === "POST"
-    ));
+    const pauseResponse = syncResponseFor("pause");
     await page.locator('[data-action="minimize"]').click();
     invariant((await pauseResponse).status() === 200, "minimizing did not persist a paused Session");
     await page.locator("nav.bottom-nav").waitFor();
 
     const pauses = mutationRequests.filter((request) => request.path.endsWith("/pause"));
     invariant(pauses.length === 1, "minimizing did not issue exactly one pause request");
-    invariant(pauseBoundary(pauses[0].body) !== null, "the minimize pause boundary is missing or invalid");
+    invariant(timerBoundary(pauses[0].body, "pause") !== null, "the minimize pause boundary is missing or invalid");
     invariant(validMutationKey(pauses[0].key), "the minimize pause idempotency key is missing or unsafe");
     invariant(pauses[0].key !== mutationFor("start").key, "start and pause reused one idempotency key");
     sessionKey = pauses[0].path.split("/").at(-2) ?? "";
@@ -273,22 +284,16 @@ export default async function runBrowserSmoke(page) {
     await timerToggle.waitFor();
     invariant((await timerToggle.innerText()).trim() === "继续", "the minimized Session did not reopen in a paused state");
 
-    const resumeResponse = page.waitForResponse((response) => (
-      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/resume`
-      && response.request().method() === "POST"
-    ));
+    const resumeResponse = syncResponseFor("resume");
     await timerToggle.click();
     invariant((await resumeResponse).status() === 200, "the Session did not resume through the server");
     await page.locator('[data-action="toggle-timer"]:not([aria-pressed="true"])').waitFor();
     const resumeRequest = mutationFor("resume");
-    invariant(Boolean(resumeRequest) && resumeRequest.body === "{}", "the Session resume body changed");
+    invariant(Boolean(resumeRequest) && timerBoundary(resumeRequest.body, "resume") !== null, "the Session resume boundary is missing or invalid");
     invariant(validMutationKey(resumeRequest.key), "the Session resume idempotency key is missing or unsafe");
 
     const pausesBeforePageHide = mutationRequests.filter((request) => request.path.endsWith("/pause")).length;
-    const pagehideResponse = page.waitForResponse((response) => (
-      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/pause`
-      && response.request().method() === "POST"
-    ));
+    const pagehideResponse = syncResponseFor("pause");
     await page.evaluate(() => {
       window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
     });
@@ -296,7 +301,7 @@ export default async function runBrowserSmoke(page) {
     const pausesAfterPageHide = mutationRequests.filter((request) => request.path.endsWith("/pause"));
     invariant(pausesAfterPageHide.length === pausesBeforePageHide + 1, "pagehide did not issue exactly one new pause request");
     const pagehidePause = pausesAfterPageHide.at(-1);
-    invariant(pauseBoundary(pagehidePause.body) !== null, "the pagehide pause boundary is missing or invalid");
+    invariant(timerBoundary(pagehidePause.body, "pause") !== null, "the pagehide pause boundary is missing or invalid");
     invariant(validMutationKey(pagehidePause.key), "the pagehide pause idempotency key is missing or unsafe");
     invariant(pagehidePause.key !== firstPauseKey && pagehidePause.key !== resumeRequest.key, "pagehide reused an unrelated mutation key");
 
@@ -307,18 +312,10 @@ export default async function runBrowserSmoke(page) {
   });
 
   await safeStage("pageshow", async () => {
-    const reconciliationResponse = page.waitForResponse((response) => (
-      requestPath(response.request()) === `/api/private/sessions/${sessionKey}`
-      && response.request().method() === "GET"
-    ));
-    const resumeResponse = page.waitForResponse((response) => (
-      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/resume`
-      && response.request().method() === "POST"
-    ));
+    const resumeResponse = syncResponseFor("resume");
     await page.evaluate(() => {
       window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
     });
-    invariant((await reconciliationResponse).status() === 200, "pageshow did not reconcile the Session read model");
     invariant((await resumeResponse).status() === 200, "pageshow did not automatically resume through the server");
     const timerToggle = page.locator('[data-action="toggle-timer"]');
     await page.locator('[data-action="toggle-timer"]:not([aria-pressed="true"])').waitFor();
@@ -329,24 +326,80 @@ export default async function runBrowserSmoke(page) {
   });
 
   await safeStage("manual-pause-pageshow", async () => {
-    const pauseResponse = page.waitForResponse((response) => (
-      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/pause`
-      && response.request().method() === "POST"
-    ));
+    const pauseResponse = syncResponseFor("pause");
     await page.locator('[data-action="toggle-timer"]').click();
     invariant((await pauseResponse).status() === 200, "manual pause failed");
     await page.locator('[data-action="toggle-timer"][aria-pressed="true"]').waitFor();
     const resumeCount = mutationRequests.filter((request) => request.path.endsWith("/resume")).length;
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
-    const reconciliationResponse = page.waitForResponse((response) => (
-      requestPath(response.request()) === `/api/private/sessions/${sessionKey}`
-      && response.request().method() === "GET"
-    ));
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
-    invariant((await reconciliationResponse).status() === 200, "manual pause did not reconcile after pageshow");
     const readback = await sessionReadback(sessionKey);
     invariant(readback.openIntervalCount === 0, "pageshow resumed a manually paused Session");
     invariant(mutationRequests.filter((request) => request.path.endsWith("/resume")).length === resumeCount, "pageshow resumed a manual pause");
+  });
+
+  await safeStage("weak-network-recovery", async () => {
+    const url = "**/api/private/sessions/*/sync";
+    const sent = [];
+    simulateLostReceipt = true;
+    await page.route(url, async (route) => {
+      sent.push({ body: route.request().postData(), key: route.request().headers()["idempotency-key"] });
+      const response = await route.fetch();
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      if (sent.length === 1 && response.ok()) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: '{"error":{"code":"unavailable"}}' });
+      } else {
+        await route.fulfill({ response });
+      }
+    });
+    await page.locator('[data-action="toggle-mute"]').click();
+    const timings = await page.evaluate(async () => {
+      async function localAction(selector, reflected) {
+        const start = performance.now();
+        document.querySelector(selector).click();
+        while (!reflected()) {
+          if (performance.now() - start > 150) throw new Error("Local feedback exceeded 150 ms");
+          await new Promise(requestAnimationFrame);
+        }
+        return performance.now() - start;
+      }
+      const timer = '[data-action="toggle-timer"]';
+      const paused = () => document.querySelector(timer).getAttribute("aria-pressed") === "true";
+      return [
+        await localAction(timer, () => !paused()),
+        await localAction(timer, paused),
+        await localAction(timer, () => !paused()),
+        await localAction('[data-action="complete"]', () => Boolean(document.querySelector(".rest-screen"))),
+      ];
+    });
+    invariant(Math.max(...timings) <= 150, "weak-network feedback exceeded 150 ms");
+    await page.locator('[data-action="retry-sync"]').waitFor();
+    invariant(sent.length === 1 && JSON.parse(sent[0].body).actions.length === 4, "rapid actions were not coalesced in one request");
+    const afterLostReceipt = await sessionReadback(sessionKey);
+    invariant(afterLostReceipt.resultCount === 1, "the first attempt never reached authoritative storage");
+
+    const loginAs = async (email) => {
+      await page.context().clearCookies();
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("heading", { name: "登录你的训练空间", exact: true }).waitFor();
+      await page.getByLabel("邮箱", { exact: true }).fill(email);
+      await page.getByLabel("密码", { exact: true }).fill(localLoginValue);
+      await page.getByRole("button", { name: "登录", exact: true }).click();
+    };
+    await loginAs("athlete-b@example.invalid");
+    await page.getByRole("heading", { name: "本地演示训练 B", exact: true }).waitFor();
+    invariant(sent.length === 1, "another Athlete attempted to send the pending operation");
+    await loginAs("athlete-a@example.invalid");
+    await page.locator('[data-sync-status]').getByText("训练操作已同步", { exact: true }).waitFor();
+    invariant(sent.length >= 2 && sent[1].key === sent[0].key && sent[1].body === sent[0].body, "the lost receipt was not retried with the original key and body");
+    const restored = await sessionReadback(sessionKey);
+    invariant(restored.resultCount === 1 && restored.openIntervalCount === 0, "recovery duplicated the result or left an open interval");
+    invariant(restored.intervalCount === afterLostReceipt.intervalCount, "replay created an additional interval");
+    await page.unroute(url);
+    simulateLostReceipt = false;
+    await page.locator('[data-action="open-session"]').click();
+    await page.locator('[data-action="toggle-timer"][aria-pressed="true"]').waitFor();
+    console.log(`Workout weak-network local feedback (resume/pause/resume/complete): ${timings.map(Math.round).join("/")} ms`);
   });
 
   await safeStage("session-end", async () => {
@@ -354,15 +407,35 @@ export default async function runBrowserSmoke(page) {
     await page.locator('[data-action="end"]').click();
     await page.locator('[data-action="save-end"]').waitFor();
     await page.locator("#end-note").fill("Synthetic browser End verification");
+    const endUrl = "**/api/private/sessions/*/end";
+    const endRequests = [];
+    simulateLostReceipt = true;
+    await page.route(endUrl, async (route) => {
+      endRequests.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData() });
+      const response = await route.fetch();
+      invariant(response.status() === 200, "authoritative End was rejected");
+      if (endRequests.length <= 2) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: '{"error":{"code":"unavailable"}}' });
+      } else {
+        await route.fulfill({ response });
+      }
+    });
     const endResponse = page.waitForResponse((response) => (
-      requestPath(response.request()) === `/api/private/sessions/${sessionKey}/end`
+      response.status() === 200
+      && requestPath(response.request()) === `/api/private/sessions/${sessionKey}/end`
       && response.request().method() === "POST"
     ));
     await page.locator('[data-action="save-end"]').click();
-    invariant((await endResponse).status() === 200, "End did not commit");
+    await page.getByText("确认上次提交", { exact: true }).waitFor();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await endResponse;
     await page.locator('[data-action="end"]').waitFor({ state: "hidden" });
+    await page.unroute(endUrl);
+    simulateLostReceipt = false;
+    invariant(endRequests.length === 3 && endRequests.every((item) => item.key === endRequests[0].key && item.body === endRequests[0].body), "End changed its frozen request across a reload");
     const readback = await sessionReadback(sessionKey);
     invariant(readback.sessionStatus === "partial" && readback.openIntervalCount === 0, "End failed to persist a terminal Session");
+    invariant(readback.note === "Synthetic browser End verification", "End recovery changed the submitted note");
   });
 
   await safeStage("cookie-expiry", async () => {

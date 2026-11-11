@@ -7,7 +7,7 @@ import test from "node:test";
 import { createHandler } from "../src/http.js";
 import { D1Store, MemoryStore, emptyAthlete } from "../src/store.js";
 import { WEEKDAYS, addDays } from "../src/util.js";
-import { appendPlanRevision } from "../src/plan.js";
+import { appendPlanRevision, planModel, todayModel } from "../src/plan.js";
 
 const MIGRATIONS = [
   "0001_initial.sql",
@@ -592,6 +592,58 @@ test("a cold private mutation with 201 Sessions stays below the whole Worker inv
   }
 });
 
+test("scoped D1 Today and Plan preserve their projections with a large Session history", async () => {
+  const { sqlite, db, store } = createDatabase();
+  try {
+    const state = await seedCanonicalHistory(store, 201);
+    const plan = {
+      schema_version: 2,
+      effective_from: "2026-08-24",
+      week: Object.fromEntries(WEEKDAYS.map((weekday) => [weekday, null])),
+    };
+    plan.week.saturday = canonicalPlan().week.monday;
+    plan.week.sunday = { kind: "rest" };
+    appendPlanRevision(state, plan, new Date("2026-08-23T04:00:00.000Z"));
+    await store.save(state);
+    const full = await store.getByEmail(state.email);
+    const now = new Date("2026-08-29T04:00:00.000Z");
+    db.roundTripCount = 0;
+    const scopedToday = await store.getForToday(state.email, now);
+    assert.deepEqual(todayModel(scopedToday, now), todayModel(full, now));
+    assert.equal(scopedToday.sessions.length, 0);
+    assert.equal(scopedToday.plan_revisions.length, 1);
+    assert.equal(db.roundTripCount, 2);
+    const rest = new Date("2026-08-30T04:00:00.000Z");
+    assert.deepEqual(todayModel(await store.getForToday(state.email, rest), rest), todayModel(full, rest));
+    db.roundTripCount = 0;
+    assert.deepEqual(planModel(await store.getForPlan(state.email, now), now), planModel(full, now));
+    assert.equal(db.roundTripCount, 2);
+  } finally { sqlite.close(); }
+});
+
+test("Calendar expiry still visits all expired Sessions in a canonical D1 Athlete", async () => {
+  const { sqlite, db, store } = createDatabase();
+  try {
+    const state = await seedCanonicalHistory(store, 2);
+    for (const session of state.sessions) {
+      session.status = "in_progress";
+      session.session_rpe = null;
+      session.training_intervals[0].ended_at = null;
+    }
+    await store.save(state);
+    const env = { DB: db, LOCAL_AUTH: "true", ATHLETE_A_EMAIL: state.email, DEFAULT_TIMEZONE: "Asia/Shanghai" };
+    const handler = createHandler(env, { clock: () => new Date("2026-08-29T04:00:00.000Z") });
+    const response = await handler.fetch(new Request("https://workout.example/api/private/sessions/normalize-expired", {
+      method: "POST",
+      headers: { "x-athlete-email": state.email, "Idempotency-Key": "expiry-check" },
+      body: "{}",
+    }), env);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).normalized_count, 2);
+    assert.deepEqual((await store.getByEmail(state.email)).sessions.map((session) => session.status), ["partial", "partial"]);
+  } finally { sqlite.close(); }
+});
+
 test("a warm private Session End avoids repeated hydration and sequential D1 read round trips", async (t) => {
   const { sqlite, db, store } = createDatabase();
   try {
@@ -631,7 +683,7 @@ test("a warm private Session End avoids repeated hydration and sequential D1 rea
     assert.equal(response.status, 200, await response.clone().text());
     t.diagnostic(`warm Session End used ${db.queryExecutionCount} statements in ${db.roundTripCount} D1 round trips`);
     assert.ok(db.queryExecutionCount < D1_INVOCATION_LIMIT);
-    assert.ok(db.roundTripCount <= 8, `Session End used ${db.roundTripCount} D1 round trips`);
+    assert.ok(db.roundTripCount <= 3, `Session End used ${db.roundTripCount} D1 round trips`);
     assert.equal((await store.getByEmail(state.email)).sessions.at(-1).status, "completed");
   } finally { sqlite.close(); }
 });

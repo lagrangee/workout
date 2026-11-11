@@ -40,7 +40,6 @@ const shellClass = computed(() => ({
 
 const hasBootstrapData = computed(() => (
   props.app.state.today !== null
-  && props.app.state.plan !== null
 ));
 
 const showLoadingBoundary = computed(() => (
@@ -113,6 +112,9 @@ async function navigate(
 
     executionFocused.value = false;
     props.app.state.view = destination;
+    if ((destination === "calendar" || destination === "settings") && !props.app.state.plan) {
+      void props.app.loadPlan?.();
+    }
     await nextTick();
 
     if (navigationContextIsCurrent(epoch, destination, guard)) return true;

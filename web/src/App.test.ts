@@ -526,7 +526,7 @@ describe("App navigation", () => {
 });
 
 describe("createWorkoutAppStore lifecycle", () => {
-  it("loads Today and Plan before the date-scoped progress read", async () => {
+  it("makes Today available with one request and loads the Plan on demand", async () => {
     const calls: string[] = [];
     const { api } = apiWith(async (path) => {
       calls.push(path);
@@ -539,15 +539,17 @@ describe("createWorkoutAppStore lifecycle", () => {
 
     await store.bootstrap();
 
-    expect(calls.slice(0, 2).sort()).toEqual(["/api/private/plan", "/api/private/today"]);
-    expect(calls[2]).toBe("/api/private/progress?from=2026-08-01&to=2026-08-29");
+    expect(calls).toEqual(["/api/private/today"]);
     expect(store.state).toMatchObject({
       loading: false,
       authRequired: false,
       today,
-      plan,
-      progress,
+      plan: null,
+      progress: null,
     });
+    await store.loadPlan?.();
+    expect(calls).toEqual(["/api/private/today", "/api/private/plan"]);
+    expect(store.state.plan).toEqual(plan);
   });
 
   it("keeps global loading false during a background refresh", async () => {
@@ -719,8 +721,8 @@ describe("createWorkoutAppStore lifecycle", () => {
       authEpoch: 1,
       authRequired: false,
       today,
-      plan,
-      progress: progressWithCompletion(1),
+      plan: null,
+      progress: null,
     });
 
     const unauthorized = Object.assign(new Error("old session expired"), { status: 401 });
@@ -733,8 +735,8 @@ describe("createWorkoutAppStore lifecycle", () => {
       authRequired: false,
       error: null,
       today,
-      plan,
-      progress: progressWithCompletion(1),
+      plan: null,
+      progress: null,
     });
   });
 
@@ -763,7 +765,7 @@ describe("createWorkoutAppStore lifecycle", () => {
       error: null,
       message: "",
       today,
-      plan,
+      plan: null,
     });
   });
 
@@ -974,15 +976,13 @@ describe("createWorkoutAppStore lifecycle", () => {
       "/api/auth/logout",
       "/api/auth/login",
       "/api/private/today",
-      "/api/private/plan",
-      "/api/private/progress?from=2026-08-01&to=2026-08-29",
     ]);
     expect(store.state).toMatchObject({
       authEpoch: 2,
       loading: false,
       authRequired: false,
       today,
-      plan,
+      plan: null,
     });
   });
 

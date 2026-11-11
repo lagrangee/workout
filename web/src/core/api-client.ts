@@ -164,6 +164,13 @@ function validateToday(path: string, value: JsonRecord): void {
     protocolFailure(path, "today envelope is missing required fields");
   }
   if (value.session !== null) validateSessionSummary(path, value.session);
+  if (value.session_detail !== undefined && value.session_detail !== null) {
+    if (!isRecord(value.session_detail) || !isRecord(value.session)
+      || value.session_detail.session_key !== value.session.session_key) {
+      protocolFailure(path, "today detail must belong to the returned Session");
+    }
+    validateSessionDetail(path, value.session_detail);
+  }
 }
 
 function validatePlanRevision(path: string, value: unknown): void {
@@ -218,7 +225,7 @@ function validateProgress(path: string, value: JsonRecord): void {
 function isSessionDetailPath(pathname: string): boolean {
   if (/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/(?:start|skip)$/.test(pathname)) return true;
   if (pathname === "/api/private/sessions/normalize-expired") return false;
-  return /^\/api\/private\/sessions\/[^/]+(?:\/(?:end|pause|resume|continue|restart|record))?$/.test(pathname);
+  return /^\/api\/private\/sessions\/[^/]+(?:\/(?:end|pause|resume|continue|restart|record|sync))?$/.test(pathname);
 }
 
 export function validateWorkoutJsonResponse(path: string, value: unknown): JsonRecord {
@@ -239,6 +246,9 @@ export function validateWorkoutJsonResponse(path: string, value: unknown): JsonR
   else if (pathname === "/api/private/progress") validateProgress(path, value);
   else if (isSessionDetailPath(pathname)) {
     validateSessionDetail(path, value);
+    if (pathname.endsWith("/sync") && !isNonEmptyString(value.synced_updated_at)) {
+      protocolFailure(path, "sync response is missing its acknowledgement");
+    }
     if (pathname.endsWith("/end") && !["completed", "partial"].includes(String(value.status))) {
       protocolFailure(path, "end response must contain a terminal Session");
     }

@@ -140,16 +140,16 @@ in-progress Session. Both commands require an `Idempotency-Key` and return the
 complete Session detail.
 
 For both record versions, leaving the visible execution page pauses its local
-timers and closes the active Training Interval through the pause command.
+timers and records a pause to close the active Training Interval.
 Returning to the visible execution page automatically resumes only training
 that this page paused for visibility loss or pagehide. A manual pause, an open
 End form, navigation away from execution, or a recovered Session without local
-browser ownership remains paused. The page waits for its pending pause, and an
-uncertain pause must be reconciled with the same idempotency key before a resume
-may create the next server-owned interval. A BFCache restore first reads and
-reconciles the authoritative Session; failure leaves training paused with a
-retryable error. A second interruption during recovery must close the returned
-interval before another visible return can resume it.
+browser ownership remains paused. Direct command clients reconcile an uncertain
+pause with its original idempotency key before resuming. The browser execution
+queue can show a local resume while a pause is pending. The server receives the
+two actions in order and creates the next interval after closing the prior one.
+After BFCache restore, the browser reuses the ordered queue and its existing
+keys. A second interruption records another pause at its own boundary.
 
 Browser audio output is released on visibility loss or pagehide, including
 while already paused; either automatic or explicit resume activates fresh output
@@ -164,6 +164,40 @@ submission is confirmed. A concurrency conflict on a replay of an already
 unconfirmed End retains that same frozen submission; it does not prove that
 the original End was rejected. A first definitive rejection keeps the draft
 editable and surfaces the failing fields.
+
+### Browser execution sync v1
+
+Authenticated Today responses advertise `execution_sync_version: 1` and the
+verified `athlete_key` used to scope browser recovery. The same read embeds
+`session_detail` for the returned Session, or null when there is no Session.
+The browser journals
+each training action before projecting it onto the screen. Its local queue
+belongs to that Athlete and browser tab and survives reload and reauthentication
+in the same tab. The server remains authoritative for Workout Sessions.
+
+`POST /api/private/sessions/:session_key/sync` requires an `Idempotency-Key`.
+The JSON body has `base_updated_at` from the last accepted Session detail and
+an ordered `actions` array of 1–32 entries.
+
+- `{ "type": "pause", "at": "..." }` closes the open Training Interval.
+- `{ "type": "resume", "at": "..." }` starts a new server-owned interval at the
+  recorded click instant. Timer instants must be RFC 3339 UTC and preserve
+  interval ordering and existing completion timestamps.
+- `{ "type": "record", "results": [...], "exercise_feedback": [...] }` upserts
+  one or two distinct Completion Items with their respective v1 or v2 result
+  shape. The submitted feedback replaces the current Exercise Feedback.
+
+The server applies the batch atomically to an in-progress Workout Session.
+A stale Session version returns 409 and leaves the local journal available.
+The response is the full Session detail plus `synced_updated_at`, which
+identifies the version accepted for the batch. An idempotent replay can return
+a newer authoritative detail alongside the original acknowledgement. The browser
+preserves the original serialized body and key for ambiguous retries.
+
+The browser drains queued actions before End and supplies the optional
+`base_updated_at` precondition with its frozen End body. It retains that body
+and key locally until confirmed or definitively rejected, including through a
+login interruption. The Session reaches terminal status on server confirmation.
 
 The private Calendar maintenance command `POST /api/private/sessions/normalize-expired`
 is the one explicit exception to the normal end derivation: for an `in_progress`

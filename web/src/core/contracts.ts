@@ -21,6 +21,8 @@ export interface ApiClient {
 }
 
 export interface TodayState extends JsonRecord {
+  athlete_key?: string;
+  session_detail?: JsonRecord | null;
   date: string;
   timezone: string;
   entry: JsonRecord | null;
@@ -53,6 +55,7 @@ export interface WorkoutAppStore {
   api: ApiClient;
   bootstrap(): Promise<void>;
   refresh(): Promise<void>;
+  loadPlan?(): Promise<void>;
   login(email: string, password: string): Promise<void>;
   logout(): Promise<void>;
   setMessage(message: string): void;

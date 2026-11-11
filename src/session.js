@@ -99,7 +99,7 @@ export function saveExternalCompletion(state, date, occurrenceKey, recordingSour
   else session.external_completions.push(completion);
   if (!state.sessions.includes(session)) state.sessions.push(session);
   if (session.status !== "in_progress") session.status = completionFraction(session) === 1 ? "completed" : "partial";
-  session.updated_at = now.toISOString();
+  markSessionChanged(session, now);
   state.training_version += 1;
   return { session, replay: false };
 }
@@ -118,7 +118,7 @@ export function undoExternalCompletion(state, date, occurrenceKey, now) {
   else {
     const hasOpenInterval = session.training_intervals.some(/** @param {any} interval */ (interval) => interval.ended_at === null);
     session.status = hasOpenInterval ? "in_progress" : completionFraction(session) === 1 ? "completed" : "partial";
-    session.updated_at = now.toISOString();
+    markSessionChanged(session, now);
   }
   state.training_version += 1;
   return { session: removable ? null : session, replay: false };
@@ -239,7 +239,7 @@ export function replaceRecord(state, session, record, now, mode = "replace") {
   session.exercise_feedback = deepClone(record.exercise_feedback);
   session.skip_reason = session.status === "skipped" ? record.skip_reason : null;
   if (session.status !== "in_progress" && session.status !== "skipped") session.status = completionFraction(session) === 1 ? "completed" : "partial";
-  session.updated_at = now.toISOString();
+  markSessionChanged(session, now);
   state.training_version += 1;
   return { session };
 }
@@ -249,7 +249,11 @@ export function endSession(state, sessionKey, payload, now) {
   const session = state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey);
   if (!session) return { error: { code: "not_found", message: "Session not found" } };
   if (session.status !== "in_progress") return { error: { code: "session_state_conflict", message: "Only an in-progress Session can end" } };
-  if (!payload || typeof payload !== "object" || Object.keys(payload).some((key) => !["record", "ended_at"].includes(key))) return { error: { code: "invalid_request", message: "End requires record and ended_at" } };
+  if (!payload || typeof payload !== "object" || Object.keys(payload).some((key) => !["record", "ended_at", "base_updated_at"].includes(key))) return { error: { code: "invalid_request", message: "End requires record and ended_at" } };
+  if (Object.hasOwn(payload, "base_updated_at")) {
+    if (!isValidUtcInstant(payload.base_updated_at)) return { error: { code: "invalid_request", message: "base_updated_at must be an RFC 3339 UTC instant" } };
+    if (session.updated_at !== payload.base_updated_at) return { error: { code: "session_state_conflict", message: "The Session changed before End" } };
+  }
   if (!isValidUtcInstant(payload.ended_at)) return { error: { code: "invalid_request", message: "ended_at must be an RFC 3339 UTC instant" } };
   const difference = Date.parse(payload.ended_at) - now.getTime();
   if (difference > 5 * 60 * 1000) return { error: { code: "invalid_request", message: "ended_at cannot be more than five minutes in the future" } };
@@ -273,7 +277,7 @@ export function endSession(state, sessionKey, payload, now) {
   session.exercise_feedback = deepClone(proposed.exercise_feedback);
   session.skip_reason = null;
   session.status = completionFraction(session) === 1 ? "completed" : "partial";
-  session.updated_at = now.toISOString();
+  markSessionChanged(session, now);
   state.training_version += 1;
   return { session };
 }
@@ -292,20 +296,20 @@ export function pauseSession(state, sessionKey, now, closeAt = null) {
   const endAt = closeAt === null ? Math.max(startedAt + 1, requested) : requested;
   if (endAt <= startedAt) return { error: { code: "invalid_request", message: "close_at must be after the open interval start" } };
   open.ended_at = new Date(endAt).toISOString();
-  session.updated_at = now.toISOString();
+  markSessionChanged(session, now);
   state.training_version += 1;
   return { session };
 }
 
-/** @param {any} state @param {string} sessionKey @param {Date} now */
-export function resumeSession(state, sessionKey, now) {
+/** @param {any} state @param {string} sessionKey @param {Date} now @param {string} [startedAt] */
+export function resumeSession(state, sessionKey, now, startedAt = now.toISOString()) {
   const session = state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey);
   if (!session) return { error: { code: "not_found", message: "Session not found" } };
   if (session.status !== "in_progress") return { error: { code: "session_state_conflict", message: "Only an in-progress Session can resume" } };
   const open = session.training_intervals.find(/** @param {any} interval */ (interval) => interval.ended_at === null);
   if (open) return { session, replay: true };
-  session.training_intervals.push({ interval_key: opaqueKey("ti"), started_at: now.toISOString(), ended_at: null });
-  session.updated_at = now.toISOString();
+  session.training_intervals.push({ interval_key: opaqueKey("ti"), started_at: startedAt, ended_at: null });
+  markSessionChanged(session, now);
   state.training_version += 1;
   return { session };
 }
@@ -322,7 +326,7 @@ export function continueOrRestart(state, sessionKey, now, command) {
   session.skip_reason = null;
   session.session_rpe = null;
   session.training_intervals.push({ interval_key: opaqueKey("ti"), started_at: now.toISOString(), ended_at: null });
-  session.updated_at = now.toISOString();
+  markSessionChanged(session, now);
   state.training_version += 1;
   return { session };
 }
@@ -343,7 +347,7 @@ export function normalizeExpiredSessions(state, now) {
     const endAt = expiredSessionEndAt(session, openIntervals, now);
     for (const interval of openIntervals) interval.ended_at = endAt;
     session.status = "partial";
-    session.updated_at = now.toISOString();
+    markSessionChanged(session, now);
     normalized.push(session);
   }
   if (normalized.length) state.training_version += normalized.length;
@@ -384,6 +388,88 @@ export function sessionDetail(session) {
 /** @param {any} state @param {string} sessionKey */
 export function findSession(state, sessionKey) { return state.sessions.find(/** @param {any} item */ (item) => item.session_key === sessionKey) ?? null; }
 
+/** @param {any} session @param {Date} now */
+function markSessionChanged(session, now) {
+  const previous = Date.parse(session.updated_at);
+  session.updated_at = new Date(Number.isFinite(previous) ? Math.max(previous + 1, now.getTime()) : now.getTime()).toISOString();
+}
+
+/** @param {any} state @param {string} sessionKey @param {unknown} body @param {Date} now */
+export function syncExecution(state, sessionKey, body, now) {
+  const session = findSession(state, sessionKey);
+  if (!session) return { error: { code: "not_found", message: "Session not found" } };
+  const invalid = (/** @type {string} */ message) => ({ error: { code: "invalid_request", message } });
+  if (!isRecord(body) || Object.keys(body).length !== 2 || !isValidUtcInstant(body.base_updated_at)
+    || !Array.isArray(body.actions) || body.actions.length < 1 || body.actions.length > 32) {
+    return invalid("Sync requires base_updated_at and 1–32 actions");
+  }
+  if (session.status !== "in_progress" || session.updated_at !== body.base_updated_at) {
+    return { error: { code: "session_state_conflict", message: "The Session has changed since these actions were recorded" } };
+  }
+
+  const draft = deepClone(session);
+  const working = { sessions: [draft], training_version: state.training_version };
+  for (const action of body.actions) {
+    if (!isRecord(action)) return invalid("Each action must be an object");
+    if (action.type === "pause" || action.type === "resume") {
+      if (Object.keys(action).length !== 2 || !isValidUtcInstant(action.at) || Date.parse(action.at) > now.getTime()) {
+        return invalid("Timer action requires a past or current RFC 3339 UTC instant");
+      }
+      const open = draft.training_intervals.at(-1);
+      if (action.type === "resume") {
+        if (open?.ended_at == null || Date.parse(action.at) < Date.parse(open.ended_at)) {
+          return invalid("Resume must follow the previous pause");
+        }
+        resumeSession(working, sessionKey, now, action.at);
+      } else {
+        if (!open || open.ended_at !== null || draft.completion_results.some((/** @type {any} */ item) => Date.parse(item.completed_at) > Date.parse(action.at))) {
+          return invalid("Pause must close an active interval after its recorded results");
+        }
+        const result = pauseSession(working, sessionKey, now, action.at);
+        if (result.error) return result;
+      }
+    } else if (action.type === "record") {
+      if (Object.keys(action).length !== 3 || !Array.isArray(action.results) || action.results.length < 1 || action.results.length > 2
+        || !Array.isArray(action.exercise_feedback)
+        || action.results.some((/** @type {any} */ result) => !isRecord(result) || typeof result.completion_item_key !== "string")
+        || new Set(action.results.map((/** @type {any} */ result) => result.completion_item_key)).size !== action.results.length) {
+        return invalid("Record requires one or two distinct results and exercise_feedback");
+      }
+      const result = replaceRecord(working, draft, executionRecord(draft, action), now);
+      if (result.error) return result;
+    } else {
+      return invalid("Unknown execution action");
+    }
+  }
+  Object.assign(session, draft);
+  state.training_version = working.training_version;
+  return { session };
+}
+
+/** @param {any} session @param {Record<string, any>} action */
+function executionRecord(session, action) {
+  const keys = new Set(action.results.map((/** @type {any} */ result) => result.completion_item_key));
+  const kept = session.completion_results.filter((/** @type {any} */ result) => !keys.has(result.completion_item_key));
+  const common = {
+    training_intervals: session.training_intervals,
+    session_rpe: null,
+    note: session.note,
+    exercise_feedback: action.exercise_feedback,
+    skip_reason: null,
+  };
+  if (!isCanonicalSession(session)) {
+    return { ...common, record_schema_version: 1, completion_results: [...kept, ...action.results] };
+  }
+  const results = kept.map((/** @type {any} */ item) => {
+    const resistance = item.resistance_mode === "external_load"
+      ? { mode: "external_load", value: item.resistance_kg, unit: "kg" }
+      : item.resistance_mode === "bodyweight" ? { mode: "bodyweight" } : null;
+    const { completion_item_key, status, actual, rir, note, completed_at } = item;
+    return { completion_item_key, status, actual, resistance, rir, note, completed_at };
+  });
+  return { ...common, record_schema_version: 2, set_results: [...results, ...action.results] };
+}
+
 /** @param {any} session */
 function isCanonicalSession(session) {
   return session?.snapshot?.schema_version === 2 || session?.snapshot?.blocks?.some(/** @param {any} block */ (block) => block.exercises?.some(/** @param {any} exercise */ (exercise) => exercise.exercise_id));
@@ -410,7 +496,7 @@ function replaceCanonicalRecord(state, session, record, now, mode) {
   session.exercise_feedback = deepClone(record.exercise_feedback);
   session.skip_reason = targetMode === "skipped" ? record.skip_reason : null;
   if (targetMode === "terminal") session.status = completionFraction(session) === 1 ? "completed" : "partial";
-  session.updated_at = now.toISOString();
+  markSessionChanged(session, now);
   state.training_version += 1;
   return { session };
 }

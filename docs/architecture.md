@@ -12,6 +12,18 @@ Mutations go through authenticated application or Agent interfaces and update
 their canonical records atomically. Public schemas and contracts describe the
 portable boundary; D1 row shapes remain an implementation detail.
 
+The browser opens Today with a single Today read. Plan and progress data load
+on their own surfaces. After canonical D1 cutover, Today and individual Session
+routes select the date or Session rows they need. The Plan route reads the
+relevant revisions without loading Session history. Scoped writes share the
+same Athlete revision guard and D1 transaction as general writes.
+
+Browser login uses signed, secure HttpOnly cookies. A successful Today read can
+extend the 30-day inactivity window after seven days have elapsed since the
+previous issuance. The absolute limit is 90 days from authentication. Renewal
+cookies bind to the original login so a late response cannot replace the
+identity established by another login.
+
 Private mutations reuse the Athlete state already read for authentication in
 that request, including its captured `state_revision`. The conditional write
 still rejects a concurrent winner. Core canonical Plan and Session tables are

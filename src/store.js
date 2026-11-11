@@ -1,7 +1,7 @@
 // @ts-check
 
-import { deepClone, isValidUtcInstant, normalizeEmail, opaqueKey } from "./util.js";
-import { assembleCanonicalState } from "./canonical-assembler.js";
+import { addDays, deepClone, isValidUtcInstant, localDate, normalizeEmail, opaqueKey } from "./util.js";
+import { assembleCanonicalPlan, assembleCanonicalSession, assembleCanonicalState } from "./canonical-assembler.js";
 
 /** @typedef {Record<string, any>} StoreState */
 /** @typedef {{ email: string, displayName: string, timezone: string }} AthleteConfig */
@@ -102,6 +102,107 @@ export class D1Store {
     return hydrated;
   }
 
+  /** @param {string} email */
+  async getScopedBase(email) {
+    try {
+      return await this.db.prepare(`SELECT a.state_json, a.state_revision, a.athlete_key, c.canonical_version
+        FROM athlete_state AS a LEFT JOIN workout_storage_cutover AS c ON c.athlete_key = a.athlete_key
+        WHERE a.email = ?1`).bind(normalizeEmail(email)).first();
+    } catch (error) {
+      if (!/no such table|no such column|does not exist/i.test(String((/** @type {{ message?: unknown }} */ (error))?.message))) throw error;
+      return { canonical_version: null };
+    }
+  }
+
+  /** @param {string} email @param {string} sessionKey */
+  async getForSession(email, sessionKey) {
+    const row = await this.getScopedBase(email);
+    if (!row) return null;
+    if (!row.canonical_version) return this.getByEmail(email);
+    const state = JSON.parse(row.state_json);
+    state.sessions = await this.readScopedSessions(row.athlete_key, "session_key", sessionKey);
+    Object.defineProperties(state, {
+      __canonicalCutover: { value: true },
+      __d1StateRevision: { value: Number(row.state_revision), writable: true, configurable: true },
+      __d1ScopedSession: { value: true },
+    });
+    attachPersistenceBaseline(state, true);
+    return state;
+  }
+
+  /** @param {string} email @param {Date} now */
+  async getForToday(email, now) {
+    const row = await this.getScopedBase(email);
+    if (!row) return null;
+    if (!row.canonical_version) return this.getByEmail(email);
+    const state = JSON.parse(row.state_json);
+    const date = localDate(now, state.timezone);
+    const planQueries = [
+      "SELECT * FROM plans WHERE athlete_key = ?1",
+      "SELECT * FROM planned_days WHERE athlete_key = ?1 AND planned_date = ?2",
+      "SELECT pr.* FROM plan_revisions AS pr JOIN planned_days AS d ON d.prescription_revision_key = pr.revision_key WHERE d.athlete_key = ?1 AND d.planned_date = ?2",
+      "SELECT p.* FROM plan_slots AS p JOIN planned_days AS d ON d.prescription_revision_key = p.revision_key AND d.prescription_weekday = p.weekday WHERE d.athlete_key = ?1 AND d.planned_date = ?2",
+      "SELECT p.* FROM plan_exercises AS p JOIN planned_days AS d ON d.prescription_revision_key = p.revision_key AND d.prescription_weekday = p.weekday WHERE d.athlete_key = ?1 AND d.planned_date = ?2",
+      "SELECT p.* FROM plan_sets AS p JOIN plan_exercises AS e ON e.revision_key = p.revision_key AND e.occurrence_key = p.occurrence_key JOIN planned_days AS d ON d.prescription_revision_key = e.revision_key AND d.prescription_weekday = e.weekday WHERE d.athlete_key = ?1 AND d.planned_date = ?2",
+    ];
+    const [plans, plannedDays, revisions, slots, exercises, sets, ...sessionRows] =
+      await this.scopedBatch(planQueries, row.athlete_key, date, "scheduled_date");
+    return assembleCanonicalState(state, {
+      plan: plans[0], plannedDays, revisions, slots, exercises, sets,
+      ...sessionRowGroups(sessionRows),
+    }).state;
+  }
+
+  /** @param {string} email @param {Date} now */
+  async getForPlan(email, now) {
+    const row = await this.getScopedBase(email);
+    if (!row) return null;
+    if (!row.canonical_version) return this.getByEmail(email);
+    const state = JSON.parse(row.state_json);
+    const earliest = addDays(localDate(now, state.timezone), -6);
+    const queries = [
+      `SELECT * FROM plan_revisions WHERE athlete_key = ?1 AND
+        (effective_from >= ?2 OR effective_from = (SELECT MIN(effective_from) FROM plan_revisions WHERE athlete_key = ?1))`,
+      ...["plan_slots", "plan_exercises", "plan_sets"].map((table) =>
+        `SELECT p.* FROM ${table} AS p JOIN plan_revisions AS r ON r.revision_key = p.revision_key
+          WHERE r.athlete_key = ?1 AND r.effective_from >= ?2`),
+    ];
+    const groups = await this.db.batch(queries.map((sql) => this.db.prepare(sql).bind(row.athlete_key, earliest)));
+    const [revisions, slots, exercises, sets] = groups.map((/** @type {any} */ group) => group.results ?? []);
+    return { ...state, plan_revisions: assembleCanonicalPlan({ revisions, slots, exercises, sets }).revisions };
+  }
+
+  /** @param {string} athleteKey @param {"scheduled_date"|"session_key"} column @param {string} value */
+  async readScopedSessions(athleteKey, column, value) {
+    const groups = sessionRowGroups(await this.scopedBatch([], athleteKey, value, column));
+    return groups.sessions.map((/** @type {any} */ session) => assembleCanonicalSession({
+      session,
+      exercises: groups.sessionExercises,
+      completionItems: groups.completionItems,
+      results: groups.results,
+      intervals: groups.intervals,
+      notes: groups.notes.find((/** @type {any} */ note) => note.session_key === session.session_key),
+      feedback: groups.feedback,
+      externalCompletions: groups.externalCompletions,
+    }));
+  }
+
+  /** @param {string[]} prefix @param {string} athleteKey @param {string} value @param {"scheduled_date"|"session_key"} column */
+  async scopedBatch(prefix, athleteKey, value, column) {
+    const where = `WHERE s.athlete_key = ?1 AND s.${column} = ?2`;
+    const queries = [
+      ...prefix,
+      `SELECT s.* FROM sessions AS s ${where}`,
+      ...["session_exercises", "completion_items", "set_results", "session_intervals", "session_notes", "exercise_feedback", "session_external_completions"]
+        .map((table) => `SELECT p.* FROM ${table} AS p JOIN sessions AS s ON p.session_key = s.session_key ${where}`),
+    ];
+    const groups = await this.db.batch(queries.map((sql, index) => {
+      const statement = this.db.prepare(sql);
+      return prefix.length && index === 0 ? statement.bind(athleteKey) : statement.bind(athleteKey, value);
+    }));
+    return groups.map((/** @type {any} */ group) => group.results ?? []);
+  }
+
   /** @param {StoreState} state @param {PersistenceOptions} [options] */
   async save(state, options = {}) {
     await this.saveMany([state], new Map(), options);
@@ -113,7 +214,7 @@ export class D1Store {
     assertImmutablePlanRevisions(states[0]);
     assertImmutablePlanChanges(states[0]);
     const now = persistenceInstant(options.now);
-    const cutovers = new Map(/** @type {Array<[string, any]>} */ (await Promise.all(states.map(async (state) => [state.athlete_key, await this.readCutover(state.athlete_key)]))));
+    const cutovers = new Map(/** @type {Array<[string, any]>} */ (await Promise.all(states.map(async (state) => [state.athlete_key, state.__d1ScopedSession || await this.readCutover(state.athlete_key)]))));
     const statements = [];
     const stateStatementIndexes = [];
     for (const state of states) {
@@ -129,9 +230,11 @@ export class D1Store {
         statements.push(this.db.prepare("INSERT INTO athlete_state (athlete_key, email, state_json, updated_at, state_revision, mutation_owner) VALUES (?1, ?2, ?3, ?4, 0, ?5)").bind(state.athlete_key, state.email, JSON.stringify(persistedState), now, mutationOwner));
       }
       if (!canonicalCutover) appendLegacyIndexStatements(this.db, statements, state, mutationOwner);
-      appendCapabilityLookupStatements(this.db, statements, state, mutationOwner, now);
-      appendCanonicalPlanDeltaStatements(this.db, statements, state, mutationOwner);
-      appendPlannedDayDeltaStatements(this.db, statements, state, mutationOwner);
+      if (!state.__d1ScopedSession) {
+        appendCapabilityLookupStatements(this.db, statements, state, mutationOwner, now);
+        appendCanonicalPlanDeltaStatements(this.db, statements, state, mutationOwner);
+        appendPlannedDayDeltaStatements(this.db, statements, state, mutationOwner);
+      }
       appendCanonicalSessionDeltaStatements(this.db, statements, state, mutationOwner);
     }
     const results = await this.db.batch(statements);
@@ -230,6 +333,11 @@ export class D1Store {
     await working.flush();
     return result;
   }
+}
+
+/** @param {any[][]} rows */
+function sessionRowGroups([sessions, sessionExercises, completionItems, results, intervals, notes, feedback, externalCompletions]) {
+  return { sessions, sessionExercises, completionItems, results, intervals, notes, feedback, externalCompletions };
 }
 
 /** @param {StoreState} state @returns {any[]} */
@@ -628,6 +736,7 @@ function cloneD1State(state) {
   if (state.__canonicalCutover !== undefined) Object.defineProperty(clone, "__canonicalCutover", { value: state.__canonicalCutover, enumerable: false, writable: true });
   if (state.__canonicalRowsPresent !== undefined) Object.defineProperty(clone, "__canonicalRowsPresent", { value: state.__canonicalRowsPresent, enumerable: false, writable: true });
   if (state.__d1StateRevision !== undefined) Object.defineProperty(clone, "__d1StateRevision", { value: state.__d1StateRevision, enumerable: false, writable: true });
+  if (state.__d1ScopedSession) Object.defineProperty(clone, "__d1ScopedSession", { value: true });
   return clone;
 }
 

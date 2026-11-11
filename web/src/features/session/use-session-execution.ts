@@ -10,6 +10,7 @@ import {
 
 import { errorMessage, WorkoutApiError } from "../../core/api-client";
 import type { JsonRecord, WorkoutAppStore } from "../../core/contracts";
+import { executionOutbox, pendingExecutionSession, projectExecutionAction, type ExecutionAction } from "./execution-outbox";
 import {
   createWorkoutTimeline,
   type AudioOutput,
@@ -35,7 +36,6 @@ import {
   legacyResultResistanceInput,
   resistanceDraftValue,
   resultForDisplay,
-  resultResistanceInput,
 } from "./session-model";
 import type {
   CanonicalSetResultInput,
@@ -175,6 +175,7 @@ interface RuntimeState {
   correctionSaving: boolean;
   correctionError: string | null;
   navigationPauseError: string | null;
+  executionSync: "idle" | "pending" | "saved" | "error" | "conflict";
   nowMs: number;
 }
 
@@ -192,6 +193,8 @@ export type SessionIntent =
   | { type: "toggle-adjust" }
   | { type: "toggle-progress" }
   | { type: "toggle-timer" }
+  | { type: "retry-sync" }
+  | { type: "discard-sync" }
   | { type: "toggle-mute" }
   | { type: "minimize" }
   | { type: "skip-rest" }
@@ -469,6 +472,7 @@ export function useSessionExecution(
     correctionSaving: false,
     correctionError: null,
     navigationPauseError: null,
+    executionSync: "idle",
     nowMs: countdownNow(),
   });
 
@@ -556,6 +560,7 @@ export function useSessionExecution(
     const timed = timedTarget.value !== null;
     return focusedDone.value
       || state.timerPaused
+      || state.executionSync === "conflict"
       || (state.mutation.pending && state.mutation.action === "complete")
       || (timed && timedForFocus.value.phase !== "complete");
   });
@@ -664,7 +669,106 @@ export function useSessionExecution(
       completionAttempt = null;
     }
     app.state.session = detail as unknown as JsonRecord;
-    if (app.state.today) app.state.today.session = detail as unknown as JsonRecord;
+    if (app.state.today) {
+      app.state.today.session = detail;
+      if (detail.scheduled_date === app.state.today.date) app.state.today.session_detail = detail;
+    }
+  }
+
+  let syncTimer: ReturnType<typeof setTimeout> | null = null;
+  let syncTask: Promise<void> | null = null;
+
+  function outboxAthlete(): string | null {
+    const today = app.state.today;
+    return today?.execution_sync_version === 1 && typeof today.athlete_key === "string" ? today.athlete_key : null;
+  }
+
+  function outboxFor(detail: SessionDetail | null) {
+    const athlete = outboxAthlete();
+    if (!athlete || !detail?.updated_at) return null;
+    try {
+      return executionOutbox(app.api, athlete, detail.session_key);
+    } catch {
+      // Browsers may block durable storage. Keep the synchronous API usable.
+      return null;
+    }
+  }
+
+  function queueExecution(detail: SessionDetail, action: ExecutionAction): SessionDetail {
+    const outbox = outboxFor(detail);
+    if (!outbox || !detail.updated_at) throw new Error("本机训练存储暂时不可用");
+    outbox.enqueue(detail.updated_at, action);
+    state.executionSync = "pending";
+    scheduleExecutionSync();
+    return projectExecutionAction(detail, action);
+  }
+
+  function scheduleExecutionSync(): void {
+    if (syncTimer !== null) return;
+    syncTimer = setTimeout(() => {
+      syncTimer = null;
+      void flushExecution().catch(() => {});
+    }, 350);
+  }
+
+  function flushExecution(keepalive = false): Promise<void> {
+    if (syncTimer !== null) clearTimeout(syncTimer);
+    syncTimer = null;
+    if (syncTask) return syncTask;
+    const detail = state.detail;
+    const outbox = outboxFor(detail);
+    if (!outbox || !detail) return Promise.resolve();
+    const epoch = app.state.authEpoch;
+    const current = () => !disposed && epoch === app.state.authEpoch && state.detail?.session_key === detail.session_key;
+    const task = Promise.resolve().then(async () => {
+      while (outbox.read()?.actions.length) {
+        if (epoch !== app.state.authEpoch) throw new Error("登录已变化，训练草稿已保留");
+        if (current()) state.executionSync = "pending";
+        const confirmed = await outbox.sync(keepalive);
+        if (!confirmed) break;
+        const rest = outbox.read();
+        if (rest && rest.base !== confirmed.updated_at) {
+          throw new WorkoutApiError("这次训练已在另一处更新", 409, { error: { code: "session_state_conflict" } });
+        }
+        if (current()) {
+          const projected = (rest?.actions ?? []).reduce(projectExecutionAction, confirmed as SessionDetail);
+          syncDetail(projected);
+          if (projected.status !== "in_progress") {
+            stopSessionClock();
+            releaseWakeLock();
+            state.mode = "overview";
+            state.endSheet = false;
+          }
+        }
+      }
+      if (current() && state.executionSync !== "idle" && !outbox.read()?.end) state.executionSync = "saved";
+    }).catch((error) => {
+      if (current()) state.executionSync = error instanceof WorkoutApiError && error.status === 409 ? "conflict" : "error";
+      throw error;
+    }).finally(() => {
+      if (syncTask === task) syncTask = null;
+    });
+    syncTask = task;
+    return task;
+  }
+
+  function retryExecutionSync(): void {
+    if (state.executionSync === "error" || state.executionSync === "pending") void flushExecution().catch(() => {});
+  }
+
+  async function discardExecutionSync(): Promise<void> {
+    const detail = state.detail;
+    const outbox = outboxFor(detail);
+    if (!detail || !outbox || syncTask || state.endSaving || !window.confirm("清除本机尚未同步的训练操作，并读取云端记录？")) return;
+    const latest = await app.api.request<SessionDetail>(`/api/private/sessions/${detail.session_key}`);
+    outbox.discard();
+    retryableEndRequest = null;
+    state.endReconciliationRequired = false;
+    state.executionSync = "idle";
+    showSession(latest, null, { forcePaused: true });
+    if (latest.status === "in_progress" && hasOpenTrainingInterval(latest)) {
+      state.mode = "overview";
+    }
   }
 
   function beginMutation(action: MutationAction): boolean {
@@ -1117,6 +1221,7 @@ export function useSessionExecution(
     reason: PauseReason,
     boundaryOverride: number | null = null,
   ): Promise<SessionDetail | null> {
+    if (outboxFor(state.detail)) return pauseQueuedExecution(reason, boundaryOverride);
     const interruptedAt = boundaryOverride ?? clockNow();
     const urgentLifecycle = reason === "pagehide" || disposed;
     const detailAtInterruption = state.detail;
@@ -1241,6 +1346,30 @@ export function useSessionExecution(
     });
   }
 
+  async function pauseQueuedExecution(reason: PauseReason, boundary: number | null): Promise<SessionDetail | null> {
+    const detail = state.detail;
+    if (!detail || detail.status !== "in_progress") return detail;
+    const lifecycle = reason === "visibility" || reason === "pagehide";
+    if (hasOpenTrainingInterval(detail)) {
+      resumeOnForeground = lifecycle && isExecutionSurface() && !state.timerPaused;
+      const open = detail.training_intervals.at(-1)!;
+      const lastResult = Math.max(0, ...detail.completion_results.map((result) => Date.parse(result.completed_at ?? "") || 0));
+      const at = Math.max(boundary ?? clockNow(), Date.parse(open.started_at) + 1, lastResult);
+      syncDetail(queueExecution(detail, { type: "pause", at: new Date(at).toISOString() }));
+      pauseExecutionTimers();
+      state.timerPauseStartedAt = at;
+    } else if (!lifecycle) {
+      resumeOnForeground = false;
+    }
+    if (!state.timerPaused || !lifecycle || resumeOnForeground) state.timerPauseReason = reason;
+    state.timerPaused = true;
+    releaseWakeLock();
+    stopSessionClock();
+    if (reason === "end-form") await flushExecution();
+    else if (reason === "pagehide" || reason === "navigation") void flushExecution(true).catch(() => {});
+    return state.detail;
+  }
+
   async function ensurePaused(reason: PauseReason = "navigation"): Promise<boolean> {
     state.navigationPauseError = null;
     try {
@@ -1347,6 +1476,7 @@ export function useSessionExecution(
       }
       return;
     }
+    retryExecutionSync();
     foregroundReturnGeneration += 1;
     if (!executionFocused.value || state.detail?.status !== "in_progress") return;
     if (state.timerPaused) {
@@ -1377,7 +1507,7 @@ export function useSessionExecution(
     pagehideBoundaryMs = pagehideBoundaryMs === null
       ? hiddenBoundary
       : Math.min(pagehideBoundaryMs, hiddenBoundary);
-    bfcacheRecoveryRequired = true;
+    bfcacheRecoveryRequired = !outboxFor(state.detail);
     timeline.cancel();
     releaseWakeLock();
     stopSessionClock();
@@ -1463,11 +1593,17 @@ export function useSessionExecution(
     if ((event as PageTransitionEvent).persisted !== true) return;
     foregroundReturnGeneration += 1;
     if (resumeOnForeground) void resumeAfterForeground();
+    else if (outboxFor(state.detail)) retryExecutionSync();
     else void reconcileAfterBfcacheRestore();
   }
 
   async function loadDetail(explicit: boolean): Promise<SessionDetail | null> {
-    const sessionKey = summary.value?.session_key;
+    const athlete = outboxAthlete();
+    let recoveredKey: string | null = null;
+    if (athlete) {
+      try { recoveredKey = pendingExecutionSession(athlete); } catch { /* Storage may be unavailable. */ }
+    }
+    const sessionKey = recoveredKey ?? summary.value?.session_key;
     if (!sessionKey) {
       state.detail = null;
       return null;
@@ -1476,18 +1612,52 @@ export function useSessionExecution(
     const generation = ++detailLoadGeneration;
     state.detailLoading = true;
     try {
-      const detail = await app.api.request<SessionDetail>(`/api/private/sessions/${sessionKey}`);
+      const prefetched = app.state.today?.session_detail;
+      const detail = !explicit && prefetched?.session_key === sessionKey
+        ? prefetched as SessionDetail
+        : await app.api.request<SessionDetail>(`/api/private/sessions/${sessionKey}`);
       if (generation !== detailLoadGeneration || disposed) return null;
       syncDetail(detail);
-      if (detail.status === "in_progress" && hasOpenTrainingInterval(detail) && !isExecutionSurface()) {
-        const recoveredBoundary = recoveredOpenBoundaryMs(detail);
+      const outbox = outboxFor(detail);
+      const recovered = outbox?.read();
+      let recoveredBoundary: number | null = null;
+      if (recovered?.end) {
+        showSession(detail, null, { forcePaused: true, openEnd: detail.status === "in_progress" });
+        const storedRecord = JSON.parse(recovered.end.body).record;
+        state.endRpe = storedRecord.session_rpe ?? state.endRpe;
+        state.endNote = storedRecord.note ?? "";
+        state.endFeedback = Object.fromEntries(storedRecord.exercise_feedback.map((item: ExerciseFeedback) => [item.exercise_occurrence_key, item.text]));
+        retryableEndRequest = {
+          path: `/api/private/sessions/${detail.session_key}/end`,
+          method: "POST", idempotencyKey: recovered.end.key, body: recovered.end.body,
+        };
+        state.endReconciliationRequired = true;
+        await endCurrent();
+        return state.detail;
+      }
+      if (recovered && outbox) {
+        state.executionSync = "pending";
+        for (const action of recovered.actions) {
+          const at = action.type === "record"
+            ? Math.max(...action.results.map((item) => Date.parse(item.completed_at ?? "")))
+            : Date.parse(action.at);
+          if (Number.isFinite(at)) recoveredBoundary = Math.max(recoveredBoundary ?? 0, at);
+        }
+        try { await flushExecution(); } catch {
+          if (!disposed && !app.state.authRequired) showSession(detail, null, { forcePaused: true });
+          return state.detail;
+        }
+      }
+      const current = state.detail ?? detail;
+      if (current.status === "in_progress" && hasOpenTrainingInterval(current) && !isExecutionSurface()) {
+        const boundary = recoveredBoundary ?? recoveredOpenBoundaryMs(current);
         // An open interval recovered outside the execution surface is stale
         // browser ownership (for example after a crash). Never auto-resume it
         // or count the offline gap; close at the last authoritative activity.
         state.timerPaused = true;
         state.timerPauseReason = "navigation";
-        state.timerPauseStartedAt = recoveredBoundary;
-        await pauseForInterruption("navigation");
+        state.timerPauseStartedAt = boundary;
+        await pauseForInterruption("navigation", boundary);
       }
       return state.detail ?? detail;
     } catch (error: unknown) {
@@ -1604,6 +1774,10 @@ export function useSessionExecution(
   async function openSession(): Promise<void> {
     const sessionKey = summary.value?.session_key;
     if (!sessionKey) return app.refresh();
+    if (outboxFor(state.detail) && state.detail?.session_key === sessionKey && !hasOpenTrainingInterval(state.detail)) {
+      showSession(state.detail, null, { active: false });
+      return;
+    }
     let detail = await app.api.request<SessionDetail>(`/api/private/sessions/${sessionKey}`);
     if (detail.status === "in_progress" && hasOpenTrainingInterval(detail)) {
       try {
@@ -1894,6 +2068,26 @@ export function useSessionExecution(
     }
     const detail = state.detail;
     if (!detail || detail.status !== "in_progress" || state.mutation.pending || state.pausePending) return;
+    if (outboxFor(detail)) {
+      if (state.executionSync === "conflict") return;
+      if (!state.timerPaused) {
+        await pauseQueuedExecution("manual", null);
+      } else {
+        const lastEnd = Date.parse(detail.training_intervals.at(-1)?.ended_at ?? "");
+        const at = new Date(Math.max(clockNow(), Number.isFinite(lastEnd) ? lastEnd : 0)).toISOString();
+        syncDetail(queueExecution(detail, { type: "resume", at }));
+        resumeOnForeground = false;
+        state.timerPaused = false;
+        state.timerPauseReason = null;
+        state.timerPauseStartedAt = null;
+        state.wakeLockStatus = "idle";
+        resumeExecutionTimers();
+        syncSessionClock();
+        syncWakeLock();
+        if (!state.muted) void activateQueuedAudio();
+      }
+      return;
+    }
     const retryPause = state.timerPaused && state.mutation.action === "pause" && state.mutation.error;
     const command: "pause" | "resume" = retryPause ? "pause" : state.timerPaused ? "resume" : "pause";
     if (!beginMutation(command)) return;
@@ -2031,6 +2225,16 @@ export function useSessionExecution(
     else if (state.timerPaused) pauseExecutionTimers();
   }
 
+  async function activateQueuedAudio(): Promise<void> {
+    const generation = ++audioActivationGeneration;
+    state.audio = { status: "starting", error: null };
+    const result = await timeline.activateAudio();
+    if (generation !== audioActivationGeneration || !isVisibleSession()) return;
+    const failure = audioFailureFor(result);
+    state.audio = failure ? { status: "error", error: failure } : { status: "ready", error: null };
+    if (!failure) await rescheduleCurrentAudio();
+  }
+
   function exerciseFeedbackPayload(): ExerciseFeedback[] {
     return Object.entries(state.feedbackDraft)
       .map(([exercise_occurrence_key, text]) => ({ exercise_occurrence_key, text: text.trim() }))
@@ -2073,24 +2277,40 @@ export function useSessionExecution(
       inputFingerprint,
       completedAt,
     };
-    const resistance = resultResistanceInput(item, rawWeight);
-    const resultValues = completionKeys(item).map((completionItemKey) => ({
+    const resultValues: CanonicalSetResultInput[] = completionKeys(item).map((completionItemKey) => ({
       completion_item_key: completionItemKey,
       status: "completed",
       actual: { metric: item.target.metric, value: Number(rawValue) },
-      resistance,
+      resistance: canonicalResultResistanceInput(item, rawWeight),
       rir: numberOrNull(rawRir),
       note: null,
       completed_at: completedAt,
     }));
     const legacyResult = {
       completion_item_key: item.completion_item_key,
-      completed: true,
+      completed: true as const,
       actual: { metric: item.target.metric, value: Number(rawValue) },
-      resistance,
+      resistance: detail.snapshot.schema_version === 2 ? null : legacyResultResistanceInput(item, rawWeight),
       rir: numberOrNull(rawRir),
       completed_at: completedAt,
     };
+    if (outboxFor(detail)) {
+      const actual = Number(rawValue);
+      const rir = rawRir.trim() === "" ? null : Number(rawRir);
+      if (!Number.isSafeInteger(actual) || actual <= 0) throw new Error("实际次数或时长须为正整数");
+      if (rir !== null && (!Number.isInteger(rir) || rir < 0 || rir > 10)) throw new Error("RIR 须为 0 到 10 的整数");
+      if (rawWeight?.trim() && (!Number.isFinite(Number(rawWeight)) || Number(rawWeight) < 0)) throw new Error("实际重量须为非负数");
+      const projected = queueExecution(detail, {
+        type: "record",
+        results: detail.snapshot.schema_version === 2 ? resultValues : [legacyResult],
+        exercise_feedback: exerciseFeedbackPayload(),
+      });
+      clearSubmittedExecutionDrafts(detail.session_key, keys, Object.keys(state.feedbackDraft));
+      completionAttempt = null;
+      const audioActivation = restSeconds > 0 && !state.muted ? timeline.activateAudio() : Promise.resolve(null);
+      await advanceAfterCompletion(projected, currentIndex, restSeconds, audioActivation);
+      return;
+    }
     if (!beginMutation("complete")) return;
     const mutationGeneration = resumeGeneration;
     let recordRequest: Promise<SessionDetail> | null = null;
@@ -2139,38 +2359,7 @@ export function useSessionExecution(
         await pauseForInterruption(currentInterruptionReason());
         return;
       }
-      const updatedItems = executionCompletionItems(updated);
-      const nextIndex = updatedItems.findIndex((candidate, index) => index > currentIndex && !displayItemDone(updated, candidate));
-      const fallbackIndex = nextIndex >= 0 ? nextIndex : updatedItems.findIndex((candidate) => !displayItemDone(updated, candidate));
-      if (fallbackIndex >= 0 && restSeconds > 0 && !state.muted) {
-        state.audio = { status: "starting", error: null };
-      }
-      showSession(updated, fallbackIndex >= 0 ? fallbackIndex : 0, {
-        restSeconds: fallbackIndex >= 0 ? restSeconds : 0,
-        nextIndex: fallbackIndex >= 0 ? fallbackIndex : null,
-        openEnd: fallbackIndex < 0,
-        active: true,
-      });
-      if (fallbackIndex < 0) {
-        try {
-          await pauseForEnd();
-        } catch (error: unknown) {
-          if (app.state.authRequired || (error instanceof WorkoutApiError && error.status === 401)) throw error;
-          state.endError = errorMessage(error) || "暂停同步失败，请重试";
-        }
-      } else {
-        const completionAudioGeneration = ++audioActivationGeneration;
-        void Promise.resolve(audioActivation).then(async (audioResult) => {
-          if (!audioResult
-            || completionAudioGeneration !== audioActivationGeneration
-            || state.muted
-            || !isVisibleSession()
-            || !restActive.value) return;
-          const failure = audioFailureFor(audioResult);
-          state.audio = failure ? { status: "error", error: failure } : { status: "ready", error: null };
-          if (!failure) await rescheduleCurrentAudio();
-        });
-      }
+      await advanceAfterCompletion(updated, currentIndex, restSeconds, audioActivation);
     } catch (error: unknown) {
       if (state.mutation.action === "pause" && state.mutation.error) return;
       if (!(error instanceof WorkoutApiError)) {
@@ -2209,6 +2398,40 @@ export function useSessionExecution(
     }
   }
 
+  async function advanceAfterCompletion(
+    updated: SessionDetail,
+    currentIndex: number,
+    restSeconds: number,
+    audioActivation: Promise<AudioResultLike | null>,
+  ): Promise<void> {
+    const items = executionCompletionItems(updated);
+    const nextIndex = items.findIndex((item, index) => index > currentIndex && !displayItemDone(updated, item));
+    const next = nextIndex >= 0 ? nextIndex : items.findIndex((item) => !displayItemDone(updated, item));
+    if (next >= 0 && restSeconds > 0 && !state.muted) state.audio = { status: "starting", error: null };
+    showSession(updated, Math.max(0, next), {
+      restSeconds: next >= 0 ? restSeconds : 0,
+      nextIndex: next >= 0 ? next : null,
+      openEnd: next < 0,
+      active: true,
+    });
+    if (next < 0) {
+      try {
+        await pauseForEnd();
+      } catch (error: unknown) {
+        if (app.state.authRequired || (error instanceof WorkoutApiError && error.status === 401)) throw error;
+        state.endError = errorMessage(error) || "暂停同步失败，请重试";
+      }
+    } else {
+      const generation = ++audioActivationGeneration;
+      void audioActivation.then(async (result) => {
+        if (!result || generation !== audioActivationGeneration || state.muted || !isVisibleSession() || !restActive.value) return;
+        const failure = audioFailureFor(result);
+        state.audio = failure ? { status: "error", error: failure } : { status: "ready", error: null };
+        if (!failure) await rescheduleCurrentAudio();
+      });
+    }
+  }
+
   async function minimize(): Promise<void> {
     try {
       await ensurePaused("navigation");
@@ -2229,11 +2452,15 @@ export function useSessionExecution(
     state.timerPaused = false;
     state.timerPauseReason = null;
     state.timerPauseStartedAt = null;
-    await app.refresh();
-    await loadDetail(false);
+    if (!outboxFor(state.detail)) {
+      await app.refresh();
+      await loadDetail(false);
+    }
   }
 
   async function finishEndedSession(ended: SessionDetail): Promise<void> {
+    outboxFor(ended)?.discard();
+    state.executionSync = "idle";
     retryableEndRequest = null;
     state.endReconciliationRequired = false;
     completionAttempt = null;
@@ -2263,9 +2490,10 @@ export function useSessionExecution(
 
   function endWasRejected(error: unknown): boolean {
     if (!(error instanceof WorkoutApiError)) return false;
+    if (error.status === 401) return false;
     // A same-key replay can race the still-committing original request. Its
     // concurrency rejection does not resolve that earlier unknown outcome.
-    if (state.endReconciliationRequired && error.status === 409
+    if ((state.endReconciliationRequired || outboxFor(state.detail)) && error.status === 409
       && error.data.error?.code === "session_state_conflict") return false;
     return error.status < 500 && error.status !== 408;
   }
@@ -2275,10 +2503,11 @@ export function useSessionExecution(
     state.endSaving = true;
     state.endError = null;
     try {
-      await pauseForEnd();
+      const frozen = retryableEndRequest;
+      if (!frozen) await pauseForEnd();
       const detail = state.detail;
       if (!detail) throw new Error("训练详情暂时无法读取，无法结束训练");
-      if (hasOpenTrainingInterval(detail)) throw new Error("训练尚未完成暂停同步，请重试");
+      if (!frozen && hasOpenTrainingInterval(detail)) throw new Error("训练尚未完成暂停同步，请重试");
       const feedback = Object.entries(state.endFeedback)
         .map(([exercise_occurrence_key, text]) => ({ exercise_occurrence_key, text: text.trim() }))
         .filter((item) => item.text);
@@ -2302,8 +2531,9 @@ export function useSessionExecution(
             skip_reason: null,
           };
       const path = `/api/private/sessions/${detail.session_key}/end`;
-      const request: RetryableJsonRequest = retryableEndRequest?.path === path
-        ? retryableEndRequest
+      const outbox = outboxFor(detail);
+      const request: RetryableJsonRequest = frozen?.path === path
+        ? frozen
         : {
             path,
             method: "POST",
@@ -2311,14 +2541,16 @@ export function useSessionExecution(
             // Keep both the authoritative closed intervals and ended_at fixed
             // across transport retries. A new body/key cannot recover an End
             // that the server committed before its response was lost.
-            body: JSON.stringify({ record, ended_at: isoNow() }),
+            body: JSON.stringify({ record, ended_at: isoNow(), ...(outbox && { base_updated_at: detail.updated_at }) }),
           };
+      if (outbox && detail.updated_at) outbox.freezeEnd(detail.updated_at, request.body, request.idempotencyKey);
       retryableEndRequest = request;
       let ended: SessionDetail;
       try {
         try {
           ended = await sendRetryableRequest(request);
         } catch (error: unknown) {
+          if (error instanceof WorkoutApiError && error.status === 401) throw error;
           if (endWasRejected(error)) throw error;
           state.endReconciliationRequired = true;
           // Transport, timeout, and server failures leave the commit outcome
@@ -2328,6 +2560,7 @@ export function useSessionExecution(
         }
       } catch (error: unknown) {
         if (endWasRejected(error) && retryableEndRequest === request) {
+          outbox?.discard();
           retryableEndRequest = null;
           state.endReconciliationRequired = false;
         } else if (!endWasRejected(error)) {
@@ -2340,6 +2573,10 @@ export function useSessionExecution(
       await finishEndedSession(ended);
     } catch (error: unknown) {
       if (app.state.authRequired || (error instanceof WorkoutApiError && error.status === 401)) throw error;
+      if (state.endReconciliationRequired) {
+        if (error instanceof WorkoutApiError && error.status === 409) state.executionSync = "conflict";
+        else if (!state.endSheet) state.executionSync = "error";
+      }
       state.endError = state.endReconciliationRequired
         ? `上次结束提交的结果尚未确认。表单已锁定；请重试确认同一份提交。${errorMessage(error)}`
         : errorMessage(error) || "结束训练失败，请重试";
@@ -2500,7 +2737,7 @@ export function useSessionExecution(
   }
 
   async function dispatch(intent: SessionIntent): Promise<void> {
-    if (state.endReconciliationRequired && intent.type !== "save-end") return;
+    if (state.endReconciliationRequired && !["save-end", "retry-sync", "discard-sync"].includes(intent.type)) return;
     if (state.endSaving && [
       "cancel-end",
       "set-end-rpe",
@@ -2536,6 +2773,11 @@ export function useSessionExecution(
         case "toggle-adjust": state.adjust = !state.adjust; break;
         case "toggle-progress": state.progressOpen = !state.progressOpen; break;
         case "toggle-timer": await toggleTimer(); break;
+        case "retry-sync":
+          if (retryableEndRequest) await endCurrent();
+          else await flushExecution().catch(() => {});
+          break;
+        case "discard-sync": await discardExecutionSync(); break;
         case "toggle-mute": await toggleAudioMuted(); break;
         case "minimize": await minimize(); break;
         case "skip-rest":
@@ -2686,6 +2928,9 @@ export function useSessionExecution(
       draftSessionKey = state.detail?.session_key ?? null;
       completionAttempt = null;
       resumeOnForeground = false;
+      if (syncTimer !== null) clearTimeout(syncTimer);
+      syncTimer = null;
+      state.executionSync = "idle";
       resetExecutionDraftState();
     },
   );
@@ -2719,6 +2964,7 @@ export function useSessionExecution(
     }
     if (typeof window !== "undefined") window.addEventListener("pagehide", handlePageHide);
     if (typeof window !== "undefined") window.addEventListener("pageshow", handlePageShow);
+    if (typeof window !== "undefined") window.addEventListener("online", retryExecutionSync);
     void loadDetail(false);
   });
 
@@ -2733,6 +2979,12 @@ export function useSessionExecution(
     }
     if (typeof window !== "undefined") window.removeEventListener("pagehide", handlePageHide);
     if (typeof window !== "undefined") window.removeEventListener("pageshow", handlePageShow);
+    if (typeof window !== "undefined") window.removeEventListener("online", retryExecutionSync);
+    if (syncTimer !== null) {
+      clearTimeout(syncTimer);
+      syncTimer = null;
+      void flushExecution(true).catch(() => {});
+    }
     timeline.cancel();
     releaseWakeLock();
     stopSessionClock();

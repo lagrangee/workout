@@ -14,14 +14,6 @@ import type {
   WorkoutAppStore,
 } from "./contracts";
 
-function monthStart(date: string): string {
-  return `${date.slice(0, 7)}-01`;
-}
-
-function progressQuery(today: string | null): string {
-  return today ? `from=${monthStart(today)}&to=${today}` : "preset=all";
-}
-
 function isUnauthorized(error: unknown): boolean {
   return error instanceof WorkoutApiError
     ? error.status === 401
@@ -61,6 +53,9 @@ export function createWorkoutAppStore(api: ApiClient = createApiClient()): Worko
   let authMutationTail = Promise.resolve();
   let logoutOperation: Promise<void> | null = null;
   let logoutPending = false;
+  let todayRequest: AbortController | null = null;
+  let planRequest: Promise<void> | null = null;
+  let planGeneration = 0;
   const requestErrorEpochs = new WeakMap<object, number>();
 
   function clearPrivateState(options: {
@@ -86,6 +81,9 @@ export function createWorkoutAppStore(api: ApiClient = createApiClient()): Worko
     resetView?: boolean;
   }): number {
     refreshGeneration += 1;
+    planGeneration += 1;
+    planRequest = null;
+    todayRequest?.abort();
     state.authEpoch += 1;
     clearPrivateState(options);
     return state.authEpoch;
@@ -103,9 +101,12 @@ export function createWorkoutAppStore(api: ApiClient = createApiClient()): Worko
       || pathname === "/api/auth/logout";
   }
 
-  function transitionUnauthorized(requestEpoch: number): void {
+  function transitionUnauthorized(requestEpoch: number, error: unknown): void {
     if (requestEpoch !== state.authEpoch) return;
     openAuthEpoch({ authRequired: true, loading: false });
+    if (error instanceof WorkoutApiError && error.data.error?.code === "session_expired") {
+      state.authMessage = "登录已到期，请重新登录。";
+    }
   }
 
   async function guardedRequest<T>(
@@ -125,7 +126,7 @@ export function createWorkoutAppStore(api: ApiClient = createApiClient()): Worko
         : new Error(errorMessage(error));
       requestErrorEpochs.set(normalizedError, requestEpoch);
       if (isAuthBoundary(path) && isUnauthorized(normalizedError)) {
-        transitionUnauthorized(requestEpoch);
+        transitionUnauthorized(requestEpoch, normalizedError);
       }
       throw normalizedError;
     }
@@ -179,37 +180,58 @@ export function createWorkoutAppStore(api: ApiClient = createApiClient()): Worko
     async refresh() {
       if (logoutPending || state.authRequired) return;
       const generation = ++refreshGeneration;
-      const isInitialLoad = state.today === null || state.plan === null;
+      const isInitialLoad = state.today === null;
       if (isInitialLoad) state.loading = true;
       state.authMessage = "";
+      todayRequest?.abort();
+      const request = new AbortController();
+      todayRequest = request;
 
       try {
-        const [today, plan] = await Promise.all([
-          guardedApi.request<TodayState>("/api/private/today"),
-          guardedApi.request<PlanState>("/api/private/plan"),
-        ]);
+        const today = await guardedApi.request<TodayState>("/api/private/today", { signal: request.signal });
         if (!today) throw new Error("Today response is missing");
         if (generation !== refreshGeneration) return;
 
-        const progress = await guardedApi.request(`/api/private/progress?${progressQuery(today.date)}`);
-        if (generation !== refreshGeneration) return;
-
         state.today = today;
-        state.plan = plan;
-        state.progress = progress;
         state.session = today.session;
         state.authRequired = false;
         state.error = null;
+        if (state.view === "calendar" || state.view === "settings") {
+          planGeneration += 1;
+          planRequest = null;
+          await store.loadPlan?.();
+        } else {
+          planGeneration += 1;
+          planRequest = null;
+          state.plan = null;
+        }
       } catch (error) {
         if (generation !== refreshGeneration) return;
         state.error = errorMessage(error);
       } finally {
+        if (todayRequest === request) todayRequest = null;
         if (generation === refreshGeneration && isInitialLoad) state.loading = false;
       }
     },
 
+    async loadPlan() {
+      if (logoutPending || state.authRequired) return;
+      if (planRequest) return planRequest;
+      const generation = planGeneration;
+      const request = guardedApi.request<PlanState>("/api/private/plan").then((plan) => {
+        if (generation === planGeneration) state.plan = plan;
+      }).catch((error) => {
+        if (generation === planGeneration) store.setError(error);
+      }).finally(() => {
+        if (planRequest === request) planRequest = null;
+      });
+      planRequest = request;
+      return request;
+    },
+
     async login(email: string, password: string) {
       const intent = ++authIntent;
+      todayRequest?.abort();
       const result = await enqueueAuthMutation(async () => {
         state.authMessage = "";
         try {

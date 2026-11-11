@@ -3,7 +3,7 @@
 import { createStore } from "./store.js";
 import { addDays, base64UrlEncode, constantTimeEqual, deepClone, dateSpan, isRecord, isValidLocalDate, normalizeEmail, localDate, isValidTimezone, isValidUtcInstant, sha256Hex, trimString } from "./util.js";
 import { planModel, planUpdateWeekProjection, scheduleModel, todayModel, sessionSummary, validatePlanForState, appendPlanRevision } from "./plan.js";
-import { createSession, replaceRecord, endSession, pauseSession, resumeSession, continueOrRestart, normalizeExpiredSessions, findSession, sessionDetail, saveExternalCompletion, undoExternalCompletion } from "./session.js";
+import { createSession, replaceRecord, endSession, pauseSession, resumeSession, continueOrRestart, normalizeExpiredSessions, findSession, sessionDetail, saveExternalCompletion, undoExternalCompletion, syncExecution } from "./session.js";
 import { progressModel, exerciseDetail } from "./metrics.js";
 import { athleteExport } from "./export.js";
 import { authenticatedCoachUrl, coachManifest, coachReadme, coachResource, createCoachShare, findShareInStore, schemaResource } from "./coach.js";
@@ -19,7 +19,11 @@ import { issueSignedCursor, verifySignedCursor } from "./signed-cursor.js";
 
 const PRIVATE_PREFIX = "/api/private";
 const SESSION_COOKIE = "workout_session";
-const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+const SESSION_RENEWAL_COOKIE = "workout_session_renewal";
+const DAY_SECONDS = 24 * 60 * 60;
+const SESSION_TTL_SECONDS = 30 * DAY_SECONDS;
+const SESSION_MAX_AGE_SECONDS = 90 * DAY_SECONDS;
+const SESSION_RENEW_AFTER_SECONDS = 7 * DAY_SECONDS;
 const DEFAULT_LOGIN_LIMIT = 5;
 const DEFAULT_LOGIN_CLIENT_LIMIT = 20;
 const DEFAULT_LOGIN_WINDOW_SECONDS = 10 * 60;
@@ -71,7 +75,7 @@ async function route(request, env, getStore, ctx, now, loginAttempts) {
   if (url.pathname.startsWith("/coach/") || url.pathname.startsWith("/api/coach/v1/")) return coachRoute(request, env, getStore, url, now);
   if (url.pathname === "/app" && env.ENVIRONMENT === "production") {
     const auth = await authenticate(request, env, now);
-    if (auth.error) return new Response(null, { status: 302, headers: { ...securityHeaders("text/plain; charset=utf-8"), Location: "/" } });
+    if ("error" in auth) return new Response(null, { status: 302, headers: { ...securityHeaders("text/plain; charset=utf-8"), Location: "/" } });
   }
   if (url.pathname === "/" || url.pathname === "/app" || url.pathname.startsWith("/assets/") || url.pathname.endsWith(".js") || url.pathname.endsWith(".css") || url.pathname.endsWith(".png") || url.pathname.endsWith(".wav") || url.pathname.endsWith(".webmanifest")) return staticRoute(request, env);
   if (url.pathname.startsWith(PRIVATE_PREFIX)) return privateRoute(request, env, getStore, url, now);
@@ -243,17 +247,33 @@ async function privateRoute(request, env, getStore, url, now) {
     }
   }
   const auth = await authenticate(request, env, now);
-  if (auth.error) {
-    emitSecurityEvent(env, "authentication_rejected", now, { surface: "application_session", reason: "invalid_session" });
+  if ("error" in auth) {
+    emitSecurityEvent(env, "authentication_rejected", now, { surface: "application_session", reason: auth.reason });
     return jsonError(auth.error.code, auth.error.message, [], auth.error.status);
   }
   const store = await getStore();
-  const state = await store.getByEmail(auth.email);
+  const path = url.pathname;
+  const target = path.match(/^\/api\/private\/sessions\/([^/]+)(?:\/(pause|resume|record|sync|end|continue|restart))?$/);
+  let state;
+  if (target && path !== "/api/private/sessions/normalize-expired" && store.getForSession) {
+    state = await store.getForSession(auth.email, target[1]);
+  } else if (path === "/api/private/today" && request.method === "GET" && store.getForToday) {
+    state = await store.getForToday(auth.email, now);
+  } else if (path === "/api/private/plan" && request.method === "GET" && store.getForPlan) {
+    state = await store.getForPlan(auth.email, now);
+  } else {
+    state = await store.getByEmail(auth.email);
+  }
   if (!state) return jsonError("forbidden", "Identity is not configured", [], 403);
   state.idempotency_records ??= [];
-  const path = url.pathname;
   if (request.method === "GET") {
-    try { return await privateGet(state, path, url, now, env); }
+    try {
+      const response = await privateGet(state, path, url, now, env);
+      if (path === "/api/private/today" && response.ok && auth.renewal) {
+        await setApplicationSession(response, auth.email, now, env.AUTH_SESSION_SECRET, auth.renewal);
+      }
+      return response;
+    }
     catch (error) { if (error instanceof Error && error.message.startsWith("Missing required secret")) return jsonError("service_not_configured", "The requested capability is not configured", [], 503); throw error; }
   }
   if (request.method === "PUT" || request.method === "POST" || request.method === "DELETE") return privateMutation(request, env, store, state, path, url, now);
@@ -279,7 +299,11 @@ async function privateGet(state, path, url, now, env) {
       result.entry.aerobic_summary = compactAerobicSummary(state, result.date, now);
       result.entry.recording_evidence = recordingEvidence(state, result.date, result.entry.recording_intent, now);
     }
-    return jsonResponse(result);
+    const session = result.session && findSession(state, result.session.session_key);
+    return jsonResponse({
+      ...result, athlete_key: state.athlete_key, execution_sync_version: 1,
+      session_detail: session ? sessionDetail(session) : null,
+    });
   }
   if (path === "/api/private/plan") return jsonResponse(planModel(state, now));
   if (path === "/api/private/plan/update-package") {
@@ -375,6 +399,16 @@ async function privateMutation(request, env, store, originalState, path, url, no
     if (request.method === "POST" && path.match(/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/(start|skip)$/)) return startOrSkip(state, path, rawBody, now);
     if (["POST", "PUT", "DELETE"].includes(request.method) && path.match(/^\/api\/private\/scheduled-workouts\/\d{4}-\d{2}-\d{2}\/exercises\/[^/]+\/external-completion$/)) return externalCompletionCommand(state, request.method, path, rawBody, now);
     if (request.method === "POST" && path === "/api/private/sessions/normalize-expired") return normalizeExpired(state, rawBody, now);
+    if (request.method === "POST" && path.match(/^\/api\/private\/sessions\/[^/]+\/sync$/)) {
+      const body = parseJsonBody(rawBody);
+      if (body.error) return body;
+      const result = syncExecution(state, path.split("/")[4] ?? "", body.value, now);
+      if ("error" in result) {
+        const error = result.error;
+        return { body: errorBody(error.code, error.message, "details" in error ? error.details ?? [] : []), status: errorStatus(error.code), persist: false };
+      }
+      return { body: { ...sessionDetail(result.session), synced_updated_at: result.session.updated_at }, status: 200, persist: true };
+    }
     if (request.method === "POST" && path.match(/^\/api\/private\/sessions\/[^/]+\/(end|pause|resume|continue|restart)$/)) return sessionCommand(state, path, rawBody, now);
     if (request.method === "PUT" && path.match(/^\/api\/private\/sessions\/[^/]+\/record$/)) return correctRecord(state, path, rawBody, now);
     if (request.method === "POST" && path === "/api/private/coach-share") return shareCommand(state, env, now, false);
@@ -394,11 +428,17 @@ async function privateMutation(request, env, store, originalState, path, url, no
     const key = request.headers.get("Idempotency-Key");
     if (!key || key.length > 200 || key.trim().length === 0) return jsonError("idempotency_key_required", "Idempotency-Key is required", [], 400);
     const digest = await sha256Hex(rawBody);
+    const executionSync = request.method === "POST" && /^\/api\/private\/sessions\/[^/]+\/sync$/.test(path);
     const existing = findIdempotencyRecord(state, key, request.method, path, now);
     if (existing) {
       if (existing.body_digest !== digest) {
         emitSecurityEvent(env, "mutation_conflict", now, { surface: "private", reason: "idempotency_conflict" });
         return jsonError("idempotency_conflict", "The key was already used with a different request body", [], 409);
+      }
+      if (executionSync) {
+        const session = findSession(state, path.split("/")[4] ?? "");
+        if (!session) return jsonError("not_found", "Session not found", [], 404);
+        return jsonResponse({ ...sessionDetail(session), synced_updated_at: JSON.parse(existing.body).synced_updated_at });
       }
       return new Response(existing.body, { status: existing.status, headers: securityHeaders("application/json; charset=utf-8") });
     }
@@ -406,8 +446,8 @@ async function privateMutation(request, env, store, originalState, path, url, no
     observeMutationResult(env, result, now, "private");
     const response = responseFromResult(result);
     if (!response.ok) return response;
-    if (result.persist !== false) await transactionStore.save(state);
-    await rememberIdempotencyResponse(state, key, request.method, path, digest, response, now);
+    await rememberIdempotencyResponse(state, key, request.method, path, digest,
+      executionSync ? jsonResponse({ synced_updated_at: result.body.synced_updated_at }) : response, now);
     await transactionStore.save(state);
     return response;
   };
@@ -517,7 +557,7 @@ function externalCompletionCommand(state, method, path, rawBody, now) {
 /** @param {any} state @param {string} path @param {string} rawBody @param {Date} now */
 function sessionCommand(state, path, rawBody, now) {
   const sessionKey = path.split("/").at(-2); const command = path.split("/").at(-1); const body = parseJsonBody(rawBody); if (body.error) return body;
-  const allowedKeys = command === "end" ? ["record", "ended_at"] : command === "pause" ? ["close_at"] : [];
+  const allowedKeys = command === "end" ? ["record", "ended_at", "base_updated_at"] : command === "pause" ? ["close_at"] : [];
   if (!isRecord(body.value) || Object.keys(body.value).some((key) => !allowedKeys.includes(key))) return { body: errorBody("invalid_request", `${command} request body is invalid`, []), status: 400, persist: false };
   if (command !== "end" && command !== "pause" && Object.keys(body.value).length !== 0) return { body: errorBody("invalid_request", `${command} accepts an empty object`, []), status: 400, persist: false };
   if (command === "pause" && Object.hasOwn(body.value, "close_at") && (typeof body.value.close_at !== "string" || !isValidUtcInstant(body.value.close_at))) return { body: errorBody("invalid_request", "close_at must be an RFC 3339 UTC instant", []), status: 400, persist: false };
@@ -592,10 +632,31 @@ async function authenticate(request, env, now) {
   if (testEmail && env.LOCAL_AUTH === "true") return { email: normalizeEmail(testEmail) };
   const authorization = request.headers.get("Authorization");
   const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
-  const token = bearer || readCookie(request.headers.get("Cookie"), SESSION_COOKIE);
-  const claims = token ? await verifySessionToken(token, env, now) : null;
-  if (!claims) return { error: { code: "unauthorized", message: "A valid application session is required", status: 401 } };
-  return { email: claims.email };
+  const cookieHeader = request.headers.get("Cookie");
+  const token = bearer || readCookie(cookieHeader, SESSION_COOKIE);
+  const verification = token ? await verifySessionToken(token, env, now) : { reason: "session_cookie_missing" };
+  if ("reason" in verification) {
+    return rejectedSession(verification.reason);
+  }
+  let claims = verification.claims;
+  if (claims.renewal) return rejectedSession("invalid_session");
+  const renewalToken = !bearer && claims.session_id ? readCookie(cookieHeader, SESSION_RENEWAL_COOKIE) : null;
+  if (renewalToken) {
+    const result = await verifySessionToken(renewalToken, env, now);
+    if ("claims" in result && result.claims.renewal && result.claims.email === claims.email
+      && result.claims.session_id === claims.session_id && result.claims.authenticated_at === claims.authenticated_at
+      && result.claims.expires_at > claims.expires_at) claims = result.claims;
+  }
+  const instant = Math.floor(now.getTime() / 1000);
+  if (claims.expires_at <= instant) return rejectedSession("session_expired");
+  const renew = !bearer && (claims.version === 1 || (instant - claims.issued_at >= SESSION_RENEW_AFTER_SECONDS
+    && claims.expires_at < claims.authenticated_at + SESSION_MAX_AGE_SECONDS));
+  return { email: claims.email, renewal: renew ? claims : undefined };
+}
+
+/** @param {string} reason */
+function rejectedSession(reason) {
+  return { reason, error: { code: reason === "session_expired" ? "session_expired" : "unauthorized", message: "A valid application session is required", status: 401 } };
 }
 
 /** @param {Request} request @param {HttpEnv} env @param {Date} now @param {LoginAttempts} loginAttempts */
@@ -631,10 +692,8 @@ async function authLogin(request, env, now, loginAttempts) {
     emitSecurityEvent(env, "authentication_rejected", now, { surface: "login", reason: "invalid_credentials" });
     return jsonError("invalid_credentials", "Email or password is incorrect", [], 401);
   }
-  const issuedAt = Math.floor(now.getTime() / 1000);
-  const token = await createSessionToken(identity.email, issuedAt, env.AUTH_SESSION_SECRET);
   const response = jsonResponse({ authenticated: true });
-  response.headers.set("Set-Cookie", sessionCookie(token, SESSION_TTL_SECONDS));
+  await setApplicationSession(response, identity.email, now, env.AUTH_SESSION_SECRET);
   return response;
 }
 
@@ -647,7 +706,8 @@ function authLogout(request, env, now) {
     return browserGuard.response;
   }
   const response = jsonResponse({ logged_out: true });
-  response.headers.set("Set-Cookie", sessionCookie("", 0));
+  response.headers.append("Set-Cookie", sessionCookie(SESSION_COOKIE, "", 0));
+  response.headers.append("Set-Cookie", sessionCookie(SESSION_RENEWAL_COOKIE, "", 0));
   return response;
 }
 
@@ -664,24 +724,48 @@ function configuredAuthIdentity(email, env) {
   return null;
 }
 
-/** @param {string} email @param {number} issuedAt @param {string} secret */
-async function createSessionToken(email, issuedAt, secret) {
-  const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify({ version: 1, email, issued_at: issuedAt, expires_at: issuedAt + SESSION_TTL_SECONDS })));
-  return `${payload}.${await signHmac(payload, secret)}`;
+/** @param {Response} response @param {string} email @param {Date} now @param {string} secret
+ * @param {{authenticated_at: number, session_id: string|null}} [previous] */
+async function setApplicationSession(response, email, now, secret, previous) {
+  const issuedAt = Math.floor(now.getTime() / 1000);
+  const firstAuth = previous?.authenticated_at ?? issuedAt;
+  const sessionId = previous?.session_id ?? crypto.randomUUID();
+  const renewal = Boolean(previous?.session_id);
+  const absoluteExpiry = firstAuth + SESSION_MAX_AGE_SECONDS;
+  const expiresAt = Math.min(issuedAt + SESSION_TTL_SECONDS, firstAuth + SESSION_MAX_AGE_SECONDS);
+  const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify({
+    version: 2, email, authenticated_at: firstAuth, issued_at: issuedAt, expires_at: expiresAt, session_id: sessionId, renewal,
+  })));
+  const token = `${payload}.${await signHmac(payload, secret)}`;
+  response.headers.set("Set-Cookie", sessionCookie(renewal ? SESSION_RENEWAL_COOKIE : SESSION_COOKIE, token,
+    (renewal ? expiresAt : absoluteExpiry) - issuedAt));
 }
 
 /** @param {string} token @param {HttpEnv} env @param {Date} instant */
 async function verifySessionToken(token, env, instant) {
+  const invalid = { reason: "invalid_session" };
   try {
-    if (!validSessionSecret(env.AUTH_SESSION_SECRET)) return null;
-    const [payload, signature] = token.split("."); if (!payload || !signature) return null;
+    if (!validSessionSecret(env.AUTH_SESSION_SECRET)) return invalid;
+    const [payload, signature, extra] = token.split(".");
+    if (!payload || !signature || extra !== undefined) return invalid;
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-    if (!await crypto.subtle.verify("HMAC", key, decodePart(signature), new TextEncoder().encode(payload))) return null;
+    if (!await crypto.subtle.verify("HMAC", key, decodePart(signature), new TextEncoder().encode(payload))) return invalid;
     const claims = JSON.parse(new TextDecoder().decode(decodePart(payload))); const now = Math.floor(instant.getTime() / 1000);
-    if (claims.version !== 1 || typeof claims.email !== "string" || !Number.isSafeInteger(claims.issued_at) || !Number.isSafeInteger(claims.expires_at) || claims.expires_at <= now || claims.issued_at > now + 60 || claims.expires_at - claims.issued_at !== SESSION_TTL_SECONDS) return null;
+    if (![1, 2].includes(claims.version) || typeof claims.email !== "string"
+      || !Number.isSafeInteger(claims.issued_at) || !Number.isSafeInteger(claims.expires_at) || claims.issued_at > now + 60) return invalid;
+    const authenticatedAt = claims.version === 1 ? claims.issued_at : claims.authenticated_at;
+    if (!Number.isSafeInteger(authenticatedAt) || authenticatedAt > claims.issued_at) return invalid;
+    if (claims.version === 2 && (typeof claims.session_id !== "string" || typeof claims.renewal !== "boolean")) return invalid;
+    const expectedExpiry = claims.version === 1
+      ? claims.issued_at + 7 * DAY_SECONDS
+      : Math.min(claims.issued_at + SESSION_TTL_SECONDS, authenticatedAt + SESSION_MAX_AGE_SECONDS);
+    if (claims.expires_at !== expectedExpiry) return invalid;
     const identity = configuredAuthIdentity(claims.email, env);
-    return identity ? { email: identity.email } : null;
-  } catch { return null; }
+    return identity
+      ? { claims: { email: identity.email, version: claims.version, authenticated_at: authenticatedAt, issued_at: claims.issued_at,
+        expires_at: claims.expires_at, session_id: claims.version === 2 ? claims.session_id : null, renewal: claims.renewal === true } }
+      : invalid;
+  } catch { return invalid; }
 }
 
 /** @param {string} value @param {string} secret */
@@ -847,9 +931,9 @@ function readCookie(header, name) {
   return null;
 }
 
-/** @param {string} token @param {number} maxAge */
-function sessionCookie(token, maxAge) {
-  return `${SESSION_COOKIE}=${token}; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+/** @param {string} name @param {string} token @param {number} maxAge */
+function sessionCookie(name, token, maxAge) {
+  return `${name}=${token}; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }
 /** @param {string} value */
 function decodePart(value) { const normalized = value.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((value.length + 3) % 4); const binary = atob(normalized); return Uint8Array.from(binary, (char) => char.charCodeAt(0)); }

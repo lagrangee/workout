@@ -946,6 +946,10 @@ onMounted(() => {
   void loadCalendarWeek(initialCalendarWeek(), todayDate.value);
 });
 
+watch(firstDate, (date) => {
+  if (componentMounted && date && !from.value) void loadCalendarWeek(initialCalendarWeek(), todayDate.value);
+});
+
 onUnmounted(() => {
   componentMounted = false;
   weekRequestGeneration += 1;

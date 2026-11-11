@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHandler } from "../src/http.js";
 import { appendPlanRevision } from "../src/plan.js";
 import { addDays } from "../src/util.js";
 import { appFixture, createAgentToken, packageText, post, today, workout } from "./helpers.js";
@@ -79,6 +80,53 @@ test("simple auth: logout expires the session cookie", async () => {
   assert.match(logout.headers.get("set-cookie"), /Max-Age=0/);
   const body = await logout.json();
   assert.deepEqual(body, { logged_out: true });
+});
+
+test("browser auth renews active sessions up to day 90 and fences a renewal from another login", async () => {
+  const { store } = appFixture();
+  const env = { ...authEnv(store), SECURITY_EVENT_SINK() {} };
+  const start = Date.parse("2026-08-29T04:00:00Z");
+  let day = 0;
+  const handler = createHandler(env, { clock: () => new Date(start + day * 86_400_000) });
+  const login = async (email, password) => {
+    const response = await handler.fetch(new Request("https://workout.example/api/auth/login", {
+      method: "POST", headers: { Origin: "https://workout.example", "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }));
+    assert.equal(response.status, 200);
+    return response.headers.get("set-cookie").split(";", 1)[0];
+  };
+  const read = (cookie, path = "today") => handler.fetch(new Request(`https://workout.example/api/private/${path}`, {
+    headers: { Cookie: cookie },
+  }));
+  const primary = await login("athlete-a@example.invalid", "a-correct-password");
+  day = 6;
+  assert.equal((await read(primary)).headers.has("set-cookie"), false);
+  day = 29;
+  const first = await read(primary);
+  assert.equal(first.status, 200);
+  const renewal = first.headers.get("set-cookie");
+  assert.match(renewal, /^workout_session_renewal=/);
+  assert.match(renewal, /Max-Age=2592000; Path=\/; HttpOnly; Secure; SameSite=Lax/);
+  day = 30;
+  const expired = await read(primary);
+  assert.equal(expired.status, 401);
+  assert.equal((await expired.json()).error.code, "session_expired");
+  const secondLogin = await login("athlete-b@example.invalid", "b-correct-password");
+  const other = await read(secondLogin + "; " + renewal.split(";", 1)[0], "me");
+  assert.equal((await other.json()).display_name, "Athlete B");
+  let cookie = primary + "; " + renewal.split(";", 1)[0];
+  for (const nextDay of [55, 80]) {
+    day = nextDay;
+    const response = await read(cookie);
+    assert.equal(response.status, 200);
+    cookie = primary + "; " + response.headers.get("set-cookie").split(";", 1)[0];
+    if (day === 80) assert.match(response.headers.get("set-cookie"), /Max-Age=864000;/);
+  }
+  day = 89;
+  assert.equal((await read(cookie)).status, 200);
+  day = 90;
+  assert.equal((await read(cookie)).status, 401);
 });
 
 test("browser auth: cookie mutations require same-origin JSON while Agent Bearer remains independent", async () => {

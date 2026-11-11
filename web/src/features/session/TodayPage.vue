@@ -214,7 +214,15 @@ defineExpose({ ensurePaused, executionFocused });
   <div v-if="view.state.navigationPauseError" class="mutation-feedback is-error" role="alert">
     <strong>{{ view.state.navigationPauseError }}</strong><span>当前页面会保留；确认暂停后再离开。</span>
   </div>
-  <section v-if="!view.entry || view.entry.kind === 'no_plan'" class="today-page">
+  <div v-if="view.state.executionSync === 'pending' || view.state.executionSync === 'saved'" class="mutation-feedback" role="status" data-sync-status>
+    {{ view.state.executionSync === "pending" ? "已记在本机，待同步" : "训练操作已同步" }}
+  </div>
+  <div v-else-if="view.state.executionSync === 'error' || view.state.executionSync === 'conflict'" class="mutation-feedback is-error" role="alert" data-sync-status>
+    <strong>{{ view.state.executionSync === "conflict" ? "云端训练已更新，本机操作仍保留" : "训练操作仍在本机，暂未同步" }}</strong>
+    <button type="button" class="text-button" data-action="retry-sync" @click="send({ type: 'retry-sync' })">重试同步</button>
+    <button type="button" class="text-button" data-action="discard-sync" @click="send({ type: 'discard-sync' })">采用云端记录</button>
+  </div>
+  <section v-if="!view.entry || (view.entry.kind === 'no_plan' && !view.summary)" class="today-page">
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
       <h1>今天没有计划</h1>
@@ -222,7 +230,7 @@ defineExpose({ ensurePaused, executionFocused });
     </div>
   </section>
 
-  <section v-else-if="view.entry.kind === 'rest'" class="today-page">
+  <section v-else-if="view.entry?.kind === 'rest' && !view.summary" class="today-page">
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
       <span class="status-dot rest" />
@@ -232,7 +240,7 @@ defineExpose({ ensurePaused, executionFocused });
     </div>
   </section>
 
-  <section v-else-if="!view.summary && view.entry.recording_intent && !enduranceExercises.length" class="today-page">
+  <section v-else-if="!view.summary && view.entry?.recording_intent && !enduranceExercises.length" class="today-page">
     <div class="today-content">
       <p class="eyebrow">{{ view.today?.date || "今天" }}</p>
       <h1>{{ view.entry.title }}</h1>
@@ -496,8 +504,8 @@ defineExpose({ ensurePaused, executionFocused });
             class="session-timer-toggle"
             data-action="toggle-timer"
             :aria-pressed="view.state.timerPaused"
-            :disabled="timerMutationPending"
-            :aria-disabled="timerMutationPending || undefined"
+            :disabled="timerMutationPending || view.state.executionSync === 'conflict'"
+            :aria-disabled="timerMutationPending || view.state.executionSync === 'conflict' || undefined"
             :aria-busy="timerMutationPending || undefined"
             @click="send({ type: 'toggle-timer' })"
           >{{ timerToggleLabel }}</button>
@@ -732,6 +740,7 @@ defineExpose({ ensurePaused, executionFocused });
             <button class="primary" data-action="save-end" :disabled="view.state.endPausePending || view.state.endSaving" @click="send({ type: 'save-end' })">{{ view.state.endPausePending ? "正在暂停…" : view.state.endSaving ? "正在保存…" : view.state.endReconciliationRequired ? "确认上次提交" : "结束并保存" }}</button>
           </div>
           <div v-if="view.state.endError" class="mutation-feedback is-error" role="alert"><strong>{{ view.state.endError }}</strong><span>{{ view.state.endReconciliationRequired ? "将重放同一提交；不会接受新的表单修改。" : "输入已保留，可以直接重试。" }}</span></div>
+          <button v-if="view.state.executionSync === 'conflict' && view.state.endReconciliationRequired" type="button" class="text-button" @click="send({ type: 'discard-sync' })">采用云端记录</button>
         </section>
       </div>
     </template>

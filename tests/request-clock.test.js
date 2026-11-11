@@ -138,11 +138,11 @@ test("HTTP request clock: signed session expiry changes exactly at the injected 
   }), env);
   const cookie = login.headers.get("set-cookie").split(";", 1)[0];
 
-  instant = new Date(issuedAt.getTime() + 7 * 24 * 60 * 60 * 1000 - 1_000);
+  instant = new Date(issuedAt.getTime() + 30 * 24 * 60 * 60 * 1000 - 1_000);
   const beforeExpiry = await fixture.handler.fetch(new Request("https://workout.example/api/private/me", { headers: { Cookie: cookie } }), env);
   assert.equal(beforeExpiry.status, 200);
 
-  instant = new Date(issuedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+  instant = new Date(issuedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
   const atExpiry = await fixture.handler.fetch(new Request("https://workout.example/api/private/me", { headers: { Cookie: cookie } }), { ...env, SECURITY_EVENT_SINK() {} });
   assert.equal(atExpiry.status, 401);
 });

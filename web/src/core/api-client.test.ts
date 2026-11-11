@@ -362,8 +362,8 @@ describe("store protocol and auth-epoch fences", () => {
       authRequired: false,
       error: null,
       today,
-      plan,
-      progress,
+      plan: null,
+      progress: null,
     });
   });
 
@@ -389,8 +389,8 @@ describe("store protocol and auth-epoch fences", () => {
       authRequired: false,
       error: null,
       today,
-      plan,
-      progress,
+      plan: null,
+      progress: null,
     });
   });
 });
