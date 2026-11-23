@@ -148,9 +148,11 @@ interruption; supported browsers expose an explicit retry without a page reload.
 
 The mounted execution page detects inactivity in the foreground and background.
 Its allowance is the current rest countdown, the next prescribed duration (if
-present), and a two-minute grace period. A started timed action includes its
-remaining preparation and action duration before that grace period. Training
-interactions renew the allowance; a visibility event or frame tick does not.
+present), and a five-minute grace period. A started timed action includes its
+remaining preparation and action duration before that grace period. For
+repetitions-based work without a prescribed duration, the grace period starts
+at the last training interaction or rest deadline. Training interactions renew
+the allowance; a visibility event or frame tick does not.
 Expiry freezes local timers and closes the active Training Interval at the
 absolute cutoff, even when a frozen document detects it later. The Session
 stays `in_progress` and requires explicit resume. Timed actions never record

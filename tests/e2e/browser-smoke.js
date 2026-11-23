@@ -23,6 +23,21 @@ export default async function runBrowserSmoke(page) {
       throw new Error(`[browser-smoke:${name}] the browser action did not complete`);
     }
   };
+  const verifyHeaderAlignment = async () => {
+    const layout = await page.locator(".session-header").evaluate((header) => {
+      const frame = header.getBoundingClientRect();
+      const timer = header.querySelector(".session-heading > strong").getBoundingClientRect();
+      const leading = header.querySelector(".session-header-leading").getBoundingClientRect();
+      const actions = header.querySelector(".session-header-actions").getBoundingClientRect();
+      return {
+        centered: Math.abs(timer.x + timer.width / 2 - frame.x - frame.width / 2) <= 1
+          && Math.abs(timer.y + timer.height / 2 - frame.y - frame.height / 2) <= 1,
+        separated: leading.right <= timer.left && actions.left >= timer.right,
+      };
+    });
+    invariant(layout.centered, "the Session timer is not centered in its header");
+    invariant(layout.separated, "header controls overlap the Session timer");
+  };
   const requestPath = (request) => new URL(request.url()).pathname;
   const syncActions = (request) => {
     if (request.method() !== "POST" || !/^\/api\/private\/sessions\/[^/]+\/sync$/.test(requestPath(request))) return [];
@@ -242,6 +257,11 @@ export default async function runBrowserSmoke(page) {
     invariant((await startResponse).status() === 201, "the server did not create the Session");
     await page.locator('[data-action="minimize"]').waitFor();
 
+    for (const width of [320, 390, 768, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      await verifyHeaderAlignment();
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     const startRequest = mutationFor("start");
     invariant(Boolean(startRequest), "the Session start request was not observed");
     invariant(startRequest.body === "{}", "the Session start body changed");
@@ -320,6 +340,7 @@ export default async function runBrowserSmoke(page) {
     const timerToggle = page.locator('[data-action="toggle-timer"]');
     await page.locator('[data-action="toggle-timer"]:not([aria-pressed="true"])').waitFor();
     invariant((await timerToggle.innerText()).trim() === "暂停", "pageshow did not resume the visible timer");
+    await verifyHeaderAlignment();
     invariant(mutationRequests.filter((request) => request.path.endsWith("/resume")).length === resumeCountBeforePageShow + 1, "pageshow did not issue exactly one automatic resume");
     const readback = await sessionReadback(sessionKey);
     invariant(readback.responseStatus === 200 && readback.openIntervalCount === 1 && readback.intervalCount === 3, "pageshow did not open exactly one authoritative Session interval");
@@ -329,6 +350,7 @@ export default async function runBrowserSmoke(page) {
     const pauseResponse = syncResponseFor("pause");
     await page.locator('[data-action="toggle-timer"]').click();
     invariant((await pauseResponse).status() === 200, "manual pause failed");
+    await verifyHeaderAlignment();
     await page.locator('[data-action="toggle-timer"][aria-pressed="true"]').waitFor();
     const resumeCount = mutationRequests.filter((request) => request.path.endsWith("/resume")).length;
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
@@ -373,6 +395,7 @@ export default async function runBrowserSmoke(page) {
       ];
     });
     invariant(Math.max(...timings) <= 150, "weak-network feedback exceeded 150 ms");
+    await verifyHeaderAlignment();
     await page.locator('[data-sync-status].is-error summary').click();
     await page.locator('[data-action="retry-sync"]').waitFor();
     invariant(sent.length === 1 && JSON.parse(sent[0].body).actions.length === 4, "rapid actions were not coalesced in one request");

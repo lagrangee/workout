@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-const props = defineProps<{ status: "idle" | "pending" | "saved" | "error" | "conflict" }>();
+const props = defineProps<{ status: "idle" | "pending" | "saved" | "error" | "conflict"; compact?: boolean }>();
 const emit = defineEmits<{ retry: []; discard: [] }>();
 const label = computed(() => ({
   idle: "", pending: "已存本机", saved: "已同步", error: "待同步", conflict: "记录有更新",
@@ -10,13 +10,15 @@ const needsAction = computed(() => props.status === "error" || props.status === 
 </script>
 
 <template>
-  <details v-if="status !== 'idle'" class="session-sync" :class="`is-${status}`" :open="status === 'conflict' || undefined" data-sync-status>
-    <summary :aria-label="`训练保存状态：${label}，查看详情`">
+  <details v-if="status !== 'idle'" class="session-sync" :class="[`is-${status}`, { 'is-compact': compact }]" :open="status === 'conflict' || undefined" data-sync-status>
+    <summary :title="label" :aria-label="`训练保存状态：${label}，查看详情`">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path v-if="status === 'saved'" d="m4.5 10 3.5 3.5 7.5-7.5" />
-        <template v-else><path d="M5.5 14.5a4 4 0 0 1-.7-7.9 5.3 5.3 0 0 1 10.1 1.2 3.4 3.4 0 0 1 .6 6.7" /><path v-if="needsAction" d="M10 9v3m0 3h.01" /><path v-else d="M10 10v6m-2-2 2 2 2-2" /></template>
+        <path d="M5.5 14.5a4 4 0 0 1-.7-7.9 5.3 5.3 0 0 1 10.1 1.2 3.4 3.4 0 0 1 .6 6.7" />
+        <path v-if="status === 'saved'" d="m7 13 2 2 4-4" />
+        <path v-else-if="needsAction" d="M10 9v3m0 3h.01" />
+        <path v-else d="M10 10v6m-2-2 2 2 2-2" />
       </svg>
-      <span role="status" aria-live="polite">{{ label }}</span>
+      <span :class="{ 'sync-label-hidden': compact }" role="status" aria-live="polite">{{ label }}</span>
     </summary>
     <div class="session-sync-detail">
       <strong>{{ status === 'saved' ? '训练操作已同步' : status === 'conflict' ? '云端训练已更新' : '训练操作已保存在本机' }}</strong>

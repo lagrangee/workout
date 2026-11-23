@@ -74,7 +74,7 @@ instant after resume rather than submitting a timestamp in the paused gap.
 The lifecycle, interval ownership, background timing, inactivity, audio, and
 explicit expiry rules are shared with [Session Record v1](session-record-v1.md).
 App switching and Wake Lock release keep training active; the mounted page
-pauses after its normal rest/action allowance plus two minutes without training
+pauses after its normal rest/action allowance plus five minutes without training
 interaction, closing at that cutoff even if detected later. Inactivity requires
 explicit resume. Only a pagehide pause owned by the mounted execution page
 resumes automatically; manual pauses and an open End form remain paused.

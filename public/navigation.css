@@ -1077,9 +1077,9 @@ button.records-overview-metric:focus-visible {
 .session-header {
   min-height: 58px;
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  padding: 0 16px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 253, 248, .92);
 }
@@ -2068,14 +2068,25 @@ button[aria-busy="true"] {
 }
 
 /* Saving belongs to the existing header; it never adds a row above training. */
+.session-header-leading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  justify-self: start;
+}
+
+.session-header-leading .session-header-side {
+  min-width: 44px;
+  min-height: 44px;
+}
+
 .session-heading {
-  display: grid;
-  justify-items: center;
-  align-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
   min-height: 58px;
-  grid-template-rows: 20px 24px;
-  gap: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-sync {
@@ -2105,6 +2116,19 @@ button[aria-busy="true"] {
 .session-sync summary:hover { background: var(--paper); color: var(--ink); }
 .session-sync summary:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
 .session-sync svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.session-sync.is-compact summary { min-width: 44px; min-height: 44px; padding: 0; }
+.session-sync.is-compact summary::after { inset: 0; }
+.session-sync.is-compact svg { width: 18px; height: 18px; }
+.sync-label-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .session-sync.is-saved { color: var(--green); }
 .session-sync.is-error, .session-sync.is-conflict { color: var(--accent-dark); }
 
@@ -2124,7 +2148,7 @@ button[aria-busy="true"] {
   white-space: normal;
 }
 
-.session-header .session-sync-detail strong { font-size: 13px; letter-spacing: 0; }
+.session-header .session-sync-detail strong { font-size: 13px; letter-spacing: 0; text-align: left; }
 .session-sync-detail p { margin: 6px 0 0; color: var(--muted); line-height: 1.55; }
 .session-sync-actions { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
 .session-sync-actions .text-button { min-height: 44px; padding: 8px 0; font-size: 12px; }

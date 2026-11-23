@@ -183,8 +183,8 @@ const timerMutationPending = computed(() => view.state.pausePending || (
 ));
 
 const timerToggleLabel = computed(() => {
-  if (view.state.pausePending) return mutationPendingLabels.pause;
-  if (timerMutationPending.value && view.state.mutation.action) return mutationPendingLabels[view.state.mutation.action];
+  if (view.state.pausePending) return "暂停中…";
+  if (timerMutationPending.value) return view.state.mutation.action === "pause" ? "暂停中…" : "继续中…";
   if (view.state.timerPaused && view.state.mutation.action === "pause" && view.state.mutation.error) return "重试暂停";
   return view.state.timerPaused ? "继续" : "暂停";
 });
@@ -483,10 +483,12 @@ defineExpose({ ensurePaused, executionFocused });
 
     <template v-else-if="view.state.mode === 'execution' && view.detail.status === 'in_progress'">
       <header class="session-header">
-        <button class="session-header-side" data-action="minimize" aria-label="返回今日" @click="send({ type: 'minimize' })">‹</button>
+        <div class="session-header-leading">
+          <button class="session-header-side" data-action="minimize" aria-label="返回今日" @click="send({ type: 'minimize' })">‹</button>
+          <SessionSyncStatus compact :status="view.state.executionSync" @retry="send({ type: 'retry-sync' })" @discard="send({ type: 'discard-sync' })" />
+        </div>
         <div class="session-heading">
           <strong>{{ view.restActive ? "组间休息" : view.elapsedLabel }}</strong>
-          <SessionSyncStatus :status="view.state.executionSync" @retry="send({ type: 'retry-sync' })" @discard="send({ type: 'discard-sync' })" />
         </div>
         <div class="session-header-actions">
           <button

@@ -92,9 +92,10 @@ Workout Tracker 的界面应该像一个在训练间隙仍然安静可靠的工�
 - **Style:** status pills use 7px 10px padding, 999px radius, low-saturation background and semantic text color.
 - **State:** green indicates completed or recovery, muted tan indicates rest or neutral, deep terracotta indicates skipped or attention. Progress lines use a 6px track with the accent fill.
 
-Training sync appears as a compact icon and text status within the existing
-Session header height. Details and recovery actions open in an anchored
-disclosure; routine pending/saved transitions never insert a banner or move the
+The Session timer stays centered horizontally and vertically in a single-row
+header, independent of mute, pause, and sync states. Training sync appears as a
+compact cloud icon beside the back control, with an accessible status label.
+Details and recovery actions open in an anchored disclosure; routine pending/saved transitions never insert a banner or move the
 training content. Outside execution the same control floats above navigation.
 
 ### Cards / Containers

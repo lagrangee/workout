@@ -480,7 +480,7 @@ export function useSessionExecution(
   let timerHandle: number | null = null;
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   let inactivityDeadlineMs: number | null = null;
-  const inactivityGraceMs = 120_000;
+  const inactivityGraceMs = 300_000;
   let wakeLockSentinel: WakeLockSentinel | null = null;
   let wakeLockRequestPending = false;
   let wakeLockRequestId = 0;

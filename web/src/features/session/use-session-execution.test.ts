@@ -2961,7 +2961,7 @@ describe("background training and inactivity", () => {
     expect(harness.calls.filter((call) => /\/(pause|resume)$/.test(call.path))).toHaveLength(0);
   });
 
-  test.each([false, true])("inactivity closes at rest end plus two minutes after a frozen page (hidden=%s)", async (hidden) => {
+  test.each([false, true])("inactivity closes at rest end plus five minutes after a frozen page (hidden=%s)", async (hidden) => {
     const clock = frameClock();
     installSeams(clock, testAudio());
     const harness = runningHarness(sessionDetail({ restSeconds: 60 }));
@@ -2971,7 +2971,7 @@ describe("background training and inactivity", () => {
     await execution.dispatch({ type: "complete" });
     setDocumentHidden(hidden);
     document.dispatchEvent(new Event("visibilitychange"));
-    await clock.advance(179_999);
+    await clock.advance(359_999);
     expect(execution.view.state.timerPaused).toBe(false);
     await clock.advance(60_001);
     setDocumentHidden(false);
@@ -2980,10 +2980,23 @@ describe("background training and inactivity", () => {
     expect(execution.view.state.timerPaused).toBe(true);
     expect(execution.view.state.timerPauseReason).toBe("inactivity");
     const pause = harness.calls.find((call) => call.path.endsWith("/pause"));
-    expect(requestBody(pause!)).toEqual({ close_at: new Date(initialNow + 190_000).toISOString() });
-    expect(execution.view.elapsedLabel).toBe("03:10");
+    expect(requestBody(pause!)).toEqual({ close_at: new Date(initialNow + 370_000).toISOString() });
+    expect(execution.view.elapsedLabel).toBe("06:10");
     expect(execution.view.restActive).toBe(false);
     expect(harness.calls.filter((call) => call.path.endsWith("/resume"))).toHaveLength(0);
+  });
+
+  test("a repetitions set gets five uninterrupted minutes after training starts", async () => {
+    const clock = frameClock();
+    installSeams(clock, testAudio());
+    const harness = runningHarness();
+    const { execution } = mountExecution(harness.app);
+    await execution.dispatch({ type: "start" });
+    await clock.advance(299_999);
+    expect(execution.view.state.timerPaused).toBe(false);
+    await clock.advance(1);
+    expect(execution.view.state.timerPauseReason).toBe("inactivity");
+    expect(execution.view.state.timerPauseStartedAt).toBe(initialNow + 300_000);
   });
 
   test("a long timed action gets its full duration and grace before inactivity pause", async () => {
@@ -3004,9 +3017,11 @@ describe("background training and inactivity", () => {
     expect(execution.view.state.timedAction.phase).toBe("complete");
     expect(execution.view.state.timerPaused).toBe(false);
     expect(execution.view.completedCount).toBe(0);
-    await clock.advance(75_000);
+    await clock.advance(254_999);
+    expect(execution.view.state.timerPaused).toBe(false);
+    await clock.advance(1);
     expect(execution.view.state.timerPauseReason).toBe("inactivity");
-    expect(execution.view.state.timerPauseStartedAt).toBe(initialNow + 425_000);
+    expect(execution.view.state.timerPauseStartedAt).toBe(initialNow + 605_000);
   });
 
   test("editing a result renews the inactivity grace without counting a return as activity", async () => {
@@ -3017,10 +3032,10 @@ describe("background training and inactivity", () => {
     await execution.dispatch({ type: "start" });
     await clock.advance(110_000);
     await execution.dispatch({ type: "draft-actual", key: "item-1", value: "9" });
-    await clock.advance(119_999);
+    await clock.advance(299_999);
     expect(execution.view.state.timerPaused).toBe(false);
     await clock.advance(1);
-    expect(execution.view.state.timerPauseStartedAt).toBe(initialNow + 230_000);
+    expect(execution.view.state.timerPauseStartedAt).toBe(initialNow + 410_000);
   });
 
   test("a start response received in the background keeps its active interval", async () => {

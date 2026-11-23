@@ -23,3 +23,14 @@ test.each(["error", "conflict"] as const)("%s retains explicit retry and discard
   expect(wrapper.emitted("discard")).toHaveLength(1);
   wrapper.unmount();
 });
+
+
+test("compact header status retains its accessible label and recovery controls", async () => {
+  const wrapper = mount(SessionSyncStatus, { props: { status: "error", compact: true } });
+  expect(wrapper.get("summary").attributes("aria-label")).toContain("训练保存状态：待同步");
+  expect(wrapper.get("summary span").classes()).toContain("sync-label-hidden");
+  expect(wrapper.classes()).toContain("is-compact");
+  await wrapper.get("[data-action='retry-sync']").trigger("click");
+  expect(wrapper.emitted("retry")).toHaveLength(1);
+  wrapper.unmount();
+});
